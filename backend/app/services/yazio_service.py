@@ -341,6 +341,9 @@ async def fetch_yazio_summary(email: str, password: str, target_date: Optional[d
 
     result = _parse_summary(raw)
 
+    # Include the actual date this data is from (critical for temporal accuracy in AI prompts)
+    result["date"] = date_str
+
     # Merge secondary macros into meals and totals
     if secondary:
         for meal_key in MEAL_KEYS:

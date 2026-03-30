@@ -6,6 +6,7 @@ Uses gemini-2.0-flash for fast, cost-effective structured output.
 import json
 import logging
 import re
+from datetime import date, timedelta
 from typing import Optional
 
 from google import genai
@@ -120,10 +121,22 @@ def _build_system_prompt(profile: Optional[dict], lang: str = "de") -> str:
 
     user_context = "\n".join(context_lines)
 
+    today_str = date.today().isoformat()
+    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+
     base_prompt = f"""You are a supportive, friendly fitness coach. Your name is Coach.
+
+=== TODAY'S DATE ===
+Today is {today_str}.
 
 === USER PROFILE ===
 {user_context}
+
+=== IMPORTANT: TEMPORAL REFERENCES ===
+Nutrition data sections include the ACTUAL DATE they are from.
+ALWAYS use the correct date or weekday name (e.g. "am Montag", "am 28.3.") when referencing nutrition data.
+Do NOT say "gestern" unless the data is ACTUALLY from yesterday ({yesterday_str}).
+Do NOT say "heute" unless you are referring to data labeled with today's date ({today_str}).
 
 === IMPORTANT: NUTRITION GOALS INTERPRETATION ===
 The calorie/macro goals from Yazio are the user's DAILY TARGETS, NOT their maintenance calories.
@@ -196,13 +209,14 @@ def _build_user_message(yazio_data: Optional[dict], hevy_data: Optional[list], t
     """Build the user message containing the raw context data."""
     parts: list[str] = []
 
-    # ── Yesterday's Nutrition ────────────────────────────
+    # ── Nutrition data (with actual date) ────────────────────────────
     if yazio_data:
         totals = yazio_data.get("totals", {})
         goals = yazio_data.get("goals", {})
         meals = yazio_data.get("meals", {})
 
-        parts.append("=== YESTERDAY'S NUTRITION (Yazio) ===")
+        nutrition_date = yazio_data.get("date", (date.today() - timedelta(days=1)).isoformat())
+        parts.append(f"=== NUTRITION FOR {nutrition_date} (Yazio) ===")
         parts.append(f"Total: {totals.get('calories', 0)} kcal | "
                      f"P: {totals.get('protein', 0)}g | "
                      f"C: {totals.get('carbs', 0)}g | "
@@ -230,15 +244,16 @@ def _build_user_message(yazio_data: Optional[dict], hevy_data: Optional[list], t
         if steps and steps > 0:
             parts.append(f"Steps: {steps:,} | Activity burn: {yazio_data.get('activity_kcal', 0)} kcal")
     else:
-        parts.append("=== NUTRITION: No data available (Yazio not connected or no tracking yesterday) ===")
+        parts.append("=== NUTRITION: No data available (Yazio not connected or no recent tracking) ===")
 
     # ── Today's Nutrition (live/current) ─────────────────
     if today_nutrition:
         t_totals = today_nutrition.get("totals", {})
         t_goals = today_nutrition.get("goals", {})
         t_meals = today_nutrition.get("meals", {})
+        today_date = today_nutrition.get("date", date.today().isoformat())
         parts.append("")
-        parts.append("=== TODAY'S NUTRITION SO FAR (Yazio — live data) ===")
+        parts.append(f"=== NUTRITION FOR {today_date} SO FAR (Yazio — live data) ===")
         parts.append(f"Total so far: {t_totals.get('calories', 0)} kcal | "
                      f"P: {t_totals.get('protein', 0)}g | "
                      f"C: {t_totals.get('carbs', 0)}g | "
@@ -419,14 +434,25 @@ def _build_session_review_prompt(profile: Optional[dict], lang: str = "de") -> s
 
     user_context = "\n".join(context_lines)
 
+    today_str = date.today().isoformat()
+
     base_prompt = f"""You are a supportive, friendly fitness coach. Your name is Coach.
+
+=== TODAY'S DATE ===
+Today is {today_str}.
 
 === USER PROFILE ===
 {user_context}
 
+=== IMPORTANT: TEMPORAL REFERENCES ===
+Nutrition data sections include the ACTUAL DATE they are from.
+ALWAYS use the correct date or weekday name when referencing nutrition data.
+Do NOT say "gestern" unless the data is ACTUALLY from yesterday.
+Workout dates from Hevy include actual timestamps — use those to determine how many days ago a workout was.
+
 You will receive:
 1. The user's last 20 completed workouts from Hevy (exercises, sets, weights).
-2. Yesterday's nutrition data from Yazio (may be missing).
+2. Recent nutrition data from Yazio with actual dates (may be missing).
 
 === ESTIMATED 1RM ===
 For every exercise, calculate the Estimated 1 Rep Max using the Epley formula:
@@ -676,15 +702,26 @@ def _build_workout_tips_prompt(profile: Optional[dict], lang: str = "de") -> str
 
     user_context = "\n".join(context_lines)
 
+    today_str = date.today().isoformat()
+
     base_prompt = f"""You are a supportive, friendly fitness coach. Your name is Coach.
+
+=== TODAY'S DATE ===
+Today is {today_str}.
 
 === USER PROFILE ===
 {user_context}
 
+=== IMPORTANT: TEMPORAL REFERENCES ===
+Nutrition data sections include the ACTUAL DATE they are from.
+ALWAYS use the correct date or weekday name (e.g. "am Montag", "am 28.3.") when referencing nutrition or workout data.
+NEVER say "gestern" unless the date is ACTUALLY yesterday. NEVER say "heute" unless it is ACTUALLY today.
+These tips may be read by the user days after generation, so use ABSOLUTE dates (e.g. "am Freitag, den 28.3.") instead of relative references like "gestern".
+
 You will receive:
 1. A WORKOUT NAME that the user plans to do next (marked with "=== PLANNED WORKOUT ===").
 2. The user's recent workout history (up to 20 sessions) — use this ONLY as context to decide smart targets. Do NOT display history in the output.
-3. Yesterday's nutrition data from Yazio (may be missing).
+3. Recent nutrition data from Yazio with actual dates (may be missing).
 
 === YOUR TASK ===
 Give the user a CONCRETE PLAN for their next session of this workout type.
@@ -841,7 +878,8 @@ async def generate_workout_tips(
         fat_in = round(totals.get('fat', 0))
         cal_goal = round(goals.get('calories', 0))
         prot_goal = round(goals.get('protein', 0))
-        parts.append("=== YESTERDAY'S NUTRITION ===")
+        nutrition_date = yazio_data.get("date", (date.today() - timedelta(days=1)).isoformat())
+        parts.append(f"=== NUTRITION FOR {nutrition_date} ===")
         parts.append(f"Eaten: {cal_in} kcal (P:{prot_in}g C:{carb_in}g F:{fat_in}g) | Goal: {cal_goal} kcal, P:{prot_goal}g")
         surplus_deficit = cal_in - cal_goal
         if surplus_deficit > 100:
@@ -1059,16 +1097,25 @@ def _build_chat_system_prompt(
         )
 
     user_context = "\n".join(context_lines)
+    today_str = date.today().isoformat()
 
     prompt = f"""You are a supportive, friendly, and knowledgeable fitness coach named Coach.
+
+=== TODAY'S DATE ===
+Today is {today_str}.
 
 === USER PROFILE ===
 {user_context}
 {plan_str}
 
+=== IMPORTANT: TEMPORAL REFERENCES ===
+Nutrition data sections include the ACTUAL DATE they are from.
+ALWAYS use the correct date or weekday name when referencing nutrition or workout data.
+Do NOT say "gestern" unless the data is ACTUALLY from yesterday. Do NOT say "heute" unless the data is from today.
+
 You will receive:
 1. The user's training plan (with exercises per workout) and recent workout data.
-2. Recent nutrition data (yesterday + day before yesterday + today's live data).
+2. Recent nutrition data from Yazio WITH ACTUAL DATES (may be partial or missing).
 3. A conversation history of messages between you and the user.
 
 === YOUR ROLE ===
@@ -1129,7 +1176,8 @@ async def generate_chat_response(
     if yazio_data:
         totals = yazio_data.get("totals", {})
         goals = yazio_data.get("goals", {})
-        context_parts.append("\n=== YESTERDAY'S NUTRITION ===")
+        nutrition_date = yazio_data.get("date", (date.today() - timedelta(days=1)).isoformat())
+        context_parts.append(f"\n=== NUTRITION FOR {nutrition_date} ===")
         context_parts.append(f"Consumed: {totals.get('calories', 0)} kcal | "
                              f"P: {totals.get('protein', 0)}g | "
                              f"C: {totals.get('carbs', 0)}g | "
@@ -1142,10 +1190,10 @@ async def generate_chat_response(
                              f"P: {goals.get('protein', 0)}g | "
                              f"C: {goals.get('carbs', 0)}g | "
                              f"F: {goals.get('fat', 0)}g")
-        # Include individual food items from yesterday
+        # Include individual food items
         y_food = yazio_data.get("food_items", {})
         if y_food:
-            context_parts.append("Yesterday's meals (individual items):")
+            context_parts.append(f"Meals for {nutrition_date} (individual items):")
             for meal_key in ["breakfast", "lunch", "dinner", "snack"]:
                 items = y_food.get(meal_key, [])
                 if items:
@@ -1160,7 +1208,8 @@ async def generate_chat_response(
     if day_before_yesterday_nutrition:
         dby_totals = day_before_yesterday_nutrition.get("totals", {})
         dby_goals = day_before_yesterday_nutrition.get("goals", {})
-        context_parts.append("\n=== DAY BEFORE YESTERDAY'S NUTRITION ===")
+        dby_date = day_before_yesterday_nutrition.get("date", (date.today() - timedelta(days=2)).isoformat())
+        context_parts.append(f"\n=== NUTRITION FOR {dby_date} ===")
         context_parts.append(f"Consumed: {dby_totals.get('calories', 0)} kcal | "
                              f"P: {dby_totals.get('protein', 0)}g | "
                              f"C: {dby_totals.get('carbs', 0)}g | "
@@ -1173,10 +1222,10 @@ async def generate_chat_response(
                              f"P: {dby_goals.get('protein', 0)}g | "
                              f"C: {dby_goals.get('carbs', 0)}g | "
                              f"F: {dby_goals.get('fat', 0)}g")
-        # Include individual food items from day before yesterday
+        # Include individual food items
         dby_food = day_before_yesterday_nutrition.get("food_items", {})
         if dby_food:
-            context_parts.append("Day before yesterday's meals (individual items):")
+            context_parts.append(f"Meals for {dby_date} (individual items):")
             for meal_key in ["breakfast", "lunch", "dinner", "snack"]:
                 items = dby_food.get(meal_key, [])
                 if items:
@@ -1190,7 +1239,8 @@ async def generate_chat_response(
     if today_nutrition:
         t_totals = today_nutrition.get("totals", {})
         t_goals = today_nutrition.get("goals", {})
-        context_parts.append("\n=== TODAY'S NUTRITION SO FAR (live data) ===")
+        today_date = today_nutrition.get("date", date.today().isoformat())
+        context_parts.append(f"\n=== NUTRITION FOR {today_date} SO FAR (live data) ===")
         context_parts.append(f"Eaten so far: {t_totals.get('calories', 0)} kcal | "
                              f"P: {t_totals.get('protein', 0)}g | "
                              f"C: {t_totals.get('carbs', 0)}g | "
@@ -1210,7 +1260,7 @@ async def generate_chat_response(
         # Include individual food items from today
         t_food = today_nutrition.get("food_items", {})
         if t_food:
-            context_parts.append("Today's meals (individual items):")
+            context_parts.append(f"Meals for {today_date} (individual items):")
             for meal_key in ["breakfast", "lunch", "dinner", "snack"]:
                 items = t_food.get(meal_key, [])
                 if items:
@@ -1288,7 +1338,8 @@ async def generate_nutrition_analysis(
     if yazio_yesterday:
         totals = yazio_yesterday.get("totals", {})
         goals = yazio_yesterday.get("goals", {})
-        context_parts.append("=== GESTERN / YESTERDAY ===")
+        yesterday_date = yazio_yesterday.get("date", (date.today() - timedelta(days=1)).isoformat())
+        context_parts.append(f"=== ERNÄHRUNG FÜR {yesterday_date} ===")
         context_parts.append(f"Gegessen: {totals.get('calories', 0):.0f} kcal (Ziel: {goals.get('calories', 0):.0f} kcal)")
         context_parts.append(f"Protein: {totals.get('protein', 0):.0f}g (Ziel: {goals.get('protein', 0):.0f}g)")
         context_parts.append(f"Kohlenhydrate: {totals.get('carbs', 0):.0f}g (Ziel: {goals.get('carbs', 0):.0f}g)")
@@ -1298,7 +1349,7 @@ async def generate_nutrition_analysis(
 
         y_food = yazio_yesterday.get("food_items", {})
         if y_food:
-            context_parts.append("\nGestern gegessen:")
+            context_parts.append(f"\nGegessen am {yesterday_date}:")
             for meal_key in ["breakfast", "lunch", "dinner", "snack"]:
                 items = y_food.get(meal_key, [])
                 if items:
@@ -1311,7 +1362,8 @@ async def generate_nutrition_analysis(
     if yazio_today:
         t_totals = yazio_today.get("totals", {})
         t_goals = yazio_today.get("goals", {})
-        context_parts.append("\n=== HEUTE / TODAY ===")
+        today_date = yazio_today.get("date", date.today().isoformat())
+        context_parts.append(f"\n=== ERNÄHRUNG FÜR {today_date} (bisher) ===")
         context_parts.append(f"Bisher gegessen: {t_totals.get('calories', 0):.0f} kcal (Ziel: {t_goals.get('calories', 0):.0f} kcal)")
         context_parts.append(f"Protein: {t_totals.get('protein', 0):.0f}g (Ziel: {t_goals.get('protein', 0):.0f}g)")
         context_parts.append(f"Kohlenhydrate: {t_totals.get('carbs', 0):.0f}g (Ziel: {t_goals.get('carbs', 0):.0f}g)")
@@ -1325,7 +1377,7 @@ async def generate_nutrition_analysis(
 
         t_food = yazio_today.get("food_items", {})
         if t_food:
-            context_parts.append("\nHeute gegessen:")
+            context_parts.append(f"\nGegessen am {today_date}:")
             for meal_key in ["breakfast", "lunch", "dinner", "snack"]:
                 items = t_food.get(meal_key, [])
                 if items:
@@ -1337,15 +1389,22 @@ async def generate_nutrition_analysis(
 
     lang_instruction = _language_instruction(language)
 
+    today_str = date.today().isoformat()
+
     system_prompt = f"""Du bist ein erfahrener Ernährungsberater und Fitness-Coach. Analysiere die Ernährungsdaten des Nutzers und erstelle eine ausführliche, personalisierte Analyse.
+
+Heute ist {today_str}.
+
+WICHTIG: Die Ernährungsdaten enthalten das TATSÄCHLICHE DATUM. Verwende immer das korrekte Datum oder den Wochentag, wenn du dich auf Ernährungsdaten beziehst.
+Sage NICHT "gestern" wenn die Daten nicht von gestern sind. Sage NICHT "heute" wenn die Daten nicht von heute sind.
 
 {chr(10).join(context_parts)}
 
 Schreibe eine AUSFÜHRLICHE Ernährungsanalyse (mindestens 200-300 Wörter) die folgendes abdeckt:
 
-1. **Gestrige Bilanz**: Wie waren die Makros im Vergleich zu den Zielen? Was war gut, was nicht optimal? Welche Lebensmittel haben positiv/negativ beigetragen?
+1. **Letzte Bilanz**: Wie waren die Makros im Vergleich zu den Zielen? Was war gut, was nicht optimal? Welche Lebensmittel haben positiv/negativ beigetragen?
 
-2. **Heutige Situation**: Was wurde heute schon gegessen? Wie sieht die verbleibende Kalorienbilanz aus? Was fehlt noch an Makros?
+2. **Aktuelle Situation**: Was wurde heute schon gegessen? Wie sieht die verbleibende Kalorienbilanz aus? Was fehlt noch an Makros?
 
 3. **Konkrete Empfehlungen**: Was sollte der Nutzer heute noch essen, um seine Ziele zu erreichen? Nenne konkrete Lebensmittel oder Mahlzeiten. Wenn Protein fehlt: schlage proteinreiche Optionen vor. Wenn zu viel Fett: empfehle leichtere Alternativen.
 
