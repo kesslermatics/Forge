@@ -393,6 +393,7 @@ async def get_workout_list(
 
 class WorkoutTipsRequest(BaseModel):
     workout_name: str
+    force_regenerate: bool = False
 
 
 @router.post("/workout-tips")
@@ -404,26 +405,31 @@ async def get_workout_tips(
     """
     Workout tips — forward-looking per-set targets for a workout type.
     Returns pre-generated tips from scheduler if available, otherwise generates live.
+    When force_regenerate=True, always generates fresh tips (ignoring cache).
     """
     workout_name = body.workout_name.strip()
     if not workout_name:
         raise HTTPException(status_code=400, detail="Workout name is required")
 
-    # Check if we have pre-generated tips from the scheduler
-    existing = (
-        db.query(WorkoutReview)
-        .filter(
-            WorkoutReview.user_id == current_user.id,
-            WorkoutReview.workout_name == workout_name,
+    # Check if we have pre-generated tips from the scheduler (skip if force regenerate)
+    if not body.force_regenerate:
+        existing = (
+            db.query(WorkoutReview)
+            .filter(
+                WorkoutReview.user_id == current_user.id,
+                WorkoutReview.workout_name == workout_name,
+            )
+            .order_by(WorkoutReview.workout_date.desc())
+            .first()
         )
-        .order_by(WorkoutReview.workout_date.desc())
-        .first()
-    )
-    if existing and existing.tips_data and "exercise_targets" in existing.tips_data:
-        if not existing.is_read:
-            existing.is_read = True
-            db.commit()
-        return existing.tips_data
+        # Only use cached tips if they have ACTUAL exercise targets (not empty fallback)
+        if (existing and existing.tips_data
+                and existing.tips_data.get("exercise_targets")
+                and len(existing.tips_data["exercise_targets"]) > 0):
+            if not existing.is_read:
+                existing.is_read = True
+                db.commit()
+            return existing.tips_data
 
     # No cached tips — generate live
     context = await gather_user_context(current_user)

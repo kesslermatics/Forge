@@ -176,6 +176,8 @@ const translations = {
     'tips.noPlanHint': { de: 'Wähle unter "Mein Trainingsplan" deine Workouts aus, um hier Targets zu erhalten.', en: 'Select your workouts under "My Training Plan" to get targets here.' },
     'tips.pickWorkout': { de: 'Wähle ein Workout', en: 'Pick a workout' },
     'tips.pickWorkoutDesc': { de: 'Der Coach erstellt dir Targets für dein nächstes Training', en: 'Coach will create targets for your next session' },
+    'tips.regenerate': { de: 'Neu generieren', en: 'Regenerate' },
+    'tips.regenerating': { de: 'Generiere…', en: 'Generating…' },
 
     /* ── Exercise Card ────────────────────────────────── */
     'exercise.breakthrough': { de: 'Durchbruch!', en: 'Breakthrough!' },

@@ -184,12 +184,12 @@ export default function Dashboard() {
         // For 'next' tab: training plan tiles are shown directly, no data fetch needed
     };
 
-    const handleSelectWorkout = async (workoutName: string) => {
+    const handleSelectWorkout = async (workoutName: string, forceRegenerate = false) => {
         setTipsLoading(true);
         setTipsError(null);
-        setSelectedWorkoutTips(null);
+        if (!forceRegenerate) setSelectedWorkoutTips(null);
         try {
-            const tips = await getWorkoutTips(workoutName);
+            const tips = await getWorkoutTips(workoutName, forceRegenerate);
             setSelectedWorkoutTips(tips);
         } catch (err: any) {
             setTipsError(err.message || 'Failed to load tips');
@@ -704,7 +704,7 @@ function SessionModal({ tab, onTabChange, onClose, sessionData, sessionLoading, 
         selectedWorkoutTips: WorkoutTips | null;
         tipsLoading: boolean;
         tipsError: string | null;
-        onSelectWorkout: (workoutName: string) => void;
+        onSelectWorkout: (workoutName: string, forceRegenerate?: boolean) => void;
         onBackToList: () => void;
         onRetrySession: () => void;
         trainingPlan: string[];
@@ -760,7 +760,12 @@ function SessionModal({ tab, onTabChange, onClose, sessionData, sessionLoading, 
                     {tab === 'next' && (
                         <>
                             {selectedWorkoutTips ? (
-                                <WorkoutTipsContent tips={selectedWorkoutTips} onBack={onBackToList} />
+                                <WorkoutTipsContent
+                                    tips={selectedWorkoutTips}
+                                    onBack={onBackToList}
+                                    onRegenerate={() => onSelectWorkout(selectedWorkoutTips.workout_title, true)}
+                                    isRegenerating={tipsLoading}
+                                />
                             ) : tipsLoading ? (
                                 <ModalLoader text={t('modal.generatingTips')} />
                             ) : tipsError ? (
@@ -1164,19 +1169,31 @@ function TrainingPlanPicker({ trainingPlan, onSelect }: {
 
 /* ── Workout Tips Content (per-set targets) ─────────── */
 
-function WorkoutTipsContent({ tips, onBack }: {
+function WorkoutTipsContent({ tips, onBack, onRegenerate, isRegenerating }: {
     tips: WorkoutTips;
     onBack: () => void;
+    onRegenerate: () => void;
+    isRegenerating: boolean;
 }) {
     const { t } = useLanguage();
     return (
         <div className="space-y-4">
-            {/* Back button + header */}
+            {/* Back button + header + regenerate */}
             <div>
-                <button onClick={onBack}
-                    className="flex items-center gap-1.5 text-xs text-dark-300 hover:text-cream-100 transition-colors mb-2 cursor-pointer">
-                    <ArrowLeft size={12} />{t('tips.backToWorkouts')}
-                </button>
+                <div className="flex items-center justify-between mb-2">
+                    <button onClick={onBack}
+                        className="flex items-center gap-1.5 text-xs text-dark-300 hover:text-cream-100 transition-colors cursor-pointer">
+                        <ArrowLeft size={12} />{t('tips.backToWorkouts')}
+                    </button>
+                    <button
+                        onClick={onRegenerate}
+                        disabled={isRegenerating}
+                        className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 disabled:text-dark-500 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                    >
+                        <RefreshCw size={12} className={isRegenerating ? 'animate-spin' : ''} />
+                        {isRegenerating ? t('tips.regenerating') : t('tips.regenerate')}
+                    </button>
+                </div>
                 <h3 className="text-lg font-semibold text-cream-50">{tips.workout_title}</h3>
             </div>
 
