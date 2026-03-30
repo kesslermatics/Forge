@@ -215,6 +215,7 @@ export interface SetTarget {
 
 export interface ExerciseTarget {
   name: string;
+  progression_status?: 'INCREASE_WEIGHT' | 'KEEP_PROGRESSING' | 'STAGNATED' | 'REGRESSED' | 'FIRST_SESSION';
   set_targets: SetTarget[];
   reasoning: string;
 }

@@ -1202,12 +1202,32 @@ function WorkoutTipsContent({ tips, onBack }: {
                     <div className="space-y-3">
                         {tips.exercise_targets.map((et, i) => (
                             <div key={i} className="bg-dark-700/40 rounded-xl border border-dark-500/20 p-4 space-y-3">
-                                {/* Exercise header */}
+                                {/* Exercise header with progression badge */}
                                 <div className="flex items-center gap-2">
                                     <div className="w-6 h-6 rounded-md bg-blue-500/15 border border-blue-500/30 flex items-center justify-center">
                                         <Dumbbell size={10} className="text-blue-400" />
                                     </div>
-                                    <span className="text-sm font-semibold text-cream-50">{et.name}</span>
+                                    <span className="text-sm font-semibold text-cream-50 flex-1">{et.name}</span>
+                                    {et.progression_status && (
+                                        <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                            et.progression_status === 'INCREASE_WEIGHT'
+                                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                            : et.progression_status === 'KEEP_PROGRESSING'
+                                                ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                                            : et.progression_status === 'STAGNATED'
+                                                ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                            : et.progression_status === 'REGRESSED'
+                                                ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                                            : 'bg-dark-500/15 text-dark-300 border-dark-500/30'
+                                        }`}>
+                                            {et.progression_status === 'INCREASE_WEIGHT' ? '⬆ Gewicht +'
+                                            : et.progression_status === 'KEEP_PROGRESSING' ? '→ Weiter so'
+                                            : et.progression_status === 'STAGNATED' ? '⚠ Plateau'
+                                            : et.progression_status === 'REGRESSED' ? '↓ Rückgang'
+                                            : et.progression_status === 'FIRST_SESSION' ? '★ Neu'
+                                            : et.progression_status}
+                                        </span>
+                                    )}
                                 </div>
 
                                 {/* Set targets table */}

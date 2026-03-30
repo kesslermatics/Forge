@@ -670,6 +670,225 @@ async def generate_session_review(
         return FALLBACK_SESSION_REVIEW
 
 
+# ════════════════════════════════════════════════════════
+#  EXERCISE PROGRESSION ANALYSIS (Evidence-Based)
+# ════════════════════════════════════════════════════════
+
+def _parse_available_weights(notes: str) -> list[float]:
+    """Parse available weight values from exercise notes like 'only 5 12 19 26 33'."""
+    if not notes:
+        return []
+    # Look for sequences of numbers (at least 3) that look like a weight list
+    numbers = re.findall(r'\d+(?:\.\d+)?', notes)
+    if len(numbers) >= 3:
+        return sorted(float(n) for n in numbers)
+    return []
+
+
+def _find_next_weight(current: float, available: list[float]) -> Optional[float]:
+    """Find the next weight step up from available weights."""
+    for w in available:
+        if w > current + 0.1:
+            return w
+    return None  # no higher weight available
+
+
+def _is_compound_exercise(exercise_name: str, muscle_group: str = "") -> bool:
+    """Heuristic to detect compound vs isolation exercises."""
+    name_lower = exercise_name.lower()
+    compound_keywords = [
+        "bench press", "squat", "deadlift", "row", "press", "pull-up", "pullup",
+        "chin-up", "chinup", "dip", "overhead press", "ohp", "clean", "snatch",
+        "lunge", "leg press", "hip thrust", "rack pull", "t-bar",
+        "bankdrücken", "kniebeuge", "kreuzheben", "rudern",
+    ]
+    for kw in compound_keywords:
+        if kw in name_lower:
+            return True
+    # Also consider muscle group hints
+    compound_groups = {"chest", "back", "legs", "quadriceps", "hamstrings", "glutes", "full body"}
+    if muscle_group.lower() in compound_groups:
+        return True
+    return False
+
+
+def _compute_exercise_progression(
+    matching_sessions: list[dict],
+    template_exercises: list[dict],
+) -> dict:
+    """
+    Pre-compute progression analysis for each exercise across recent sessions.
+
+    Uses the Double Progression model:
+    - Rep range 8-12 (hypertrophy default)
+    - Increase weight when first set hits top AND all sets meet minimum
+    - Track total reps as session-over-session progress metric
+
+    Returns a dict keyed by exercise name (lowered) with progression signals.
+    """
+    analysis = {}
+    MIN_REPS = 8
+    MAX_REPS = 12
+
+    for tex in template_exercises:
+        ex_name = tex.get("title", "").strip()
+        ex_key = ex_name.lower()
+        muscle_group = tex.get("muscle_group", "")
+
+        # Collect this exercise's data from all matching sessions (most recent first)
+        sessions_data = []
+        for session in matching_sessions:
+            for ex in session.get("exercises", []):
+                if ex.get("title", "").strip().lower() == ex_key:
+                    working_sets = [
+                        s for s in ex.get("sets", [])
+                        if s.get("type", "normal") in ("normal", "working", "")
+                        and s.get("weight_kg") is not None
+                        and s.get("reps") is not None
+                        and s.get("weight_kg", 0) > 0
+                    ]
+                    if working_sets:
+                        # Use the most common (mode) weight as "working weight"
+                        # to filter out warmup sets that have lower weight
+                        weights = [s["weight_kg"] for s in working_sets]
+                        top_weight = max(weights)
+                        # Working sets = sets at or near the top weight (within 10%)
+                        true_working = [
+                            s for s in working_sets
+                            if s["weight_kg"] >= top_weight * 0.9
+                        ]
+                        if not true_working:
+                            true_working = working_sets
+
+                        sessions_data.append({
+                            "date": session.get("start_time", "")[:10],
+                            "sets": true_working,
+                            "weight": top_weight,
+                            "reps_per_set": [s["reps"] for s in true_working],
+                            "total_reps": sum(s["reps"] for s in true_working),
+                            "num_sets": len(true_working),
+                        })
+                    break
+
+        if not sessions_data:
+            analysis[ex_key] = {
+                "exercise_name": ex_name,
+                "signal": "FIRST_SESSION",
+                "suggestion": f"First time tracking. Start with moderate weight, 3 working sets in the 8-12 rep range. Focus on controlled reps.",
+                "sessions_count": 0,
+            }
+            continue
+
+        latest = sessions_data[0]
+        current_weight = latest["weight"]
+
+        # Count consecutive sessions at current weight (most recent first)
+        sessions_at_weight = 0
+        total_reps_at_weight = []
+        for sd in sessions_data:
+            if abs(sd["weight"] - current_weight) < 0.5:
+                sessions_at_weight += 1
+                total_reps_at_weight.append(sd["total_reps"])
+            else:
+                break
+
+        # Rep analysis
+        first_set_reps = latest["reps_per_set"][0]
+        last_set_reps = latest["reps_per_set"][-1]
+        all_sets_meet_minimum = all(r >= MIN_REPS for r in latest["reps_per_set"])
+        first_set_at_top = first_set_reps >= MAX_REPS
+
+        # Total reps trend
+        reps_trending_up = False
+        reps_stagnated = False
+        if len(total_reps_at_weight) >= 2:
+            reps_trending_up = total_reps_at_weight[0] > total_reps_at_weight[1]
+            if len(total_reps_at_weight) >= 3:
+                reps_stagnated = (
+                    abs(total_reps_at_weight[0] - total_reps_at_weight[1]) <= 1
+                    and abs(total_reps_at_weight[1] - total_reps_at_weight[2]) <= 1
+                )
+
+        # Check for regression
+        regressed = (
+            len(sessions_data) >= 2
+            and latest["total_reps"] < sessions_data[1].get("total_reps", 0) - 3
+        )
+
+        # Determine weight step
+        compound = _is_compound_exercise(ex_name, muscle_group)
+        default_step = 2.5 if compound else 1.25
+
+        # Check for weight constraints from notes
+        notes = tex.get("notes", "")
+        available_weights = _parse_available_weights(notes)
+        suggested_next_weight = None
+
+        if available_weights:
+            nw = _find_next_weight(current_weight, available_weights)
+            if nw is not None:
+                suggested_next_weight = nw
+        else:
+            suggested_next_weight = round(current_weight + default_step, 2)
+
+        # Determine signal
+        if first_set_at_top and all_sets_meet_minimum:
+            signal = "INCREASE_WEIGHT"
+            if suggested_next_weight:
+                suggestion = (
+                    f"All criteria met for weight increase! First set hit {first_set_reps} reps, "
+                    f"all sets ≥{MIN_REPS}. Step up to {suggested_next_weight}kg. "
+                    f"Expect reps to drop to ~{MIN_REPS}-{MIN_REPS + 2} range."
+                )
+            else:
+                suggestion = (
+                    f"All criteria met for weight increase! First set hit {first_set_reps} reps, "
+                    f"all sets ≥{MIN_REPS}. No higher weight available — add reps or a set instead."
+                )
+        elif regressed:
+            signal = "REGRESSED"
+            suggestion = (
+                f"Total reps dropped ({sessions_data[1]['total_reps']}→{latest['total_reps']}). "
+                f"Likely fatigue or off-day. Keep {current_weight}kg and aim to match previous best."
+            )
+        elif sessions_at_weight >= 3 and reps_stagnated:
+            signal = "STAGNATED"
+            trend_str = "/".join(str(r) for r in total_reps_at_weight[:3])
+            suggestion = (
+                f"Same weight ({current_weight}kg) for {sessions_at_weight} sessions, "
+                f"total reps flat ({trend_str}). Consider: deload week, rep range change, or exercise variation."
+            )
+        else:
+            signal = "KEEP_PROGRESSING"
+            if reps_trending_up:
+                suggestion = (
+                    f"Good progress at {current_weight}kg — total reps increasing. "
+                    f"Keep building toward {MAX_REPS}/{MAX_REPS-1}/{MAX_REPS-2} before increasing weight."
+                )
+            else:
+                suggestion = (
+                    f"Continue at {current_weight}kg. Push for more reps each session "
+                    f"(current: {'/'.join(str(r) for r in latest['reps_per_set'])})."
+                )
+
+        analysis[ex_key] = {
+            "exercise_name": ex_name,
+            "signal": signal,
+            "suggestion": suggestion,
+            "current_weight_kg": current_weight,
+            "sessions_at_weight": sessions_at_weight,
+            "latest_reps": latest["reps_per_set"],
+            "total_reps_latest": latest["total_reps"],
+            "total_reps_trend": total_reps_at_weight[:3],
+            "first_set_reps": first_set_reps,
+            "last_set_reps": last_set_reps,
+            "sessions_count": len(sessions_data),
+            "suggested_weight_kg": suggested_next_weight if signal == "INCREASE_WEIGHT" else None,
+        }
+
+    return analysis
+
+
 def _build_workout_tips_prompt(profile: Optional[dict], lang: str = "de") -> str:
     """Build system prompt for forward-looking per-set workout targets."""
     p = profile or {}
@@ -730,34 +949,57 @@ This is purely FORWARD-LOOKING — you are telling them what to aim for, not rev
 
 Use their history to make smart decisions, but the output must only contain TARGETS for the upcoming session.
 
-=== COACHING RULES ===
+=== COACHING RULES (Evidence-Based Hypertrophy Programming) ===
 
 0. **Coaching Memory / Continuity**: If "YOUR PREVIOUS COACHING" data is provided, reference your past targets:
    - Did the user follow your target? Praise if yes, gently note if not.
    - Adjust your NEW targets based on whether they followed the old ones.
    - This creates a continuous coaching relationship.
 
-1. **Per-set targets**: For each exercise, give a target for EVERY set.
-   - Each set has: weight (kg), reps, and an optional short note (e.g. "Aufwärmsatz", "Arbeitssatz", "Letzter Satz — Vollgas!").
-   - Base these on their recent performance + goal-appropriate progression.
-   - For Hypertrophy goals: 8-12 reps. Strength: 3-6 reps. Endurance: 15+.
+1. **Rep drop-off across sets is NORMAL and EXPECTED**:
+   - A pattern like 12/11/10 or 10/9/8 across working sets is IDEAL and shows proper effort (1-3 RIR per set).
+   - NEVER suggest the same rep count for every working set (e.g. 12/12/12). This would mean early sets are too easy (4+ RIR), wasting stimulus.
+   - Each working set should be within 1-3 RIR (Reps in Reserve). Expect a 1-3 rep drop from first to last working set.
+   - For set targets, set the FIRST working set at the top of the range and let subsequent sets naturally decrease by 1-2 reps.
 
-2. **Smart progression**: Look at their last sessions of this workout type.
-   - If they completed all sets cleanly last time: increase weight by 2.5kg or add 1-2 reps per set.
-   - If they struggled: keep same weight, maybe reduce reps slightly.
-   - If stagnated for 3+ sessions: suggest a deload or rep scheme change.
+2. **Double Progression Model** (primary progression method):
+   - Each exercise works within a REP RANGE (default: 8-12 for hypertrophy).
+   - Phase 1 — Build reps: Keep weight constant. Each session, aim to get more total reps across all working sets.
+   - Phase 2 — Increase weight: When the FIRST working set hits the TOP of the rep range AND ALL working sets meet the MINIMUM → increase weight.
+   - Phase 3 — Reset reps: After weight increase, reps drop toward the bottom of the range. This is expected and normal.
+   - Then repeat from Phase 1.
+   - Example: 60kg → 10/9/8 → 11/10/9 → 12/11/10 → INCREASE → 62.5kg → 9/8/7 → 10/9/8 → ...
 
-3. **Exercise notes are HARD CONSTRAINTS**: The user may have added notes (📝) to exercises. These are NON-NEGOTIABLE constraints that OVERRIDE normal progression logic.
+3. **PROGRESSION ANALYSIS**: You will receive a "=== PROGRESSION ANALYSIS ===" section with pre-computed signals for each exercise.
+   - INCREASE_WEIGHT: All criteria met. Suggest the next weight step. Expect reps to drop.
+   - KEEP_PROGRESSING: Weight is right, reps are still building. Push for +1 rep on 1-2 sets.
+   - STAGNATED: No rep improvement for 3+ sessions at same weight. Suggest: deload, rep scheme change, or exercise variation.
+   - REGRESSED: Performance dropped. Keep same weight, don't push harder. Could be fatigue or bad day.
+   - FIRST_SESSION: No history — start conservative with moderate weight.
+   - FOLLOW the signal. It is computed from the user's actual data.
+
+4. **Weight increase amounts**:
+   - Compound movements (Bench Press, Squat, Deadlift, Rows, OHP, Leg Press): +2.5kg
+   - Isolation movements (Curls, Extensions, Lateral Raises, Flyes): +1.25–2.5kg
+   - Cable/Machine exercises: use the smallest available increment or next step from note
+   - If the analysis suggests a specific next weight, USE that weight.
+
+5. **Exercise notes are HARD CONSTRAINTS**: The user may have added notes (📝) to exercises. These are NON-NEGOTIABLE constraints that OVERRIDE normal progression logic.
    - If a note lists available weights (e.g. "only 5 12 19 26 33 40 47 57 67 77 87"), you MUST ONLY suggest weights from that exact list. NEVER suggest intermediate values like 57.5 or 62 — only the exact numbers listed.
    - If a note specifies equipment limitations, tempo, or technique cues, follow them precisely.
    - When choosing the next weight from a list, pick the next available step up (or same weight for more reps) — do NOT interpolate between listed values.
 
-4. **Nutrition awareness**: The user's nutrition phase affects targets.
-   - Deficit (cutting): conservative targets, maintain strength, don't push PRs.
-   - Surplus (bulking): push progressive overload harder.
-   - Maintenance: balanced approach.
+6. **Nutrition-aware programming**:
+   - Deficit (cutting): Conservative targets. Maintain strength, don't push weight increases unless reps significantly exceed the range. Accept slower progression.
+   - Surplus (bulking): Push progressive overload aggressively. Weight increases can happen after just 1-2 sessions at top reps.
+   - Maintenance: Standard double progression timing.
 
-4. **No form tips, no exercise descriptions**. The user knows how to perform exercises. Only give programming targets.
+7. **No form tips, no exercise descriptions**. The user knows how to perform exercises. Only give programming targets.
+
+8. **Per-set targets format**: For each exercise, give a target for EVERY set.
+   - Each set has: weight (kg), reps (TARGET for that specific set — remember set 1 > set 2 > set 3), and an optional short note.
+   - Notes like "Aufwärmsatz", "Arbeitssatz", "Topset", "Letzter Satz — alles geben!" are good.
+   - Warmup sets (if any) should have lower weight and are NOT counted as working sets.
 
 You MUST respond with valid JSON matching this exact schema:
 {{
@@ -766,15 +1008,16 @@ You MUST respond with valid JSON matching this exact schema:
   "exercise_targets": [
     {{
       "name": "<string, exercise name>",
+      "progression_status": "<string, one of: INCREASE_WEIGHT, KEEP_PROGRESSING, STAGNATED, REGRESSED, FIRST_SESSION>",
       "set_targets": [
         {{
           "set_number": <int, 1-based>,
           "weight_kg": <number, target weight in kg — use 0 for bodyweight exercises>,
-          "reps": <int, target reps>,
+          "reps": <int, target reps FOR THIS SPECIFIC SET — remember rep drop-off across sets!>,
           "note": "<string, optional short note like 'Aufwärmsatz' or 'Topset' or '' if none>"
         }}
       ],
-      "reasoning": "<string, ONE sentence explaining why these targets (e.g. 'Last time you did 4×10@60kg cleanly, stepping up 2.5kg')>"
+      "reasoning": "<string, 1-2 sentences: reference the progression signal AND explain the target. E.g. 'Total reps increased from 28→31 at 60kg. First set hit 12 and all sets ≥8 → stepping up to 62.5kg. Expect reps around 9-10.'>"
     }}
   ],
   "new_exercises_to_try": [
@@ -907,6 +1150,31 @@ async def generate_workout_tips(
             parts.append(_format_workout(filtered_w))
     else:
         parts.append(f"=== NO PREVIOUS SESSIONS of '{workout_name}' found — first time ===")
+
+    # ── Pre-computed Progression Analysis per exercise ──
+    progression = _compute_exercise_progression(matching_sessions, full_template_exercises)
+    if progression:
+        parts.append("")
+        parts.append("=== PROGRESSION ANALYSIS (pre-computed from workout history) ===")
+        parts.append("USE these signals to guide your weight/rep targets. Do NOT ignore them.")
+        parts.append("")
+        for ex_key, data in progression.items():
+            ex_name = data["exercise_name"]
+            signal = data["signal"]
+            suggestion = data["suggestion"]
+            parts.append(f"📊 {ex_name}: **{signal}**")
+            if data.get("current_weight_kg"):
+                parts.append(f"   Current weight: {data['current_weight_kg']}kg | Sessions at this weight: {data.get('sessions_at_weight', '?')}")
+            if data.get("latest_reps"):
+                reps_str = "/".join(str(r) for r in data["latest_reps"])
+                parts.append(f"   Latest reps per set: {reps_str} (total: {data.get('total_reps_latest', '?')})")
+            if data.get("total_reps_trend") and len(data["total_reps_trend"]) > 1:
+                trend_str = " → ".join(str(r) for r in reversed(data["total_reps_trend"]))
+                parts.append(f"   Total reps trend (oldest→newest): {trend_str}")
+            if data.get("suggested_weight_kg"):
+                parts.append(f"   ➡️ Suggested next weight: {data['suggested_weight_kg']}kg")
+            parts.append(f"   💡 {suggestion}")
+            parts.append("")
 
     user_message = "\n".join(parts)
 
