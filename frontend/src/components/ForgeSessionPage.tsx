@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, CirclePlus, Loader2, MessageSquare, Plus, Send, Trash2 } from 'lucide-react';
 import {
@@ -44,12 +44,58 @@ export default function ForgeSessionPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [addOpen, setAddOpen] = useState(false);
+  const [actualDrafts, setActualDrafts] = useState<Record<string, string>>({});
+  const sessionRef = useRef<ForgeSession | null>(null);
+  const pendingActualChanges = useRef<Record<string, Partial<Pick<ForgeSessionSetInput, 'actual_weight_kg' | 'actual_reps'>>>>({});
+  const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const activeExercise = useMemo(() => session?.exercises[activeIndex] ?? null, [session, activeIndex]);
   const setSessionSafe = (next: ForgeSession) => {
+    sessionRef.current = next;
     setSession(next);
     setActiveIndex((current) => Math.min(current, Math.max(0, next.exercises.length - 1)));
   };
+
+  const flushSetAutosave = useCallback(async (setId: string) => {
+    const changes = pendingActualChanges.current[setId];
+    delete pendingActualChanges.current[setId];
+    if (saveTimers.current[setId]) { clearTimeout(saveTimers.current[setId]); delete saveTimers.current[setId]; }
+    const currentSession = sessionRef.current;
+    const liveSet = currentSession?.exercises.flatMap((exercise) => exercise.sets).find((set) => set.id === setId);
+    if (!currentSession || !liveSet || !changes || currentSession.status !== 'active') return;
+    try {
+      setSessionSafe(await updateForgeSessionSet(currentSession.id, setId, toInput(liveSet, changes)));
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Satz konnte nicht gespeichert werden.');
+      pendingActualChanges.current[setId] = { ...changes, ...pendingActualChanges.current[setId] };
+    }
+  }, []);
+
+  const scheduleActualSave = useCallback((set: ForgeSessionSet, field: 'actual_weight_kg' | 'actual_reps', rawValue: string) => {
+    setActualDrafts((drafts) => ({ ...drafts, [`${set.id}:${field}`]: rawValue }));
+    const value = rawValue.trim() === '' ? null : Number(rawValue);
+    if (value !== null && !Number.isFinite(value)) return;
+    pendingActualChanges.current[set.id] = { ...pendingActualChanges.current[set.id], [field]: value };
+    if (saveTimers.current[set.id]) clearTimeout(saveTimers.current[set.id]);
+    saveTimers.current[set.id] = setTimeout(() => { void flushSetAutosave(set.id); }, 600);
+  }, [flushSetAutosave]);
+
+  const flushAllSetAutosaves = useCallback(async () => {
+    await Promise.all(Object.keys(pendingActualChanges.current).map((setId) => flushSetAutosave(setId)));
+  }, [flushSetAutosave]);
+
+  useEffect(() => {
+    const saveBeforeBackground = () => { void flushAllSetAutosaves(); };
+    const onVisibilityChange = () => { if (document.visibilityState === 'hidden') saveBeforeBackground(); };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', saveBeforeBackground);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', saveBeforeBackground);
+      Object.values(saveTimers.current).forEach(clearTimeout);
+      saveBeforeBackground();
+    };
+  }, [flushAllSetAutosaves]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -103,10 +149,13 @@ export default function ForgeSessionPage() {
 
   const complete = async () => {
     if (!session || !window.confirm('Session wirklich abschließen? Danach bleibt sie als Historie gespeichert.')) return;
-    await mutate(async () => {
-      const completed = await completeForgeSession(session.id);
-      return completed;
-    });
+    setSaving(true); setError(null);
+    try {
+      await flushAllSetAutosaves();
+      setSessionSafe(await completeForgeSession(session.id));
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Session konnte nicht abgeschlossen werden.');
+    } finally { setSaving(false); }
   };
 
   if (loading) return <div className="py-20 flex justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div>;
@@ -132,7 +181,7 @@ export default function ForgeSessionPage() {
           {activeExercise.sets.map((set, index) => <div key={set.id} className="grid items-center gap-2 px-4 py-3" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}>
             <span className="text-[11px]" style={{ color: DIM }}>{set.set_type === 'warmup' ? 'W' : index + 1}</span>
             <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps)}</span>
-            <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input defaultValue={set.actual_weight_kg ?? ''} disabled={session.status !== 'active'} inputMode="decimal" onBlur={(event) => { const value = event.target.value === '' ? null : Number(event.target.value); if (value !== set.actual_weight_kg) updateSet(set, { actual_weight_kg: value }); }} placeholder="kg" className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input defaultValue={set.actual_reps ?? ''} disabled={session.status !== 'active'} inputMode="numeric" onBlur={(event) => { const value = event.target.value === '' ? null : Number(event.target.value); if (value !== set.actual_reps) updateSet(set, { actual_reps: value }); }} placeholder="Wdh." className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
+            <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder="kg" className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder="Wdh." className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
             {session.status === 'active' ? <button onClick={() => updateSet(set, { completed: !set.completed, actual_weight_kg: set.actual_weight_kg ?? set.target_weight_kg, actual_reps: set.actual_reps ?? set.target_reps })} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
           </div>)}
         </div>

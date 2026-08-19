@@ -839,6 +839,7 @@ export const getForgeToday = () => apiRequest<ForgeToday>('/api/forge/today');
 
 export const startForgeSession = (plan_id: string, program_id?: string | null) =>
   apiRequest<ForgeSession>('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ plan_id, program_id: program_id ?? null }) });
+export const getActiveForgeSession = () => apiRequest<ForgeSession | null>('/api/forge/sessions/active');
 export const getForgeSession = (id: string) => apiRequest<ForgeSession>(`/api/forge/sessions/${id}`);
 export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_name?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises`, { method: 'POST', body: JSON.stringify(data) });

@@ -1,19 +1,17 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
-    getTodayBriefing, regenerateBriefing, getWorkoutList, getWorkoutTips,
-    getWeather, saveTrainingPlan, sendChatMessage, getWeightHistory,
-    getTodayNutrition, getStreaks, getForgeToday, startForgeSession,
+    getTodayBriefing, regenerateBriefing, getWeather, sendChatMessage, getWeightHistory,
+    getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession,
 } from '../api/api';
 import type {
-    UserInfo, Briefing, WorkoutTips, WeatherData,
-    ChatMessage, WeightHistoryEntry, TodayNutrition, StreaksData, ForgeToday,
+    UserInfo, Briefing, WeatherData,
+    ChatMessage, WeightHistoryEntry, TodayNutrition, StreaksData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
-    Dumbbell, ChevronRight, ChevronDown, ChevronUp,
-    Send, MessageSquare, Scale, Check, Edit3,
-    ListChecks,
+    Dumbbell, ChevronDown, ChevronUp,
+    Send, MessageSquare, Scale,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useLanguage } from '../i18n';
@@ -77,15 +75,6 @@ function MacroBar({ label, current, goal, color }: { label: string; current: num
     );
 }
 
-/* ── progression badge ── */
-const PROG_META: Record<string, { label: string; color: string; bg: string }> = {
-    INCREASE_WEIGHT: { label: '↑ Hochgehen', color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
-    KEEP_PROGRESSING: { label: '→ Reps +', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
-    STAGNATED: { label: '⚠ Halten', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' },
-    REGRESSED: { label: '↓ Deload', color: '#f87171', bg: 'rgba(248,113,113,0.12)' },
-    FIRST_SESSION: { label: '★ Neu', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
-};
-
 export default function Dashboard() {
     const { user } = useOutletContext<LayoutContext>();
     const navigate = useNavigate();
@@ -98,16 +87,6 @@ export default function Dashboard() {
     const [weather, setWeather] = useState<WeatherData | null>(null);
     const [location, setLocation] = useState<{ lat: number; lon: number } | null>(null);
 
-    const [workoutTips, setWorkoutTips] = useState<WorkoutTips | null>(null);
-    const [tipsLoading, setTipsLoading] = useState(false);
-    const [tipsError, setTipsError] = useState<string | null>(null);
-
-    const [trainingPlan, setTrainingPlan] = useState<string[]>(user?.training_plan || []);
-    const [editingPlan, setEditingPlan] = useState(false);
-    const [planDraft, setPlanDraft] = useState<string[]>([]);
-    const [planSaving, setPlanSaving] = useState(false);
-    const [allWorkoutNames, setAllWorkoutNames] = useState<string[]>([]);
-
     const [chatOpen, setChatOpen] = useState(false);
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
@@ -119,6 +98,8 @@ export default function Dashboard() {
     const [streaks, setStreaks] = useState<StreaksData | null>(null);
     const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
     const [todayRoutineId, setTodayRoutineId] = useState<string | null>(null);
+    const [activeForgeSession, setActiveForgeSession] = useState<ForgeSession | null>(null);
+    const [forgeError, setForgeError] = useState<string | null>(null);
     const [startingSession, setStartingSession] = useState(false);
 
     /* load briefing + secondary data */
@@ -151,11 +132,8 @@ export default function Dashboard() {
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
         getStreaks().then(setStreaks).catch(() => { });
         getForgeToday().then(data => { setForgeToday(data); setTodayRoutineId(data.routine?.id ?? null); }).catch(() => { });
+        getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
     }, []);
-
-    useEffect(() => {
-        if (user?.training_plan) setTrainingPlan(user.training_plan);
-    }, [user?.training_plan]);
 
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -166,35 +144,6 @@ export default function Dashboard() {
         try { setBriefing(await regenerateBriefing(location?.lat, location?.lon)); }
         catch (e: any) { setError(e.message); }
         finally { setRegenerating(false); }
-    };
-
-    const handleSelectWorkout = useCallback(async (name: string, force = false) => {
-        setTipsLoading(true); setTipsError(null);
-        if (!force) setWorkoutTips(null);
-        try { setWorkoutTips(await getWorkoutTips(name, force)); }
-        catch (e: any) { setTipsError(e.message); }
-        finally { setTipsLoading(false); }
-    }, []);
-
-    const handleEditPlan = async () => {
-        setPlanDraft([...trainingPlan]);
-        setEditingPlan(true);
-        if (allWorkoutNames.length === 0) {
-            try {
-                const list = await getWorkoutList();
-                setAllWorkoutNames([...new Set(list.map(w => w.title))]);
-            } catch { }
-        }
-    };
-
-    const handleSavePlan = async () => {
-        setPlanSaving(true);
-        try {
-            const res = await saveTrainingPlan(planDraft);
-            setTrainingPlan(res.training_plan);
-            setEditingPlan(false);
-        } catch { }
-        setPlanSaving(false);
     };
 
     const handleChatSend = async () => {
@@ -228,12 +177,13 @@ export default function Dashboard() {
 
     const handleStartForgeSession = async () => {
         if (!homeRoutine || startingSession) return;
-        setStartingSession(true);
+        setStartingSession(true); setForgeError(null);
         try {
             const session = await startForgeSession(homeRoutine.id, forgeToday?.program?.id);
+            setActiveForgeSession(session.status === 'active' ? session : null);
             navigate(`/forge/session/${session.id}`);
-        } catch (caught: any) {
-            setTipsError(caught?.message || 'Session konnte nicht gestartet werden.');
+        } catch (caught: unknown) {
+            setForgeError(caught instanceof Error ? caught.message : 'Session konnte nicht gestartet werden.');
         } finally { setStartingSession(false); }
     };
 
@@ -261,31 +211,21 @@ export default function Dashboard() {
                 </div>
             </header>
 
-            {homeRoutine && (
+            {activeForgeSession ? (() => {
+                const completedSets = activeForgeSession.exercises.flatMap((exercise) => exercise.sets).filter((set) => set.completed).length;
+                const totalSets = activeForgeSession.exercises.flatMap((exercise) => exercise.sets).length;
+                return <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}44` }}>
+                    <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Aktive Session</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{activeForgeSession.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · sicher gespeichert</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
+                    <button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge w-full mt-4 flex items-center justify-center gap-2"><Dumbbell size={15} />Session fortsetzen</button>
+                </section>;
+            })() : homeRoutine && (
                 <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}2c` }}>
-                    <div className="flex items-start justify-between gap-4">
-                        <div>
-                            <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>
-                                {forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran'}
-                            </p>
-                            <h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine.name}</h2>
-                            <p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>
-                                {homeRoutine.exercises.length} Übungen · {forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}
-                            </p>
-                        </div>
-                        <Dumbbell size={22} style={{ color: SAND }} />
-                    </div>
-                    {forgeToday && forgeToday.options.length > 1 && (
-                        <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-                            {forgeToday.options.map(option => <button key={option.id} onClick={() => setTodayRoutineId(option.id)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: homeRoutine.id === option.id ? SAND : TEXT_DIM, border: `1px solid ${homeRoutine.id === option.id ? SAND : CARD_BORDER}`, background: homeRoutine.id === option.id ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{option.name}</button>)}
-                        </div>
-                    )}
-                    <button onClick={handleStartForgeSession} disabled={startingSession}
-                        className="btn-forge w-full mt-4 flex items-center justify-center gap-2">
-                        {startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}Training starten
-                    </button>
+                    <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran'}</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{homeRoutine.exercises.length} Übungen · {forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
+                    {forgeToday && forgeToday.options.length > 1 && <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">{forgeToday.options.map(option => <button key={option.id} onClick={() => setTodayRoutineId(option.id)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: homeRoutine.id === option.id ? SAND : TEXT_DIM, border: `1px solid ${homeRoutine.id === option.id ? SAND : CARD_BORDER}`, background: homeRoutine.id === option.id ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{option.name}</button>)}</div>}
+                    <button onClick={handleStartForgeSession} disabled={startingSession} className="btn-forge w-full mt-4 flex items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}Training starten</button>
                 </section>
             )}
+            {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}
 
             {/* ── Loading ── */}
             {loading && (
@@ -387,117 +327,6 @@ export default function Dashboard() {
                             )}
                         </section>
                     )}
-
-                    {/* ── Trainingsplan / Workout-Plan Hero ── */}
-                    <section className="forge-anim forge-d3">
-                        <div className="flex items-center justify-between mb-3 px-1">
-                            <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: TEXT_DIM }}>
-                                Nächstes Training
-                            </p>
-                            {!editingPlan && (
-                                <button onClick={handleEditPlan}
-                                    className="tap flex items-center gap-1 text-[11px] cursor-pointer"
-                                    style={{ color: TEXT_DIM }}>
-                                    <Edit3 size={11} />
-                                    {trainingPlan.length > 0 ? 'Plan bearbeiten' : 'Plan wählen'}
-                                </button>
-                            )}
-                        </div>
-
-                        {/* Plan editing */}
-                        {editingPlan && (
-                            <div className="card-forge p-4 space-y-3 mb-3">
-                                <p className="text-[12px]" style={{ color: TEXT_DIM }}>Workouts auswählen</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {allWorkoutNames.length === 0
-                                        ? <span className="text-[12px]" style={{ color: TEXT_DIM }}>Lade…</span>
-                                        : allWorkoutNames.map(n => (
-                                            <button key={n} onClick={() => setPlanDraft(prev =>
-                                                prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])}
-                                                className="tap text-[12px] px-3 py-1.5 rounded-xl border transition-all cursor-pointer"
-                                                style={{
-                                                    background: planDraft.includes(n) ? `${SAND}18` : 'rgba(255,247,235,0.04)',
-                                                    borderColor: planDraft.includes(n) ? `${SAND}44` : 'rgba(255,247,235,0.1)',
-                                                    color: planDraft.includes(n) ? SAND : TEXT_MID,
-                                                }}>
-                                                {planDraft.includes(n) && <Check size={10} className="inline mr-1" />}{n}
-                                            </button>
-                                        ))
-                                    }
-                                </div>
-                                <div className="flex justify-end gap-2">
-                                    <button onClick={() => setEditingPlan(false)}
-                                        className="text-[12px] cursor-pointer px-3 py-1.5" style={{ color: TEXT_DIM }}>
-                                        Abbrechen
-                                    </button>
-                                    <button onClick={handleSavePlan} disabled={planSaving}
-                                        className="tap text-[12px] px-4 py-1.5 rounded-xl cursor-pointer"
-                                        style={{ background: `${SAND}18`, border: `1px solid ${SAND}44`, color: SAND }}>
-                                        {planSaving ? 'Speichern…' : 'Speichern'}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* No plan yet */}
-                        {!editingPlan && trainingPlan.length === 0 && !workoutTips && (
-                            <button onClick={handleEditPlan}
-                                className="tap w-full card-forge p-6 text-center space-y-2 cursor-pointer">
-                                <ListChecks size={24} className="mx-auto" style={{ color: TEXT_DIM }} />
-                                <p className="text-[13px]" style={{ color: TEXT_DIM }}>
-                                    Kein Trainingsplan gesetzt — tippe um Workouts auszuwählen.
-                                </p>
-                            </button>
-                        )}
-
-                        {/* Workout picker tiles */}
-                        {!editingPlan && trainingPlan.length > 0 && !workoutTips && !tipsLoading && (
-                            <div className="space-y-2">
-                                {trainingPlan.map(name => (
-                                    <button key={name} onClick={() => handleSelectWorkout(name)}
-                                        className="tap w-full card-forge p-4 flex items-center justify-between cursor-pointer group">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-                                                style={{ background: `${SAND}12`, border: `1px solid ${SAND}28` }}>
-                                                <Dumbbell size={16} style={{ color: SAND }} />
-                                            </div>
-                                            <span className="text-[15px] font-medium" style={{ color: '#f2ece0' }}>{name}</span>
-                                        </div>
-                                        <ChevronRight size={16} style={{ color: TEXT_DIM }} />
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-
-                        {/* Loading tips */}
-                        {tipsLoading && (
-                            <div className="card-forge p-8 text-center space-y-2">
-                                <Loader2 className="w-6 h-6 animate-spin mx-auto" style={{ color: SAND }} />
-                                <p className="text-[12px]" style={{ color: TEXT_DIM }}>Plan wird generiert…</p>
-                            </div>
-                        )}
-
-                        {/* Tips error */}
-                        {tipsError && !tipsLoading && (
-                            <div className="card-forge p-5 text-center space-y-2">
-                                <p className="text-[13px] text-red-400">{tipsError}</p>
-                                <button onClick={() => { setWorkoutTips(null); setTipsError(null); }}
-                                    className="text-[12px] cursor-pointer" style={{ color: TEXT_DIM }}>
-                                    Zurück
-                                </button>
-                            </div>
-                        )}
-
-                        {/* ── Workout Plan Content ── */}
-                        {workoutTips && !tipsLoading && (
-                            <WorkoutPlanDisplay
-                                tips={workoutTips}
-                                onBack={() => { setWorkoutTips(null); setTipsError(null); }}
-                                onRegenerate={() => handleSelectWorkout(workoutTips.workout_title, true)}
-                                regenerating={tipsLoading}
-                            />
-                        )}
-                    </section>
 
                     {/* ── Weather note from briefing ── */}
                     {briefing?.briefing_data?.weather_note && (
@@ -602,101 +431,6 @@ export default function Dashboard() {
                     </section>
                 </>
             )}
-        </div>
-    );
-}
-
-/* ═══════════════════════════════════════════════════
-   WORKOUT PLAN DISPLAY
-   ═══════════════════════════════════════════════════ */
-function WorkoutPlanDisplay({ tips, onBack, onRegenerate, regenerating }: {
-    tips: WorkoutTips;
-    onBack: () => void;
-    onRegenerate: () => void;
-    regenerating: boolean;
-}) {
-    return (
-        <div className="space-y-3">
-            {/* Header card */}
-            <div className="card-forge p-5" style={{ borderColor: `${SAND}22` }}>
-                <div className="flex items-start justify-between gap-3">
-                    <div>
-                        <button onClick={onBack}
-                            className="tap text-[11px] flex items-center gap-1 mb-2 cursor-pointer"
-                            style={{ color: TEXT_DIM }}>
-                            ← Zurück
-                        </button>
-                        <h2 className="text-[20px] font-semibold tracking-tight" style={{ color: '#f2ece0' }}>
-                            {tips.workout_title}
-                        </h2>
-                    </div>
-                    <button onClick={onRegenerate} disabled={regenerating}
-                        className="tap flex items-center gap-1 text-[11px] cursor-pointer mt-1"
-                        style={{ color: TEXT_DIM }}>
-                        <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} />
-                        Neu
-                    </button>
-                </div>
-                {tips.nutrition_context && (
-                    <p className="text-[13px] leading-relaxed mt-3 pt-3"
-                        style={{ color: TEXT_MID, borderTop: `1px solid ${CARD_BORDER}` }}>
-                        {tips.nutrition_context}
-                    </p>
-                )}
-            </div>
-
-            {/* Exercises */}
-            {tips.exercise_targets?.map((ex, i) => {
-                const meta = PROG_META[ex.progression_status || ''] ?? PROG_META.KEEP_PROGRESSING;
-                return (
-                    <div key={i} className="card-forge p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                            <h3 className="text-[15px] font-semibold leading-tight" style={{ color: '#f2ece0' }}>
-                                {ex.name}
-                            </h3>
-                            <span className="shrink-0 text-[10px] font-semibold rounded-full px-2.5 py-1"
-                                style={{ color: meta.color, background: meta.bg }}>
-                                {meta.label}
-                            </span>
-                        </div>
-
-                        {/* Set table */}
-                        <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(255,247,235,0.07)' }}>
-                            {ex.set_targets?.map((s, j) => (
-                                <div key={j}
-                                    style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: '56px 1fr 1fr',
-                                        alignItems: 'center',
-                                        padding: '10px 16px',
-                                        background: j % 2 ? 'transparent' : 'rgba(255,247,235,0.025)',
-                                    }}>
-                                    {/* Satz */}
-                                    <span style={{ color: TEXT_DIM, fontSize: 12 }}>
-                                        Satz {s.set_number}
-                                    </span>
-                                    {/* Gewicht × Reps — hard centred */}
-                                    <span style={{ color: '#f2ece0', fontSize: 15, fontWeight: 600, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
-                                        {s.weight_kg > 0 ? `${s.weight_kg} kg` : 'BW'}
-                                        <span style={{ color: TEXT_DIM, fontWeight: 400, fontSize: 13 }}> × {s.reps}</span>
-                                    </span>
-                                    {/* Note — right aligned, wraps */}
-                                    <span style={{ color: TEXT_DIM, fontSize: 11, textAlign: 'right', lineHeight: 1.3 }}>
-                                        {s.note || ''}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* Reasoning */}
-                        {ex.reasoning && (
-                            <p className="text-[12.5px] leading-relaxed italic" style={{ color: TEXT_DIM }}>
-                                {ex.reasoning}
-                            </p>
-                        )}
-                    </div>
-                );
-            })}
         </div>
     );
 }

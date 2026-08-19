@@ -655,6 +655,16 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
     return _serialize_session(session)
 
 
+@router.get("/sessions/active", response_model=ForgeSessionResponse | None)
+async def get_active_session(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return the caller's resumable native Forge session, if one exists."""
+    session = db.query(ForgeWorkoutSession).filter(
+        ForgeWorkoutSession.user_id == current_user.id,
+        ForgeWorkoutSession.status == "active",
+    ).order_by(ForgeWorkoutSession.started_at.desc()).first()
+    return _serialize_session(session) if session is not None else None
+
+
 @router.get("/sessions/{session_id}", response_model=ForgeSessionResponse)
 async def get_session(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return _serialize_session(_owned_session(db, current_user.id, session_id))
