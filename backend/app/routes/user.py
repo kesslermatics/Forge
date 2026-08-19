@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import (
     UserResponse,
-    YazioCredentialsUpdate,
+    YazioCredentialsUpdate, YazioCredentialsResponse,
     GoalUpdate, GoalResponse,
     LanguageUpdate, LanguageResponse,
     TrainingPlanUpdate, TrainingPlanResponse,
