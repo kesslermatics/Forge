@@ -4,6 +4,7 @@ import { saveApiKey, saveYazioCredentials } from '../api/api';
 import type { UserInfo } from '../api/api';
 import { Key, UtensilsCrossed, Eye, EyeOff, ArrowRight, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../i18n';
+import ForgeIcon from './ForgeIcon';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -59,7 +60,7 @@ export default function SetupPage() {
         <div className="max-w-sm mx-auto space-y-6 pt-4">
             {/* Header */}
             <div className="text-center forge-anim">
-                <ForgeIcon />
+                <ForgeIcon size="lg" />
                 <h1 className="text-[22px] font-semibold tracking-tight mt-4" style={{ color: '#f2ece0' }}>
                     {t('setup.title')}
                 </h1>
@@ -165,18 +166,6 @@ function Dot({ active, done, label }: { active: boolean; done: boolean; label: s
     );
 }
 
-function ForgeIcon() {
-    return (
-        <div className="inline-flex w-14 h-14 rounded-2xl items-center justify-center mx-auto"
-            style={{ background: 'linear-gradient(135deg, rgba(232,197,138,0.25), rgba(200,164,100,0.15))', border: '1px solid rgba(232,197,138,0.3)' }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M15 4H9C8.45 4 8 4.45 8 5V10C8 10.55 8.45 11 9 11H15C15.55 11 16 10.55 16 10V5C16 4.45 15.55 4 15 4Z" fill="#e8c58a" />
-                <path d="M13.5 10.5L8 19.5C7.72 19.97 8.05 20.5 8.58 20.5H15.42C15.95 20.5 16.28 19.97 16 19.5L13.5 10.5Z" fill="#c8a870" />
-                <path d="M9 4H15V6.5H9V4Z" fill="#f2d9a8" opacity="0.55" />
-            </svg>
-        </div>
-    );
-}
 
 function FeedMsg({ msg }: { msg: { type: 'success' | 'error'; text: string } | null }) {
     if (!msg) return null;

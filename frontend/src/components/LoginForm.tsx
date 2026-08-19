@@ -4,6 +4,7 @@ import { loginUser } from '../api/api';
 import { LogIn, Eye, EyeOff, Globe } from 'lucide-react';
 import type { Lang } from '../i18n';
 import { LanguageContext, useLanguage } from '../i18n';
+import ForgeIcon from './ForgeIcon';
 
 const SAND = '#e8c58a';
 
@@ -30,7 +31,7 @@ function LoginFormInner() {
         <div className="w-full max-w-sm">
             {/* Logo */}
             <div className="text-center mb-10 forge-anim">
-                <ForgeIcon />
+                <ForgeIcon size="lg" />
                 <h1 className="text-[26px] font-bold tracking-tight mt-4" style={{ color: SAND }}>Forge</h1>
                 <p className="text-[13px] mt-1.5" style={{ color: 'rgba(242,236,226,0.45)' }}>
                     {t('login.subtitle')}
@@ -108,18 +109,6 @@ export default function LoginForm() {
     );
 }
 
-function ForgeIcon() {
-    return (
-        <div className="inline-flex w-16 h-16 rounded-2xl items-center justify-center mx-auto"
-            style={{ background: 'linear-gradient(135deg, rgba(232,197,138,0.25), rgba(200,164,100,0.15))', border: '1px solid rgba(232,197,138,0.3)' }}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M15 4H9C8.45 4 8 4.45 8 5V10C8 10.55 8.45 11 9 11H15C15.55 11 16 10.55 16 10V5C16 4.45 15.55 4 15 4Z" fill="#e8c58a" />
-                <path d="M13.5 10.5L8 19.5C7.72 19.97 8.05 20.5 8.58 20.5H15.42C15.95 20.5 16.28 19.97 16 19.5L13.5 10.5Z" fill="#c8a870" />
-                <path d="M9 4H15V6.5H9V4Z" fill="#f2d9a8" opacity="0.55" />
-            </svg>
-        </div>
-    );
-}
 
 function Notice({ type, text }: { type: 'success' | 'error'; text: string }) {
     return (
