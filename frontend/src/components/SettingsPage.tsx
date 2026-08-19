@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { saveApiKey, saveYazioCredentials, updateLanguage } from '../api/api';
+import { saveYazioCredentials, updateLanguage } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { Key, UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe } from 'lucide-react';
+import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
 
@@ -16,9 +16,6 @@ export default function SettingsPage() {
     const { user, refreshUser } = useOutletContext<LayoutContext>();
     const { t, lang } = useLanguage();
 
-    const [apiKey, setApiKey] = useState('');
-    const [savingKey, setSavingKey] = useState(false);
-    const [keyMsg, setKeyMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
     const [yazioEmail, setYazioEmail] = useState('');
     const [yazioPassword, setYazioPassword] = useState('');
@@ -27,12 +24,6 @@ export default function SettingsPage() {
     const [yazioMsg, setYazioMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
     const [langMsg, setLangMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-    const handleSaveKey = async (e: React.FormEvent) => {
-        e.preventDefault(); setKeyMsg(null); setSavingKey(true);
-        try { await saveApiKey(apiKey); setKeyMsg({ type: 'success', text: t('settings.hevyUpdated') }); await refreshUser(); setApiKey(''); }
-        catch (err: any) { setKeyMsg({ type: 'error', text: err.message }); }
-        finally { setSavingKey(false); }
-    };
     const handleSaveYazio = async (e: React.FormEvent) => {
         e.preventDefault(); setYazioMsg(null); setSavingYazio(true);
         try { await saveYazioCredentials(yazioEmail, yazioPassword); setYazioMsg({ type: 'success', text: t('settings.yazioUpdated') }); await refreshUser(); setYazioEmail(''); setYazioPassword(''); }
@@ -85,27 +76,6 @@ export default function SettingsPage() {
                     ))}
                 </div>
                 <FeedMsg msg={langMsg} />
-            </Card>
-
-            {/* Hevy */}
-            <Card icon={<Key size={15} style={{ color: SAND }} />} title={t('settings.hevyTitle')}
-                badge={<ConnBadge connected={!!user?.has_hevy_key} />}>
-                <p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>
-                    {t('settings.hevyDesc')}{' '}
-                    <a href="https://api.hevyapp.com/account" target="_blank" rel="noopener noreferrer"
-                        className="underline underline-offset-2" style={{ color: SAND }}>
-                        {t('settings.hevyLink')}
-                    </a>.
-                </p>
-                <form onSubmit={handleSaveKey} className="space-y-3">
-                    <input type="password" className="input-forge font-mono text-[13px]"
-                        placeholder={user?.has_hevy_key ? t('settings.hevyPlaceholder') : 'hvy_xxxxxxxxxxxxxxxxxxxx'}
-                        value={apiKey} onChange={e => setApiKey(e.target.value)} required />
-                    <FeedMsg msg={keyMsg} />
-                    <button type="submit" disabled={savingKey} className="btn-forge w-full text-[14px]">
-                        {savingKey ? t('settings.saving') : user?.has_hevy_key ? t('settings.updateKey') : t('settings.saveKey')}
-                    </button>
-                </form>
             </Card>
 
             {/* Yazio */}

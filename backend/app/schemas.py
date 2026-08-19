@@ -25,7 +25,6 @@ class UserResponse(BaseModel):
     """Schema for user response (excludes sensitive data)."""
     id: UUID
     username: str
-    has_hevy_key: bool = False
     has_yazio: bool = False
     current_goal: Optional[str] = None
     target_weight: Optional[float] = None
@@ -48,19 +47,6 @@ class UserInDB(BaseModel):
     
     class Config:
         from_attributes = True
-
-
-# ============ API Key Schemas ============
-
-class ApiKeyUpdate(BaseModel):
-    """Schema for updating Hevy API key."""
-    hevy_api_key: str = Field(..., min_length=1, max_length=255)
-
-
-class ApiKeyResponse(BaseModel):
-    """Schema for API key update response."""
-    message: str
-    has_api_key: bool
 
 
 # ============ Yazio Schemas ============

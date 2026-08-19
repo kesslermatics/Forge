@@ -49,7 +49,7 @@ FALLBACK_BRIEFING = {
         "carbs": "Unable to load carbs data.",
         "fat": "Unable to load fat data.",
     },
-    "workout_suggestion": "Unable to generate workout suggestion — please check your Hevy connection.",
+    "workout_suggestion": "Unable to generate workout suggestion — please check your Forge session data.",
     "weight_trend": "Unable to load weight data.",
     "weather_note": "",
     "muscle_recovery": {},
@@ -172,7 +172,7 @@ NEVER say the calorie goal is "maintenance" unless the user's actual goal is to 
 
 You will receive:
 1. Yesterday's nutrition data AND today's current nutrition from Yazio (may be partial or missing).
-2. The last few completed workouts from Hevy (exercises, sets, weights).
+2. The last few completed Forge sessions (exercises, sets, weights).
 3. Current weather data (may be missing).
 
 Your job:
@@ -230,7 +230,7 @@ Respond ONLY with the JSON object. No markdown, no explanation."""
     return base_prompt + _language_instruction(lang)
 
 
-def _build_user_message(yazio_data: Optional[dict], hevy_data: Optional[list], today_nutrition: Optional[dict] = None) -> str:
+def _build_user_message(yazio_data: Optional[dict], workout_data: Optional[list], today_nutrition: Optional[dict] = None) -> str:
     """Build the user message containing the raw context data."""
     parts: list[str] = []
 
@@ -304,10 +304,10 @@ def _build_user_message(yazio_data: Optional[dict], hevy_data: Optional[list], t
     parts.append("")
 
     # ── Workouts ─────────────────────────────────────────
-    if hevy_data:
-        parts.append(f"=== LAST {len(hevy_data)} WORKOUTS (Hevy) ===")
+    if workout_data:
+        parts.append(f"=== LAST {len(workout_data)} COMPLETED FORGE SESSIONS ===")
         parts.append("(Workout 1 = most recent, use it for last_session analysis)")
-        for i, w in enumerate(hevy_data, 1):
+        for i, w in enumerate(workout_data, 1):
             dur = f" ({w['duration_min']} min)" if w.get("duration_min") else ""
             parts.append(f"\nWorkout {i}: {w.get('title', 'Untitled')}{dur} — {w.get('start_time', '?')}")
             for ex in w.get("exercises", []):
@@ -325,14 +325,14 @@ def _build_user_message(yazio_data: Optional[dict], hevy_data: Optional[list], t
                 muscle = f" [{ex.get('muscle_group')}]" if ex.get("muscle_group") else ""
                 parts.append(f"  • {ex.get('title', '?')}{muscle}: {sets_str}")
     else:
-        parts.append("=== WORKOUTS: No data available (Hevy not connected or no workouts found) ===")
+        parts.append("=== WORKOUTS: No completed Forge sessions found ===")
 
     return "\n".join(parts)
 
 
 async def generate_daily_briefing(
     yazio_data: Optional[dict],
-    hevy_data: Optional[list],
+    workout_data: Optional[list],
     weather_data: Optional[dict] = None,
     language: str = "de",
     weight_history: Optional[list] = None,
@@ -350,7 +350,7 @@ async def generate_daily_briefing(
     # Extract profile from Yazio data (name, height, weight, goal, diet…)
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_system_prompt(profile, lang=language)
-    user_message = _build_user_message(yazio_data, hevy_data, today_nutrition=today_nutrition)
+    user_message = _build_user_message(yazio_data, workout_data, today_nutrition=today_nutrition)
 
     # Append weight history if available
     if weight_history and len(weight_history) > 0:
@@ -473,10 +473,10 @@ Today is {today_str}.
 Nutrition data sections include the ACTUAL DATE they are from.
 ALWAYS use the correct date or weekday name when referencing nutrition data.
 Do NOT say "gestern" unless the data is ACTUALLY from yesterday.
-Workout dates from Hevy include actual timestamps — use those to determine how many days ago a workout was.
+Workout dates from Forge sessions include actual timestamps — use those to determine how many days ago a workout was.
 
 You will receive:
-1. The user's last 20 completed workouts from Hevy (exercises, sets, weights).
+1. The user's last 20 completed Forge sessions (exercises, sets, weights).
 2. Recent nutrition data from Yazio with actual dates (may be missing).
 
 === ESTIMATED 1RM ===
@@ -609,7 +609,7 @@ Respond ONLY with the JSON object. No markdown, no explanation."""
 
 async def generate_session_review(
     yazio_data: Optional[dict],
-    hevy_data: Optional[list],
+    workout_data: Optional[list],
     language: str = "de",
     previous_reviews: Optional[list[dict]] = None,
     previous_tips: Optional[list[dict]] = None,
@@ -626,7 +626,7 @@ async def generate_session_review(
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_session_review_prompt(profile, lang=language)
-    user_message = _build_user_message(yazio_data, hevy_data, today_nutrition=today_nutrition)  # Include nutrition for causality
+    user_message = _build_user_message(yazio_data, workout_data, today_nutrition=today_nutrition)  # Include nutrition for causality
 
     # ── Coach Memory: append previous tips (what user actually saw) + reviews ──
     if previous_tips:
@@ -913,7 +913,7 @@ def _compute_exercise_progression(
 
 
 def _is_warmup_set(set_data: dict) -> bool:
-    """Return whether the Hevy template explicitly marks a set as a warm-up."""
+    """Return whether a workout template explicitly marks a set as a warm-up."""
     return str(set_data.get("type", "")).lower() in {"warmup", "warm-up", "warm_up"}
 
 
@@ -1147,7 +1147,7 @@ Respond ONLY with the JSON object. No markdown, no explanation."""
 
 async def generate_workout_tips(
     yazio_data: Optional[dict],
-    hevy_data: Optional[list],
+    workout_data: Optional[list],
     workout_name: str,
     language: str = "de",
     previous_tips_list: Optional[list[dict]] = None,
@@ -1155,17 +1155,17 @@ async def generate_workout_tips(
 ) -> dict:
     """
     Call Gemini to generate forward-looking per-set targets for a workout type.
-    Uses the Hevy routine template (if available) for the definitive exercise list.
+    Uses the native Forge plan template (if available) for the definitive exercise list.
     Falls back to the most recent session if no routine template is found.
     When previous_tips_list is provided (up to 3), Gemini receives its own past coaching
     outputs for the same workout name, enabling deep continuity ("Coach Memory").
     """
-    if not hevy_data and not routine_exercises:
+    if not workout_data and not routine_exercises:
         return FALLBACK_WORKOUT_TIPS
 
-    # Prefer the routine template's exercise list (fetched directly from Hevy routines API).
-    # Fall back to the most recent matching session if no routine template was found.
-    matching_sessions = [w for w in (hevy_data or []) if w.get("title", "").strip().lower() == workout_name.strip().lower()]
+    # Prefer the native plan template's exercise list.
+    # Fall back to the most recent completed session if no plan is found.
+    matching_sessions = [w for w in (workout_data or []) if w.get("title", "").strip().lower() == workout_name.strip().lower()]
 
     if routine_exercises:
         full_template_exercises = routine_exercises
@@ -1507,7 +1507,7 @@ Nutrition data includes the ACTUAL DATE. Use the correct date or weekday name.
 Never say "gestern" unless the data is actually from yesterday. Never say "heute" unless the data is from today.
 
 You will receive:
-1. The user's training plan (with exercises) and recent workout data from Hevy.
+1. The user's training plan (with exercises) and recent completed Forge sessions.
 2. Recent nutrition data from Yazio WITH ACTUAL DATES.
 3. Conversation history.
 
@@ -1536,7 +1536,7 @@ async def generate_chat_response(
     message: str,
     conversation_history: list[dict],
     yazio_data: Optional[dict],
-    hevy_data: Optional[list],
+    workout_data: Optional[list],
     training_plan_enriched: Optional[list[dict]] = None,
     language: str = "de",
     today_nutrition: Optional[dict] = None,
@@ -1555,9 +1555,9 @@ async def generate_chat_response(
     # Build context message with workout + nutrition data
     context_parts: list[str] = []
 
-    if hevy_data:
+    if workout_data:
         # Limit to last 3 sessions to keep context focused
-        recent = hevy_data[:3]
+        recent = workout_data[:3]
         context_parts.append(f"=== USER'S LAST {len(recent)} WORKOUTS ===")
         for i, w in enumerate(recent):
             context_parts.append(f"\nWorkout {i + 1}:")

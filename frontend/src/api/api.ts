@@ -60,7 +60,6 @@ export const logoutUser = () => { removeToken(); };
 export interface UserInfo {
   id: string;
   username: string;
-  has_hevy_key: boolean;
   has_yazio: boolean;
   current_goal: string | null;
   target_weight: number | null;
@@ -70,12 +69,6 @@ export interface UserInfo {
 }
 
 export const getMe = () => apiRequest<UserInfo>('/user/me');
-
-export const saveApiKey = (hevy_api_key: string) =>
-  apiRequest<{ message: string; has_api_key: boolean }>('/user/api-key', {
-    method: 'POST',
-    body: JSON.stringify({ hevy_api_key }),
-  });
 
 export const saveYazioCredentials = (yazio_email: string, yazio_password: string) =>
   apiRequest<{ message: string; has_yazio: boolean }>('/user/yazio', {

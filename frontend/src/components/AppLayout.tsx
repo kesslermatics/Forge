@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
+import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import { getMe, logoutUser, isAuthenticated } from '../api/api';
 import type { UserInfo } from '../api/api';
 import { Loader2, Home, UtensilsCrossed, Trophy, Settings, Dumbbell } from 'lucide-react';
@@ -11,7 +11,6 @@ const SAND = '#e8c58a';
 
 export default function AppLayout() {
     const navigate = useNavigate();
-    const location = useLocation();
     const [user, setUser] = useState<UserInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const [lang, setLang] = useState<Lang>('de');
@@ -27,8 +26,7 @@ export default function AppLayout() {
         if (!isAuthenticated()) { navigate('/login'); return; }
         refreshUser()
             .then(u => {
-                const needsSetup = !u.has_hevy_key || !u.has_yazio;
-                if (needsSetup && location.pathname !== '/setup') navigate('/setup');
+                setUser(u);
             })
             .catch(() => { logoutUser(); navigate('/login'); })
             .finally(() => setLoading(false));

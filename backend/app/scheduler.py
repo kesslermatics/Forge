@@ -1,12 +1,4 @@
-"""
-Background scheduler – generates morning briefings for all active users at 04:00 AM
-and checks for new Hevy workouts every hour to pre-generate workout tips.
-
-Session reviews are always generated live when the user opens them.
-
-Uses APScheduler with AsyncIOScheduler so it runs inside the same event loop
-as FastAPI / uvicorn.
-"""
+"""Background scheduling for Forge-native morning briefings and workout tips."""
 import asyncio
 import logging
 from datetime import date, datetime
@@ -17,11 +9,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import User, MorningBriefing, WorkoutReview, WeightEntry
-from app.encryption import decrypt_value
+from app.models import MorningBriefing, User, WeightEntry, WorkoutReview
 from app.services.aggregator import gather_user_context
 from app.services.ai_service import generate_daily_briefing, generate_workout_tips
-from app.services.hevy_service import fetch_routines
+from app.services.forge_session_adapter import completed_forge_workouts, forge_plan_template
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +20,8 @@ scheduler = AsyncIOScheduler()
 
 
 async def _generate_for_user(user: User, db: Session) -> bool:
-    """Generate and save a briefing for one user. Returns True on success."""
+    """Generate and save one daily briefing from native Forge and optional Yazio data."""
     today = date.today()
-
-    # Skip if already generated
     existing = (
         db.query(MorningBriefing)
         .filter(MorningBriefing.user_id == user.id, MorningBriefing.date == today)
@@ -43,104 +32,64 @@ async def _generate_for_user(user: User, db: Session) -> bool:
         return True
 
     try:
-        context = await gather_user_context(user)
-
-        # Log weight from Yazio
+        context = await gather_user_context(user, db)
         yazio = context.get("yazio")
         if yazio and yazio.get("profile"):
             weight = yazio["profile"].get("current_weight_kg")
             if weight and weight > 0:
-                existing_w = (
+                existing_weight = (
                     db.query(WeightEntry)
                     .filter(WeightEntry.user_id == user.id, WeightEntry.date == today)
                     .first()
                 )
-                if not existing_w:
+                if not existing_weight:
                     db.add(WeightEntry(user_id=user.id, date=today, weight_kg=round(weight, 2)))
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-
-        briefing_data = await generate_daily_briefing(
-            yazio_data=context["yazio"],
-            hevy_data=context["hevy"],
-        )
+                    db.commit()
 
         briefing = MorningBriefing(
             user_id=user.id,
             date=today,
-            briefing_data=briefing_data,
+            briefing_data=await generate_daily_briefing(
+                yazio_data=context["yazio"],
+                workout_data=context["workouts"],
+                language=user.language or "de",
+                today_nutrition=context.get("yazio_today"),
+            ),
         )
         db.add(briefing)
         db.commit()
-        logger.info("✅ Briefing generated for %s", user.username)
+        logger.info("Briefing generated for %s", user.username)
         return True
-
     except Exception as exc:
         db.rollback()
-        logger.error("❌ Failed to generate briefing for %s: %s", user.username, exc)
+        logger.error("Failed to generate briefing for %s: %s", user.username, exc)
         return False
 
 
-async def _generate_workout_review_for_user(user: User, db: Session, max_new_reviews: int = 3) -> int:
-    """
-    Check for new Hevy workouts and pre-generate workout tips for any that don't have one yet.
-    Session reviews are NOT generated here — they are created live when the user opens them.
-    Returns the number of new tip sets generated.
-
-    Args:
-        max_new_reviews: Maximum number of NEW tips to generate in one run.
-                         Scheduler uses 3 (conservative), manual trigger uses 5.
-                         Already-processed workouts are always skipped (zero tokens).
-    """
-    from app.encryption import decrypt_value
-    from app.services.hevy_service import fetch_recent_workouts
-
-    if not user.hevy_api_key:
-        return 0
-
-    try:
-        api_key = decrypt_value(user.hevy_api_key)
-        workouts = await fetch_recent_workouts(api_key, count=20)
-    except Exception as exc:
-        logger.error("Failed to fetch Hevy workouts for %s: %s", user.username, exc)
-        return 0
-
-    if not workouts:
-        return 0
-
+async def _generate_workout_review_for_user(
+    user: User,
+    db: Session,
+    max_new_reviews: int = 3,
+) -> int:
+    """Generate Forge-native workout tips for recently completed sessions only."""
+    workouts = completed_forge_workouts(db, user.id, limit=20)
     generated = 0
 
-    for i, workout in enumerate(workouts):
-        hevy_id = workout.get("id", "")
-        if not hevy_id:
-            continue
-
-        # Check if we already reviewed this workout — NEVER regenerate
+    for workout in workouts:
+        session_id = workout["id"]
         existing = (
             db.query(WorkoutReview)
-            .filter(WorkoutReview.user_id == user.id, WorkoutReview.hevy_workout_id == str(hevy_id))
+            .filter(
+                WorkoutReview.user_id == user.id,
+                WorkoutReview.hevy_workout_id == session_id,
+            )
             .first()
         )
-        if existing:
+        if existing or generated >= max_new_reviews:
             continue
 
-        # Cap how many NEW reviews we generate per run to control token spend
-        if generated >= max_new_reviews:
-            break
-
-        workout_name = workout.get("title", "Workout")
-        workout_start = workout.get("start_time", "")
-
-        # Parse workout date
-        try:
-            workout_dt = datetime.fromisoformat(workout_start.replace("Z", "+00:00"))
-        except Exception:
-            workout_dt = datetime.utcnow()
-
-        # ── Coach Memory: Find the last 3 tips for the same workout name ──
-        previous_reviews = (
+        workout_name = workout["title"]
+        previous = (
             db.query(WorkoutReview)
             .filter(
                 WorkoutReview.user_id == user.id,
@@ -150,93 +99,62 @@ async def _generate_workout_review_for_user(user: User, db: Session, max_new_rev
             .limit(3)
             .all()
         )
-        previous_tips_list = [r.tips_data for r in previous_reviews if r.tips_data]
+        try:
+            workout_dt = datetime.fromisoformat(workout["start_time"].replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            workout_dt = datetime.utcnow()
 
         try:
-            # Gather full context (nutrition + workouts)
-            context = await gather_user_context(user)
-            lang = user.language or "de"
-
-            # Fetch routine template for definitive exercise list
-            routine_exercises = None
-            if user.hevy_api_key:
-                try:
-                    api_key = decrypt_value(user.hevy_api_key)
-                    routines = await fetch_routines(api_key)
-                    if routines:
-                        for r in routines:
-                            if r.get("title", "").strip().lower() == workout_name.strip().lower():
-                                routine_exercises = r.get("exercises", [])
-                                break
-                except Exception as exc:
-                    logger.warning("Failed to fetch routines in scheduler: %s", exc)
-
-            # Generate workout tips only (session reviews are generated live on demand)
+            context = await gather_user_context(user, db)
             tips_data = await generate_workout_tips(
                 yazio_data=context["yazio"],
-                hevy_data=workouts,
+                workout_data=context["workouts"],
                 workout_name=workout_name,
-                language=lang,
-                previous_tips_list=previous_tips_list,
-                routine_exercises=routine_exercises,
+                language=user.language or "de",
+                previous_tips_list=[row.tips_data for row in previous if row.tips_data],
+                routine_exercises=forge_plan_template(
+                    db,
+                    user.id,
+                    workout_name,
+                    workout.get("source_plan_id"),
+                ),
             )
-
-            # Save to DB (review_data=None — generated live when user opens it)
-            review = WorkoutReview(
+            db.add(WorkoutReview(
                 user_id=user.id,
-                hevy_workout_id=str(hevy_id),
+                hevy_workout_id=session_id,
                 workout_name=workout_name,
                 workout_date=workout_dt,
                 review_data=None,
                 tips_data=tips_data,
                 is_read=False,
-            )
-            db.add(review)
+            ))
             db.commit()
             generated += 1
-            logger.info("✅ Workout tips generated for %s — %s (%s)", user.username, workout_name, hevy_id)
-
+            logger.info("Forge workout tips generated for %s — %s", user.username, session_id)
         except Exception as exc:
             db.rollback()
-            logger.error("❌ Failed to generate workout tips for %s workout %s: %s", user.username, hevy_id, exc)
+            logger.error("Failed to generate Forge workout tips for %s: %s", user.username, session_id, exc)
 
-        # Small delay between AI calls to avoid rate-limits
         await asyncio.sleep(2)
 
     return generated
 
 
 async def daily_briefing_job():
-    """
-    Cron job entry point – iterates all users with active credentials
-    and generates their morning briefings.
-    """
-    logger.info("🌅 Starting daily briefing generation…")
-
+    """Generate nutrition-aware briefings without requiring a Hevy credential."""
+    logger.info("Starting daily briefing generation")
     db: Session = SessionLocal()
     try:
-        # Find all users who have BOTH Hevy + Yazio credentials
         active_users = (
             db.query(User)
-            .filter(
-                User.hevy_api_key.isnot(None),
-                User.yazio_email.isnot(None),
-                User.yazio_password.isnot(None),
-            )
+            .filter(User.yazio_email.isnot(None), User.yazio_password.isnot(None))
             .all()
         )
-
-        logger.info("Found %d active users", len(active_users))
-
         success = 0
         for user in active_users:
-            if await _generate_for_user(user, db):
-                success += 1
-            # Small delay between users to avoid rate-limits
+            success += await _generate_for_user(user, db)
             await asyncio.sleep(1)
-
-        logger.info("🌅 Briefing generation complete: %d/%d succeeded", success, len(active_users))
-
+        logger.info("Daily briefing generation complete: %d/%d succeeded", success, len(active_users))
     except Exception as exc:
         logger.error("Briefing cron job crashed: %s", exc)
     finally:
@@ -244,40 +162,22 @@ async def daily_briefing_job():
 
 
 async def workout_review_job():
-    """
-    Hourly job – checks all active users for new Hevy workouts
-    and pre-generates workout tips in the background.
-    Session reviews are generated live on demand.
-    """
-    logger.info("🏋️ Starting workout review check…")
-
+    """Periodically generate one Forge-native tip set per newly completed session."""
+    logger.info("Starting Forge workout review check")
     db: Session = SessionLocal()
     try:
-        active_users = (
-            db.query(User)
-            .filter(User.hevy_api_key.isnot(None))
-            .all()
-        )
-
-        logger.info("Found %d users with Hevy keys", len(active_users))
-
-        total_generated = 0
-        for user in active_users:
-            n = await _generate_workout_review_for_user(user, db)
-            total_generated += n
-            if n > 0:
-                await asyncio.sleep(2)
-
-        logger.info("🏋️ Workout review check complete: %d new reviews generated", total_generated)
-
+        users = db.query(User).all()
+        generated = 0
+        for user in users:
+            generated += await _generate_workout_review_for_user(user, db)
+            await asyncio.sleep(1)
+        logger.info("Forge workout review check complete: %d new reviews generated", generated)
     except Exception as exc:
-        logger.error("Workout review cron job crashed: %s", exc)
+        logger.error("Forge workout review job crashed: %s", exc)
     finally:
         db.close()
 
-
-def start_scheduler():
-    """Start the APScheduler with the daily 04:00 AM cron job and hourly workout review job."""
+    """Start daily Forge-native briefing generation."""
     scheduler.add_job(
         daily_briefing_job,
         trigger=CronTrigger(hour=4, minute=0),
@@ -288,16 +188,16 @@ def start_scheduler():
     scheduler.add_job(
         workout_review_job,
         trigger=IntervalTrigger(hours=1),
-        id="hourly_workout_review",
-        name="Check for new workouts and generate reviews",
+        id="hourly_forge_workout_review",
+        name="Generate Forge workout tips for completed sessions",
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("⏰ Scheduler started – daily briefing at 04:00 AM + workout reviews every hour")
+    logger.info("Scheduler started – daily briefing at 04:00 AM + Forge workout reviews every hour")
 
 
 def stop_scheduler():
     """Gracefully shut down the scheduler."""
     if scheduler.running:
         scheduler.shutdown(wait=False)
-        logger.info("⏰ Scheduler stopped")
+        logger.info("Scheduler stopped")
