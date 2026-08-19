@@ -1,0 +1,119 @@
+/* ════════════════════════════════════════════════════════════
+   Shared animation + helper styles for the design preview.
+   Apple-like easing, spring pops, fades, aurora, shimmer.
+   Scoped under .pv-root to avoid touching the real app.
+   ════════════════════════════════════════════════════════════ */
+
+.pv-root {
+    --pv-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --pv-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+/* ── Entrance animations ──────────────────────────────────── */
+@keyframes pv-fade-up {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pv-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+@keyframes pv-pop {
+    0%   { opacity: 0; transform: scale(0.9); }
+    60%  { opacity: 1; transform: scale(1.02); }
+    100% { opacity: 1; transform: scale(1); }
+}
+@keyframes pv-scale-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to   { opacity: 1; transform: scale(1); }
+}
+@keyframes pv-slide-up-sheet {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+}
+
+.pv-anim {
+    opacity: 0;
+    animation: pv-fade-up 0.6s var(--pv-ease) forwards;
+}
+.pv-anim-in { animation: pv-fade-in 0.5s var(--pv-ease) forwards; }
+.pv-pop { animation: pv-pop 0.5s var(--pv-spring) forwards; }
+.pv-scale-in { animation: pv-scale-in 0.4s var(--pv-ease) forwards; }
+.pv-sheet { animation: pv-slide-up-sheet 0.42s var(--pv-ease) forwards; }
+
+/* Stagger helpers */
+.pv-d1 { animation-delay: 0.05s; }
+.pv-d2 { animation-delay: 0.12s; }
+.pv-d3 { animation-delay: 0.19s; }
+.pv-d4 { animation-delay: 0.26s; }
+.pv-d5 { animation-delay: 0.33s; }
+.pv-d6 { animation-delay: 0.40s; }
+.pv-d7 { animation-delay: 0.47s; }
+.pv-d8 { animation-delay: 0.54s; }
+
+/* ── Ring / progress draw ─────────────────────────────────── */
+@keyframes pv-ring-draw {
+    from { stroke-dashoffset: var(--pv-ring-start); }
+    to   { stroke-dashoffset: var(--pv-ring-end); }
+}
+.pv-ring-anim {
+    animation: pv-ring-draw 1.1s var(--pv-ease) forwards;
+}
+
+/* ── Bar fill ─────────────────────────────────────────────── */
+@keyframes pv-bar-fill {
+    from { width: 0; }
+    to   { width: var(--pv-bar-w); }
+}
+.pv-bar-anim { animation: pv-bar-fill 0.9s var(--pv-ease) forwards; }
+
+/* ── Aurora background (Momentum) ─────────────────────────── */
+@keyframes pv-aurora {
+    0%   { transform: translate(-10%, -10%) rotate(0deg) scale(1.2); }
+    50%  { transform: translate(10%, 10%) rotate(180deg) scale(1.4); }
+    100% { transform: translate(-10%, -10%) rotate(360deg) scale(1.2); }
+}
+.pv-aurora-blob {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(60px);
+    opacity: 0.5;
+    animation: pv-aurora 18s linear infinite;
+    will-change: transform;
+}
+
+/* ── Shimmer accent ───────────────────────────────────────── */
+@keyframes pv-shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+.pv-shimmer {
+    background-size: 200% 100%;
+    animation: pv-shimmer 3s linear infinite;
+}
+
+/* ── Subtle pulse ─────────────────────────────────────────── */
+@keyframes pv-pulse-soft {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}
+.pv-pulse { animation: pv-pulse-soft 2.2s ease-in-out infinite; }
+
+/* Smooth expand */
+.pv-expand {
+    overflow: hidden;
+    transition: max-height 0.5s var(--pv-ease), opacity 0.4s var(--pv-ease);
+}
+
+/* Tap feedback for buttons */
+.pv-tap { transition: transform 0.18s var(--pv-spring), background 0.2s ease, border-color 0.2s ease; }
+.pv-tap:active { transform: scale(0.96); }
+
+/* Hide scrollbar inside the phone frame */
+.pv-scroll::-webkit-scrollbar { width: 0; height: 0; }
+.pv-scroll { scrollbar-width: none; }
+
+/* No text selection flicker on demo taps */
+.pv-noselect { -webkit-user-select: none; user-select: none; }

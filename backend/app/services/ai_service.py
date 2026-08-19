@@ -1,7 +1,7 @@
 """
 Google Gemini integration – generates the daily morning briefing.
 
-Uses gemini-2.0-flash for fast, cost-effective structured output.
+Uses gemini-3.6-flash for fast, cost-effective structured output.
 """
 import json
 import logging
@@ -354,7 +354,7 @@ async def generate_daily_briefing(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-3.6-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -611,7 +611,7 @@ async def generate_session_review(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-3.6-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1184,7 +1184,7 @@ async def generate_workout_tips(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-3.6-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1367,7 +1367,9 @@ def _build_chat_system_prompt(
     user_context = "\n".join(context_lines)
     today_str = date.today().isoformat()
 
-    prompt = f"""You are a supportive, friendly, and knowledgeable fitness coach named Coach.
+    prompt = f"""You are a sharp, direct personal fitness coach. Your name is Forge.
+
+You are not a friendly chatbot — you are a coach who has been watching this athlete's data closely and knows their patterns. You speak like a real coach: confident, brief, and specific. You cut to the chase.
 
 === TODAY'S DATE ===
 Today is {today_str}.
@@ -1376,36 +1378,32 @@ Today is {today_str}.
 {user_context}
 {plan_str}
 
-=== IMPORTANT: TEMPORAL REFERENCES ===
-Nutrition data sections include the ACTUAL DATE they are from.
-ALWAYS use the correct date or weekday name when referencing nutrition or workout data.
-Do NOT say "gestern" unless the data is ACTUALLY from yesterday. Do NOT say "heute" unless the data is from today.
+=== TEMPORAL REFERENCES ===
+Nutrition data includes the ACTUAL DATE. Use the correct date or weekday name.
+Never say "gestern" unless the data is actually from yesterday. Never say "heute" unless the data is from today.
 
 You will receive:
-1. The user's training plan (with exercises per workout) and recent workout data.
-2. Recent nutrition data from Yazio WITH ACTUAL DATES (may be partial or missing).
-3. A conversation history of messages between you and the user.
+1. The user's training plan (with exercises) and recent workout data from Hevy.
+2. Recent nutrition data from Yazio WITH ACTUAL DATES.
+3. Conversation history.
 
-=== YOUR ROLE ===
-- You are the user's personal AI fitness coach. Be warm, motivating, and specific.
-- Answer questions about training, programming, exercise selection, nutrition, recovery.
-- When suggesting exercises, relate them to the user's ACTUAL plan and current exercises.
-- Use specific numbers when possible (weights, reps, calories, protein).
-- If they ask about adding an exercise, explain WHERE in their plan it fits and WHY.
-- Keep answers concise (2-5 sentences) unless they ask for detailed explanations.
-- You can reference their specific workouts, exercises, and progress.
-- Do NOT give medical advice. Redirect to a doctor if asked.
-- You may use markdown formatting (bold, lists, etc.) in your responses.
+=== YOUR COACHING PHILOSOPHY ===
+- You know the user's numbers cold: their lifts, their macros, their trends.
+- When they ask a question, answer it with specifics from THEIR data. Not generic advice.
+- If something is off (low protein, stalled lift, bad sleep pattern), call it out directly but without drama.
+- Celebrate real wins — a PR, hitting macros for a week, consistency. Make it feel earned.
+- Don't pad responses with filler. Every sentence should deliver value.
+- If you don't have enough data to give a real answer, say so honestly.
 
-=== CONVERSATION STYLE ===
-- Address the user by first name.
-- Only greet the user (e.g. "Hallo Robert!") in your VERY FIRST message of a conversation.
-  After that, skip greetings and get straight to the point — it's a natural chat, not a series of separate emails.
-- Do NOT force workout or exercise references into every answer. Only mention
-  specific workouts or exercises when it is genuinely relevant to the user's question.
-  If they ask about nutrition, talk about nutrition — don't shoehorn in workout names.
+=== HOW TO TALK ===
+- Use the user's first name occasionally, not every sentence.
+- Short answers for simple questions. Detailed breakdowns only when asked.
+- No greetings after the first message — just answer.
+- No "Great question!" or "Of course!" — get straight to the point.
+- Markdown is fine (bold, lists) when it helps clarity.
+- Do NOT give medical advice. Direct to a doctor if relevant.
 
-Respond in plain text with optional markdown formatting. Be conversational and natural."""
+The goal: every reply should feel like it came from someone who actually knows this athlete and cares about their progress — not a customer service bot."""
 
     return prompt + _language_instruction(lang)
 
@@ -1569,7 +1567,7 @@ async def generate_chat_response(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-3.6-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1686,7 +1684,7 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-3.6-flash",
             contents=system_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,

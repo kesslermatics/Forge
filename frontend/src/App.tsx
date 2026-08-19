@@ -7,6 +7,7 @@ import NutritionPage from './components/NutritionPage';
 import AchievementsTab from './components/AchievementsTab';
 import SetupPage from './components/SetupPage';
 import SettingsPage from './components/SettingsPage';
+import PreviewShowcase from './preview/PreviewShowcase';
 
 function App() {
   return (
@@ -15,6 +16,9 @@ function App() {
         {/* Public routes */}
         <Route path="/login" element={<LoginForm />} />
         <Route path="/register" element={<RegisterForm />} />
+
+        {/* Design preview — 6 redesign concepts, mock data, no auth */}
+        <Route path="/preview" element={<PreviewShowcase />} />
 
         {/* Protected routes (AppLayout checks auth + redirects to /setup if needed) */}
         <Route element={<AppLayout />}>

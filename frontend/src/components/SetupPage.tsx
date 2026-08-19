@@ -2,16 +2,18 @@ import { useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { saveApiKey, saveYazioCredentials } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { Key, UtensilsCrossed, Eye, EyeOff, ArrowRight, Dumbbell, CheckCircle } from 'lucide-react';
+import { Key, UtensilsCrossed, Eye, EyeOff, ArrowRight, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../i18n';
 
-type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
+const SAND = '#e8c58a';
+const CARD_BORDER = 'rgba(232,197,138,0.11)';
+const TEXT_DIM = 'rgba(242,236,226,0.45)';
 
+type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 type Step = 'hevy' | 'yazio';
 
-function getInitialStep(user: UserInfo | null): Step {
-    if (!user?.has_hevy_key) return 'hevy';
-    return 'yazio';
+function getStep(user: UserInfo | null): Step {
+    return !user?.has_hevy_key ? 'hevy' : 'yazio';
 }
 
 export default function SetupPage() {
@@ -19,130 +21,129 @@ export default function SetupPage() {
     const { user, refreshUser } = useOutletContext<LayoutContext>();
     const { t } = useLanguage();
 
-    const [step, setStep] = useState<Step>(getInitialStep(user));
+    const [step, setStep] = useState<Step>(getStep(user));
 
-    // Hevy
     const [apiKey, setApiKey] = useState('');
     const [savingKey, setSavingKey] = useState(false);
     const [keyMsg, setKeyMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-    // Yazio
     const [yazioEmail, setYazioEmail] = useState('');
     const [yazioPassword, setYazioPassword] = useState('');
-    const [showYazioPw, setShowYazioPw] = useState(false);
+    const [showPw, setShowPw] = useState(false);
     const [savingYazio, setSavingYazio] = useState(false);
     const [yazioMsg, setYazioMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
     const handleSaveHevy = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setKeyMsg(null); setSavingKey(true);
+        e.preventDefault(); setKeyMsg(null); setSavingKey(true);
         try {
             await saveApiKey(apiKey);
             setKeyMsg({ type: 'success', text: t('setup.hevySaved') });
-            await refreshUser();
-            setApiKey('');
-            setTimeout(() => setStep('yazio'), 800);
+            await refreshUser(); setApiKey('');
+            setTimeout(() => setStep('yazio'), 700);
         } catch (err: any) { setKeyMsg({ type: 'error', text: err.message }); }
         finally { setSavingKey(false); }
     };
 
     const handleSaveYazio = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setYazioMsg(null); setSavingYazio(true);
+        e.preventDefault(); setYazioMsg(null); setSavingYazio(true);
         try {
             await saveYazioCredentials(yazioEmail, yazioPassword);
             setYazioMsg({ type: 'success', text: t('setup.yazioConnected') });
-            await refreshUser();
-            setYazioEmail(''); setYazioPassword('');
-            setTimeout(() => navigate('/dashboard'), 800);
+            await refreshUser(); setYazioEmail(''); setYazioPassword('');
+            setTimeout(() => navigate('/dashboard'), 700);
         } catch (err: any) { setYazioMsg({ type: 'error', text: err.message }); }
         finally { setSavingYazio(false); }
     };
 
     return (
-        <div className="max-w-md mx-auto space-y-6">
-            {/* Welcome header */}
-            <div className="text-center mb-2">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-gold-500 to-gold-700 mb-4">
-                    <Dumbbell className="w-8 h-8 text-dark-900" />
-                </div>
-                <h1 className="text-2xl font-bold text-cream-50">{t('setup.title')}</h1>
-                <p className="text-dark-300 mt-1 text-sm">{t('setup.subtitle')}</p>
+        <div className="max-w-sm mx-auto space-y-6 pt-4">
+            {/* Header */}
+            <div className="text-center forge-anim">
+                <ForgeIcon />
+                <h1 className="text-[22px] font-semibold tracking-tight mt-4" style={{ color: '#f2ece0' }}>
+                    {t('setup.title')}
+                </h1>
+                <p className="text-[13px] mt-1.5" style={{ color: TEXT_DIM }}>{t('setup.subtitle')}</p>
             </div>
 
-            {/* Step indicator */}
-            <div className="flex items-center justify-center gap-3 mb-2">
-                <StepDot active={step === 'hevy'} done={!!user?.has_hevy_key} label="1" />
-                <div className="w-8 h-px bg-dark-400" />
-                <StepDot active={step === 'yazio'} done={!!user?.has_yazio} label="2" />
+            {/* Step dots */}
+            <div className="flex items-center justify-center gap-3 forge-anim forge-d1">
+                <Dot active={step === 'hevy'} done={!!user?.has_hevy_key} label="1" />
+                <div className="flex-1 max-w-[60px] h-px" style={{ background: CARD_BORDER }} />
+                <Dot active={step === 'yazio'} done={!!user?.has_yazio} label="2" />
             </div>
 
-            {/* ── Step 1: Hevy ─────────────────────────── */}
+            {/* Step 1 — Hevy */}
             {step === 'hevy' && (
-                <div className="card-glass p-6 space-y-4">
-                    <div className="flex items-center gap-3">
-                        <Key className="w-5 h-5 text-gold-400" />
-                        <h3 className="text-lg font-semibold text-cream-50">{t('setup.hevyTitle')}</h3>
+                <div className="card-forge p-5 space-y-4 forge-anim forge-d2">
+                    <div className="flex items-center gap-2.5">
+                        <Key size={15} style={{ color: SAND }} />
+                        <h3 className="text-[15px] font-medium" style={{ color: '#f2ece0' }}>
+                            {t('setup.hevyTitle')}
+                        </h3>
                     </div>
-                    <p className="text-dark-300 text-sm">
+                    <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>
                         {t('setup.hevyDesc')}{' '}
                         <a href="https://api.hevyapp.com/account" target="_blank" rel="noopener noreferrer"
-                            className="text-gold-400 hover:text-gold-300 underline underline-offset-2">
+                            className="underline underline-offset-2" style={{ color: SAND }}>
                             {t('setup.hevyLink')}
-                        </a>.
-                        {' '}{t('setup.hevyEncrypted')}.
+                        </a>. {t('setup.hevyEncrypted')}.
                     </p>
-                    <form onSubmit={handleSaveHevy} className="space-y-4">
-                        <input type="password" className="input-dark font-mono text-sm"
-                            placeholder="hvy_xxxxxxxxxxxxxxxxxxxx" value={apiKey}
-                            onChange={e => setApiKey(e.target.value)} required />
-                        <Msg msg={keyMsg} />
+                    <form onSubmit={handleSaveHevy} className="space-y-3">
+                        <input type="password" className="input-forge font-mono text-[13px]"
+                            placeholder="hvy_xxxxxxxxxxxxxxxxxxxx"
+                            value={apiKey} onChange={e => setApiKey(e.target.value)} required />
+                        <FeedMsg msg={keyMsg} />
                         <button type="submit" disabled={savingKey}
-                            className="btn-gold w-full flex items-center justify-center gap-2">
-                            {savingKey ? t('settings.saving') : <><span>{t('setup.saveAndContinue')}</span><ArrowRight size={16} /></>}
+                            className="btn-forge w-full flex items-center justify-center gap-2">
+                            {savingKey ? t('settings.saving') : <>{t('setup.saveAndContinue')} <ArrowRight size={16} /></>}
                         </button>
                     </form>
                     {user?.has_hevy_key && (
                         <button onClick={() => setStep('yazio')}
-                            className="w-full text-center text-sm text-gold-400 hover:text-gold-300 transition-colors cursor-pointer">
+                            className="w-full text-center text-[12px] cursor-pointer underline underline-offset-2"
+                            style={{ color: TEXT_DIM }}>
                             {t('setup.skipToYazio')}
                         </button>
                     )}
                 </div>
             )}
 
-            {/* ── Step 2: Yazio ────────────────────────── */}
+            {/* Step 2 — Yazio */}
             {step === 'yazio' && (
-                <div className="card-glass p-6 space-y-4">
-                    <div className="flex items-center gap-3">
-                        <UtensilsCrossed className="w-5 h-5 text-gold-400" />
-                        <h3 className="text-lg font-semibold text-cream-50">{t('setup.yazioTitle')}</h3>
+                <div className="card-forge p-5 space-y-4 forge-anim forge-d2">
+                    <div className="flex items-center gap-2.5">
+                        <UtensilsCrossed size={15} style={{ color: SAND }} />
+                        <h3 className="text-[15px] font-medium" style={{ color: '#f2ece0' }}>
+                            {t('setup.yazioTitle')}
+                        </h3>
                     </div>
-                    <p className="text-dark-300 text-sm">
-                        {t('setup.yazioDesc')}{' '}
-                        <span className="text-cream-200">{t('setup.hevyEncrypted')}</span>.
+                    <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>
+                        {t('setup.yazioDesc')} <span style={{ color: '#f2ece0' }}>{t('setup.hevyEncrypted')}</span>.
                     </p>
-                    <form onSubmit={handleSaveYazio} className="space-y-4">
-                        <input type="email" className="input-dark text-sm"
-                            placeholder="your-yazio@email.com" value={yazioEmail}
-                            onChange={e => setYazioEmail(e.target.value)} required />
+                    <form onSubmit={handleSaveYazio} className="space-y-3">
+                        <input type="email" className="input-forge text-[13px]"
+                            placeholder="email@yazio.com"
+                            value={yazioEmail} onChange={e => setYazioEmail(e.target.value)} required />
                         <div className="relative">
-                            <input type={showYazioPw ? 'text' : 'password'} className="input-dark text-sm pr-12"
-                                placeholder="Yazio password" value={yazioPassword}
-                                onChange={e => setYazioPassword(e.target.value)} required />
-                            <button type="button" onClick={() => setShowYazioPw(!showYazioPw)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-300 hover:text-gold-400 transition-colors">
-                                {showYazioPw ? <EyeOff size={18} /> : <Eye size={18} />}
+                            <input type={showPw ? 'text' : 'password'} className="input-forge text-[13px] pr-11"
+                                placeholder="Passwort"
+                                value={yazioPassword} onChange={e => setYazioPassword(e.target.value)} required />
+                            <button type="button" onClick={() => setShowPw(s => !s)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
+                                style={{ color: TEXT_DIM }}>
+                                {showPw ? <EyeOff size={17} /> : <Eye size={17} />}
                             </button>
                         </div>
-                        <Msg msg={yazioMsg} />
+                        <FeedMsg msg={yazioMsg} />
                         <button type="submit" disabled={savingYazio}
-                            className="btn-gold w-full flex items-center justify-center gap-2">
-                            {savingYazio ? t('settings.saving') : <><span>{t('setup.connectAndStart')}</span><ArrowRight size={16} /></>}
+                            className="btn-forge w-full flex items-center justify-center gap-2">
+                            {savingYazio ? t('settings.saving') : <>{t('setup.connectAndStart')} <ArrowRight size={16} /></>}
                         </button>
                     </form>
                     <button onClick={() => setStep('hevy')}
-                        className="w-full text-center text-sm text-dark-300 hover:text-cream-100 transition-colors cursor-pointer">
+                        className="w-full text-center text-[12px] cursor-pointer"
+                        style={{ color: TEXT_DIM }}>
                         {t('setup.backToHevy')}
                     </button>
                 </div>
@@ -151,28 +152,40 @@ export default function SetupPage() {
     );
 }
 
-/* ── Helpers ─────────────────────────────────────────── */
-
-function StepDot({ active, done, label }: { active: boolean; done: boolean; label: string }) {
+function Dot({ active, done, label }: { active: boolean; done: boolean; label: string }) {
     return (
-        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all ${done
-            ? 'bg-green-500/20 border-green-500 text-green-400'
-            : active
-                ? 'bg-gold-500/20 border-gold-500 text-gold-400'
-                : 'bg-dark-700 border-dark-400 text-dark-300'
-            }`}>
+        <div className="w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-semibold border-2 transition-all"
+            style={{
+                background: done ? 'rgba(52,211,153,0.15)' : active ? `${SAND}18` : 'rgba(255,247,235,0.05)',
+                borderColor: done ? '#34d399' : active ? SAND : 'rgba(255,247,235,0.15)',
+                color: done ? '#34d399' : active ? SAND : TEXT_DIM,
+            }}>
             {done ? <CheckCircle size={16} /> : label}
         </div>
     );
 }
 
-function Msg({ msg }: { msg: { type: 'success' | 'error'; text: string } | null }) {
+function ForgeIcon() {
+    return (
+        <div className="inline-flex w-14 h-14 rounded-2xl items-center justify-center mx-auto"
+            style={{ background: 'linear-gradient(135deg, rgba(232,197,138,0.25), rgba(200,164,100,0.15))', border: '1px solid rgba(232,197,138,0.3)' }}>
+            <svg width="24" height="24" viewBox="0 0 16 16" fill="none">
+                <path d="M8 2L10.5 6.5H13L9.5 9.5L11 14L8 11.5L5 14L6.5 9.5L3 6.5H5.5L8 2Z"
+                    fill={SAND} fillOpacity="0.9" />
+            </svg>
+        </div>
+    );
+}
+
+function FeedMsg({ msg }: { msg: { type: 'success' | 'error'; text: string } | null }) {
     if (!msg) return null;
     return (
-        <div className={`rounded-xl px-4 py-3 text-sm ${msg.type === 'success'
-            ? 'bg-green-500/10 border border-green-500/30 text-green-400'
-            : 'bg-red-500/10 border border-red-500/30 text-red-400'
-            }`}>
+        <div className="rounded-xl px-4 py-2.5 text-[12px]"
+            style={{
+                background: msg.type === 'success' ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+                border: `1px solid ${msg.type === 'success' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)'}`,
+                color: msg.type === 'success' ? '#34d399' : '#f87171',
+            }}>
             {msg.text}
         </div>
     );

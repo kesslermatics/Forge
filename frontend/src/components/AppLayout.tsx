@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
 import { getMe, logoutUser, isAuthenticated } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { Dumbbell, LogOut, Home, Settings, Loader2, Trophy, UtensilsCrossed } from 'lucide-react';
+import { Loader2, Home, UtensilsCrossed, Trophy, Settings } from 'lucide-react';
 import { LanguageContext } from '../i18n';
-import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
+
+const SAND = '#e8c58a';
 
 export default function AppLayout() {
     const navigate = useNavigate();
@@ -25,89 +26,97 @@ export default function AppLayout() {
         if (!isAuthenticated()) { navigate('/login'); return; }
         refreshUser()
             .then(u => {
-                // If credentials or goal are missing and not already on setup page → redirect
                 const needsSetup = !u.has_hevy_key || !u.has_yazio;
-                if (needsSetup && location.pathname !== '/setup') {
-                    navigate('/setup');
-                }
+                if (needsSetup && location.pathname !== '/setup') navigate('/setup');
             })
             .catch(() => { logoutUser(); navigate('/login'); })
             .finally(() => setLoading(false));
-    }, []);  // eslint-disable-line react-hooks/exhaustive-deps
-
-    const handleLogout = () => { logoutUser(); navigate('/login'); };
+    }, []); // eslint-disable-line
 
     if (loading) {
         return (
-            <div className="min-h-dvh flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
+            <div className="min-h-dvh flex items-center justify-center" style={{ background: '#16130f' }}>
+                <Loader2 className="w-7 h-7 animate-spin" style={{ color: SAND }} />
             </div>
         );
     }
 
     return (
         <LanguageContext.Provider value={lang}>
-            <div className="min-h-dvh flex flex-col">
-                {/* Header */}
-                <header className="border-b border-dark-500/50 bg-dark-800/60 backdrop-blur-md sticky top-0 z-50">
-                    <div className="max-w-3xl mx-auto flex items-center justify-between px-4 py-3">
+            <div className="min-h-dvh flex flex-col" style={{ background: '#16130f' }}>
+                {/* ── Sticky top bar ── */}
+                <header className="sticky top-0 z-40 border-b"
+                    style={{ background: 'rgba(22,19,15,0.85)', backdropFilter: 'blur(20px)', borderColor: 'rgba(232,197,138,0.1)' }}>
+                    <div className="max-w-2xl mx-auto flex items-center justify-between px-5 h-14">
+                        {/* Logo */}
                         <div className="flex items-center gap-2.5">
-                            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-gold-500 to-gold-700 flex items-center justify-center">
-                                <Dumbbell className="w-5 h-5 text-dark-900" />
-                            </div>
-                            <span className="text-lg font-bold text-gradient-gold hidden sm:inline">AI Coach</span>
+                            <ForgeIcon />
+                            <span className="text-[17px] font-bold tracking-tight" style={{ color: SAND }}>Forge</span>
                         </div>
 
-                        <NavItems onLogout={handleLogout} />
+                        {/* Logout — subtle, top right */}
+                        <button
+                            onClick={() => { logoutUser(); navigate('/login'); }}
+                            className="text-[12px] tracking-wide cursor-pointer transition-colors"
+                            style={{ color: 'rgba(232,197,138,0.4)' }}
+                            onMouseEnter={e => (e.currentTarget.style.color = 'rgba(232,197,138,0.8)')}
+                            onMouseLeave={e => (e.currentTarget.style.color = 'rgba(232,197,138,0.4)')}
+                        >
+                            Abmelden
+                        </button>
                     </div>
                 </header>
 
-                {/* Page content */}
-                <main className="flex-1 w-full max-w-3xl mx-auto px-4 py-6 sm:py-10">
+                {/* ── Page content ── */}
+                <main className="flex-1 w-full max-w-2xl mx-auto px-4 pt-6 pb-28">
                     <Outlet context={{ user, refreshUser }} />
                 </main>
+
+                {/* ── Bottom tab bar ── */}
+                <nav className="fixed bottom-0 left-0 right-0 z-40 safe-area-bottom"
+                    style={{ background: 'rgba(22,19,15,0.92)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(232,197,138,0.1)' }}>
+                    <div className="max-w-2xl mx-auto grid grid-cols-4 h-16">
+                        <Tab to="/dashboard" icon={<Home size={22} />} label="Home" />
+                        <Tab to="/nutrition" icon={<UtensilsCrossed size={22} />} label="Ernährung" />
+                        <Tab to="/achievements" icon={<Trophy size={22} />} label="Erfolge" />
+                        <Tab to="/settings" icon={<Settings size={22} />} label="Einstellungen" />
+                    </div>
+                </nav>
             </div>
         </LanguageContext.Provider>
     );
 }
 
-function NavItems({ onLogout }: { onLogout: () => void }) {
-    const { t } = useLanguage();
+function Tab({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
     return (
-        <div className="flex items-center gap-1">
-            <NavLink to="/dashboard"
-                className={({ isActive }) =>
-                    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isActive ? 'text-gold-400 bg-dark-700' : 'text-dark-300 hover:text-cream-100'}`
-                }>
-                <Home size={16} />
-                <span className="hidden sm:inline">{t('nav.home')}</span>
-            </NavLink>
-            <NavLink to="/nutrition"
-                className={({ isActive }) =>
-                    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isActive ? 'text-gold-400 bg-dark-700' : 'text-dark-300 hover:text-cream-100'}`
-                }>
-                <UtensilsCrossed size={16} />
-                <span className="hidden sm:inline">{t('tabs.nutrition')}</span>
-            </NavLink>
-            <NavLink to="/achievements"
-                className={({ isActive }) =>
-                    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isActive ? 'text-gold-400 bg-dark-700' : 'text-dark-300 hover:text-cream-100'}`
-                }>
-                <Trophy size={16} />
-                <span className="hidden sm:inline">{t('tabs.achievements')}</span>
-            </NavLink>
-            <NavLink to="/settings"
-                className={({ isActive }) =>
-                    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isActive ? 'text-gold-400 bg-dark-700' : 'text-dark-300 hover:text-cream-100'}`
-                }>
-                <Settings size={16} />
-                <span className="hidden sm:inline">{t('nav.settings')}</span>
-            </NavLink>
-            <button onClick={onLogout}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-dark-300 hover:text-red-400 transition-colors cursor-pointer ml-1">
-                <LogOut size={16} />
-                <span className="hidden sm:inline">{t('nav.logout')}</span>
-            </button>
+        <NavLink to={to} className="flex flex-col items-center justify-center gap-1 transition-all tap">
+            {({ isActive }) => (
+                <>
+                    <span style={{ color: isActive ? SAND : 'rgba(255,247,235,0.35)', transition: 'color 0.2s' }}>
+                        {icon}
+                    </span>
+                    <span className="text-[10px] font-medium tracking-wide"
+                        style={{ color: isActive ? SAND : 'rgba(255,247,235,0.3)', transition: 'color 0.2s' }}>
+                        {label}
+                    </span>
+                    {isActive && (
+                        <span className="absolute bottom-0 w-6 h-0.5 rounded-full"
+                            style={{ background: SAND }} />
+                    )}
+                </>
+            )}
+        </NavLink>
+    );
+}
+
+function ForgeIcon() {
+    return (
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, rgba(232,197,138,0.25), rgba(200,164,100,0.15))', border: '1px solid rgba(232,197,138,0.3)' }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 2L10.5 6.5H13L9.5 9.5L11 14L8 11.5L5 14L6.5 9.5L3 6.5H5.5L8 2Z"
+                    fill={SAND} fillOpacity="0.9" />
+            </svg>
         </div>
     );
 }

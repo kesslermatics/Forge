@@ -6,197 +6,178 @@ import { Key, UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Gl
 import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
 
+const SAND = '#e8c58a';
+const CARD_BORDER = 'rgba(232,197,138,0.11)';
+const TEXT_DIM = 'rgba(242,236,226,0.45)';
+
 type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 
 export default function SettingsPage() {
     const { user, refreshUser } = useOutletContext<LayoutContext>();
     const { t, lang } = useLanguage();
 
-    // Hevy
     const [apiKey, setApiKey] = useState('');
     const [savingKey, setSavingKey] = useState(false);
     const [keyMsg, setKeyMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-    // Yazio
     const [yazioEmail, setYazioEmail] = useState('');
     const [yazioPassword, setYazioPassword] = useState('');
     const [showYazioPw, setShowYazioPw] = useState(false);
     const [savingYazio, setSavingYazio] = useState(false);
     const [yazioMsg, setYazioMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-    // Language
     const [langMsg, setLangMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
     const handleSaveKey = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setKeyMsg(null); setSavingKey(true);
-        try {
-            await saveApiKey(apiKey);
-            setKeyMsg({ type: 'success', text: t('settings.hevyUpdated') });
-            await refreshUser();
-            setApiKey('');
-        } catch (err: any) { setKeyMsg({ type: 'error', text: err.message }); }
+        e.preventDefault(); setKeyMsg(null); setSavingKey(true);
+        try { await saveApiKey(apiKey); setKeyMsg({ type: 'success', text: t('settings.hevyUpdated') }); await refreshUser(); setApiKey(''); }
+        catch (err: any) { setKeyMsg({ type: 'error', text: err.message }); }
         finally { setSavingKey(false); }
     };
-
     const handleSaveYazio = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setYazioMsg(null); setSavingYazio(true);
-        try {
-            await saveYazioCredentials(yazioEmail, yazioPassword);
-            setYazioMsg({ type: 'success', text: t('settings.yazioUpdated') });
-            await refreshUser();
-            setYazioEmail(''); setYazioPassword('');
-        } catch (err: any) { setYazioMsg({ type: 'error', text: err.message }); }
+        e.preventDefault(); setYazioMsg(null); setSavingYazio(true);
+        try { await saveYazioCredentials(yazioEmail, yazioPassword); setYazioMsg({ type: 'success', text: t('settings.yazioUpdated') }); await refreshUser(); setYazioEmail(''); setYazioPassword(''); }
+        catch (err: any) { setYazioMsg({ type: 'error', text: err.message }); }
         finally { setSavingYazio(false); }
     };
-
-    const handleLanguageChange = async (newLang: Lang) => {
+    const handleLangChange = async (newLang: Lang) => {
         setLangMsg(null);
-        try {
-            await updateLanguage(newLang);
-            localStorage.setItem('lang', newLang);
-            setLangMsg({ type: 'success', text: t('settings.languageUpdated') });
-            await refreshUser();
-        } catch (err: any) { setLangMsg({ type: 'error', text: err.message }); }
+        try { await updateLanguage(newLang); localStorage.setItem('lang', newLang); setLangMsg({ type: 'success', text: t('settings.languageUpdated') }); await refreshUser(); }
+        catch (err: any) { setLangMsg({ type: 'error', text: err.message }); }
     };
 
     return (
-        <div className="max-w-2xl mx-auto space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-cream-50">{t('settings.title')}</h1>
-                <p className="text-dark-300 text-sm mt-1">{t('settings.subtitle')}</p>
-            </div>
+        <div className="space-y-5">
+            <header className="forge-anim">
+                <h1 className="text-[24px] font-semibold tracking-tight" style={{ color: '#f2ece0' }}>
+                    {t('settings.title')}
+                </h1>
+                <p className="text-[13px] mt-1" style={{ color: TEXT_DIM }}>{t('settings.subtitle')}</p>
+            </header>
 
-            {/* Account Info */}
-            <div className="card-glass p-6">
-                <div className="flex items-center gap-3 mb-3">
-                    <Shield className="w-5 h-5 text-gold-400" />
-                    <h3 className="text-lg font-semibold text-cream-50">{t('settings.account')}</h3>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            {/* Account */}
+            <Card icon={<Shield size={15} style={{ color: SAND }} />} title={t('settings.account')}>
+                <div className="grid grid-cols-2 gap-4 text-[13px]">
                     <div>
-                        <span className="text-dark-300">{t('settings.username')}</span>
-                        <p className="text-cream-100 font-medium">{user?.username}</p>
+                        <p style={{ color: TEXT_DIM }}>{t('settings.username')}</p>
+                        <p className="mt-0.5 font-medium" style={{ color: '#f2ece0' }}>{user?.username}</p>
                     </div>
                     <div>
-                        <span className="text-dark-300">{t('settings.userId')}</span>
-                        <p className="text-cream-100 font-mono text-xs mt-0.5">{user?.id}</p>
+                        <p style={{ color: TEXT_DIM }}>{t('settings.userId')}</p>
+                        <p className="mt-0.5 font-mono text-[11px]" style={{ color: '#f2ece0' }}>{user?.id}</p>
                     </div>
                 </div>
-            </div>
+            </Card>
 
-            {/* Language Picker */}
-            <div className="card-glass p-6">
-                <div className="flex items-center gap-3 mb-4">
-                    <Globe className="w-5 h-5 text-gold-400" />
-                    <h3 className="text-lg font-semibold text-cream-50">{t('settings.languageTitle')}</h3>
-                </div>
-                <p className="text-dark-300 text-sm mb-4">{t('settings.languageDesc')}</p>
+            {/* Language */}
+            <Card icon={<Globe size={15} style={{ color: SAND }} />} title={t('settings.languageTitle')}>
+                <p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>{t('settings.languageDesc')}</p>
                 <div className="flex gap-3">
-                    <button
-                        onClick={() => handleLanguageChange('de')}
-                        className={`flex-1 py-3 px-4 rounded-xl border text-sm font-medium transition-all cursor-pointer ${lang === 'de'
-                            ? 'bg-gold-500/15 border-gold-500/40 text-gold-400'
-                            : 'bg-dark-700/40 border-dark-500/30 text-dark-300 hover:border-dark-400'
-                            }`}>
-                        🇩🇪 {t('settings.languageDe')}
-                    </button>
-                    <button
-                        onClick={() => handleLanguageChange('en')}
-                        className={`flex-1 py-3 px-4 rounded-xl border text-sm font-medium transition-all cursor-pointer ${lang === 'en'
-                            ? 'bg-gold-500/15 border-gold-500/40 text-gold-400'
-                            : 'bg-dark-700/40 border-dark-500/30 text-dark-300 hover:border-dark-400'
-                            }`}>
-                        🇬🇧 {t('settings.languageEn')}
-                    </button>
+                    {(['de', 'en'] as Lang[]).map(l => (
+                        <button key={l} onClick={() => handleLangChange(l)}
+                            className="tap flex-1 py-2.5 px-4 rounded-2xl text-[13px] font-medium cursor-pointer border transition-all"
+                            style={{
+                                background: lang === l ? `${SAND}18` : 'rgba(255,247,235,0.04)',
+                                borderColor: lang === l ? `${SAND}44` : CARD_BORDER,
+                                color: lang === l ? SAND : TEXT_DIM,
+                            }}>
+                            {l === 'de' ? '🇩🇪 Deutsch' : '🇬🇧 English'}
+                        </button>
+                    ))}
                 </div>
-                <Msg msg={langMsg} />
-            </div>
+                <FeedMsg msg={langMsg} />
+            </Card>
 
-            {/* Hevy API Key */}
-            <div className="card-glass p-6">
-                <div className="flex items-center gap-3 mb-4">
-                    <Key className="w-5 h-5 text-gold-400" />
-                    <h3 className="text-lg font-semibold text-cream-50">{t('settings.hevyTitle')}</h3>
-                    <StatusBadge connected={!!user?.has_hevy_key} />
-                </div>
-                <p className="text-dark-300 text-sm mb-4">
+            {/* Hevy */}
+            <Card icon={<Key size={15} style={{ color: SAND }} />} title={t('settings.hevyTitle')}
+                badge={<ConnBadge connected={!!user?.has_hevy_key} />}>
+                <p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>
                     {t('settings.hevyDesc')}{' '}
                     <a href="https://api.hevyapp.com/account" target="_blank" rel="noopener noreferrer"
-                        className="text-gold-400 hover:text-gold-300 underline underline-offset-2">
+                        className="underline underline-offset-2" style={{ color: SAND }}>
                         {t('settings.hevyLink')}
                     </a>.
                 </p>
-                <form onSubmit={handleSaveKey} className="space-y-4">
-                    <input type="password" className="input-dark font-mono text-sm"
+                <form onSubmit={handleSaveKey} className="space-y-3">
+                    <input type="password" className="input-forge font-mono text-[13px]"
                         placeholder={user?.has_hevy_key ? t('settings.hevyPlaceholder') : 'hvy_xxxxxxxxxxxxxxxxxxxx'}
                         value={apiKey} onChange={e => setApiKey(e.target.value)} required />
-                    <Msg msg={keyMsg} />
-                    <button type="submit" disabled={savingKey}
-                        className="btn-gold w-full flex items-center justify-center gap-2">
-                        <Key size={16} />
+                    <FeedMsg msg={keyMsg} />
+                    <button type="submit" disabled={savingKey} className="btn-forge w-full text-[14px]">
                         {savingKey ? t('settings.saving') : user?.has_hevy_key ? t('settings.updateKey') : t('settings.saveKey')}
                     </button>
                 </form>
-            </div>
+            </Card>
 
-            {/* Yazio Credentials */}
-            <div className="card-glass p-6">
-                <div className="flex items-center gap-3 mb-4">
-                    <UtensilsCrossed className="w-5 h-5 text-gold-400" />
-                    <h3 className="text-lg font-semibold text-cream-50">{t('settings.yazioTitle')}</h3>
-                    <StatusBadge connected={!!user?.has_yazio} />
-                </div>
-                <p className="text-dark-300 text-sm mb-4">
-                    {t('settings.yazioDesc')}
-                </p>
-                <form onSubmit={handleSaveYazio} className="space-y-4">
-                    <input type="email" className="input-dark text-sm"
-                        placeholder={user?.has_yazio ? t('settings.yazioEmailPlaceholder') : 'your-yazio@email.com'}
+            {/* Yazio */}
+            <Card icon={<UtensilsCrossed size={15} style={{ color: SAND }} />} title={t('settings.yazioTitle')}
+                badge={<ConnBadge connected={!!user?.has_yazio} />}>
+                <p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>{t('settings.yazioDesc')}</p>
+                <form onSubmit={handleSaveYazio} className="space-y-3">
+                    <input type="email" className="input-forge text-[13px]"
+                        placeholder={user?.has_yazio ? t('settings.yazioEmailPlaceholder') : 'email@yazio.com'}
                         value={yazioEmail} onChange={e => setYazioEmail(e.target.value)} required />
                     <div className="relative">
-                        <input type={showYazioPw ? 'text' : 'password'} className="input-dark text-sm pr-12"
-                            placeholder={user?.has_yazio ? t('settings.yazioPasswordPlaceholder') : 'Yazio password'}
+                        <input type={showYazioPw ? 'text' : 'password'} className="input-forge text-[13px] pr-11"
+                            placeholder={user?.has_yazio ? t('settings.yazioPasswordPlaceholder') : 'Passwort'}
                             value={yazioPassword} onChange={e => setYazioPassword(e.target.value)} required />
-                        <button type="button" onClick={() => setShowYazioPw(!showYazioPw)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-dark-300 hover:text-gold-400 transition-colors">
-                            {showYazioPw ? <EyeOff size={18} /> : <Eye size={18} />}
+                        <button type="button" onClick={() => setShowYazioPw(s => !s)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
+                            style={{ color: TEXT_DIM }}>
+                            {showYazioPw ? <EyeOff size={17} /> : <Eye size={17} />}
                         </button>
                     </div>
-                    <Msg msg={yazioMsg} />
-                    <button type="submit" disabled={savingYazio}
-                        className="btn-gold w-full flex items-center justify-center gap-2">
-                        <UtensilsCrossed size={16} />
+                    <FeedMsg msg={yazioMsg} />
+                    <button type="submit" disabled={savingYazio} className="btn-forge w-full text-[14px]">
                         {savingYazio ? t('settings.saving') : user?.has_yazio ? t('settings.updateYazio') : t('settings.saveYazio')}
                     </button>
                 </form>
-            </div>
+            </Card>
         </div>
     );
 }
 
-/* ── Helpers ─────────────────────────────────────────── */
+function Card({ icon, title, badge, children }: {
+    icon: React.ReactNode; title: string; badge?: React.ReactNode; children: React.ReactNode;
+}) {
+    return (
+        <div className="forge-anim rounded-[24px] p-5 space-y-4"
+            style={{ background: 'rgba(255,247,235,0.035)', border: '1px solid rgba(232,197,138,0.11)' }}>
+            <div className="flex items-center gap-2.5">
+                {icon}
+                <span className="text-[14px] font-medium" style={{ color: '#f2ece0' }}>{title}</span>
+                {badge}
+            </div>
+            {children}
+        </div>
+    );
+}
 
-function StatusBadge({ connected }: { connected: boolean }) {
+function ConnBadge({ connected }: { connected: boolean }) {
     const { t } = useLanguage();
     return (
-        <span className={`ml-auto inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full ${connected
-            ? 'bg-green-500/10 text-green-400 border border-green-500/30'
-            : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/30'
-            }`}>
-            {connected ? <><CheckCircle size={12} /> {t('settings.connected')}</> : <><AlertCircle size={12} /> {t('settings.notSet')}</>}
+        <span className="ml-auto inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full"
+            style={{
+                background: connected ? 'rgba(52,211,153,0.12)' : 'rgba(251,191,36,0.12)',
+                border: `1px solid ${connected ? 'rgba(52,211,153,0.3)' : 'rgba(251,191,36,0.3)'}`,
+                color: connected ? '#34d399' : '#fbbf24',
+            }}>
+            {connected
+                ? <><CheckCircle size={11} /> {t('settings.connected')}</>
+                : <><AlertCircle size={11} /> {t('settings.notSet')}</>
+            }
         </span>
     );
 }
 
-function Msg({ msg }: { msg: { type: 'success' | 'error'; text: string } | null }) {
+function FeedMsg({ msg }: { msg: { type: 'success' | 'error'; text: string } | null }) {
     if (!msg) return null;
     return (
-        <div className={`rounded-xl px-4 py-3 text-sm ${msg.type === 'success'
-            ? 'bg-green-500/10 border border-green-500/30 text-green-400'
-            : 'bg-red-500/10 border border-red-500/30 text-red-400'
-            }`}>
+        <div className="rounded-xl px-4 py-2.5 text-[12px]"
+            style={{
+                background: msg.type === 'success' ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+                border: `1px solid ${msg.type === 'success' ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)'}`,
+                color: msg.type === 'success' ? '#34d399' : '#f87171',
+            }}>
             {msg.text}
         </div>
     );

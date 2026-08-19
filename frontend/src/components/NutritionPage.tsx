@@ -1,394 +1,175 @@
 import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import {
-    getTodayNutrition, getNutritionHistory, getFoodStatistics, getNutritionAnalysis
+    getTodayNutrition, getNutritionHistory, getFoodStatistics, getNutritionAnalysis,
 } from '../api/api';
-import type {
-    UserInfo, TodayNutrition, NutritionHistoryData, FoodStatisticsData, NutritionAnalysis, FoodItem
-} from '../api/api';
-import {
-    UtensilsCrossed, Loader2, Sparkles, ChevronDown, ChevronUp,
-    Flame, Beef, TrendingUp, Award
-} from 'lucide-react';
+import type { UserInfo, TodayNutrition, NutritionHistoryData, FoodStatisticsData, NutritionAnalysis, FoodItem } from '../api/api';
+import { Loader2, Sparkles, ChevronDown, ChevronUp, Flame, TrendingUp, UtensilsCrossed, Beef } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-    PieChart, Pie, Cell, BarChart, Bar
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+    BarChart, Bar,
 } from 'recharts';
 
 type LayoutContext = { user: UserInfo | null };
 
-/* ── Color Palette ──────────────────────────────────── */
-const COLORS = {
-    calories: '#f97316', // orange
-    protein: '#ef4444',  // red
-    carbs: '#eab308',    // yellow
-    fat: '#22c55e',      // green
-    sugar: '#ec4899',    // pink
-    fiber: '#84cc16',    // lime
-    saturated: '#8b5cf6', // violet
-    salt: '#0ea5e9',     // sky
-};
+const SAND = '#e8c58a';
+const CARD_BG = 'rgba(255,247,235,0.035)';
+const CARD_BORDER = 'rgba(232,197,138,0.11)';
+const TEXT_DIM = 'rgba(242,236,226,0.45)';
+const TEXT_MID = 'rgba(242,236,226,0.7)';
+const CHART_STYLE = { backgroundColor: '#1c180d', border: '1px solid rgba(232,197,138,0.15)', borderRadius: 12 };
+const AXIS_STYLE = { stroke: TEXT_DIM, fontSize: 11 };
 
 const MEAL_COLORS: Record<string, string> = {
-    breakfast: '#f97316',
-    lunch: '#22c55e',
-    dinner: '#3b82f6',
-    snack: '#a855f7',
+    breakfast: '#f97316', lunch: '#34d399', dinner: '#60a5fa', snack: '#a78bfa',
+};
+const MEAL_LABELS: Record<string, string> = {
+    breakfast: 'Frühstück', lunch: 'Mittagessen', dinner: 'Abendessen', snack: 'Snacks',
 };
 
 export default function NutritionPage() {
     useOutletContext<LayoutContext>();
-    const { t, lang } = useLanguage();
+    const { lang } = useLanguage();
 
-    // Data states
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
     const [history, setHistory] = useState<NutritionHistoryData | null>(null);
     const [stats, setStats] = useState<FoodStatisticsData | null>(null);
     const [analysis, setAnalysis] = useState<NutritionAnalysis | null>(null);
 
-    // Loading states
     const [loadingToday, setLoadingToday] = useState(true);
     const [loadingHistory, setLoadingHistory] = useState(true);
     const [loadingStats, setLoadingStats] = useState(true);
     const [loadingAnalysis, setLoadingAnalysis] = useState(false);
 
-    // UI states
     const [historyDays, setHistoryDays] = useState(7);
     const [statsDays, setStatsDays] = useState(30);
     const [expandedMeals, setExpandedMeals] = useState<Record<string, boolean>>({});
 
-    // Fetch today + yesterday
     useEffect(() => {
-        const fetchData = async () => {
-            setLoadingToday(true);
-            try {
-                const data = await getTodayNutrition();
-                setTodayNutrition(data);
-            } catch (e) {
-                console.error('Failed to fetch today nutrition:', e);
-            }
-            setLoadingToday(false);
-        };
-        fetchData();
+        getTodayNutrition().then(setTodayNutrition).catch(() => { }).finally(() => setLoadingToday(false));
     }, []);
 
-    // Fetch history
     useEffect(() => {
-        const fetchHistory = async () => {
-            setLoadingHistory(true);
-            try {
-                const data = await getNutritionHistory(historyDays);
-                setHistory(data);
-            } catch (e) {
-                console.error('Failed to fetch nutrition history:', e);
-            }
-            setLoadingHistory(false);
-        };
-        fetchHistory();
+        setLoadingHistory(true);
+        getNutritionHistory(historyDays).then(setHistory).catch(() => { }).finally(() => setLoadingHistory(false));
     }, [historyDays]);
 
-    // Fetch food statistics
     useEffect(() => {
-        const fetchStats = async () => {
-            setLoadingStats(true);
-            try {
-                const data = await getFoodStatistics(statsDays);
-                setStats(data);
-            } catch (e) {
-                console.error('Failed to fetch food statistics:', e);
-            }
-            setLoadingStats(false);
-        };
-        fetchStats();
+        setLoadingStats(true);
+        getFoodStatistics(statsDays).then(setStats).catch(() => { }).finally(() => setLoadingStats(false));
     }, [statsDays]);
 
-    // Fetch AI analysis
-    const fetchAnalysis = async () => {
-        setLoadingAnalysis(true);
-        try {
-            const data = await getNutritionAnalysis();
-            setAnalysis(data);
-        } catch (e) {
-            console.error('Failed to fetch nutrition analysis:', e);
-        }
-        setLoadingAnalysis(false);
-    };
-
-    // Prepare chart data
     const chartData = history?.days?.map(d => ({
         date: new Date(d.date).toLocaleDateString(lang === 'de' ? 'de-DE' : 'en-US', { weekday: 'short', day: 'numeric' }),
-        fullDate: d.date,
         calories: d.totals.calories,
         protein: d.totals.protein,
         carbs: d.totals.carbs,
         fat: d.totals.fat,
         calorieGoal: d.goals.calories,
-        proteinGoal: d.goals.protein,
     })) || [];
 
-    // Pie chart data for calories by meal
-    const mealPieData = todayNutrition?.meals ? Object.entries(todayNutrition.meals)
-        .filter(([, m]) => m.calories > 0)
-        .map(([key, m]) => ({
-            name: t(`nutrition.${key}` as any) || key,
-            value: m.calories,
-            key,
-        })) : [];
-
-    // Stacked bar data for macros by meal
-    const mealBarData = todayNutrition?.meals ? Object.entries(todayNutrition.meals)
-        .filter(([, m]) => m.calories > 0)
-        .map(([key, m]) => ({
-            name: t(`nutrition.${key}` as any) || key,
-            protein: m.protein,
-            carbs: m.carbs,
-            fat: m.fat,
-        })) : [];
-
-    const toggleMeal = (meal: string) => {
-        setExpandedMeals(prev => ({ ...prev, [meal]: !prev[meal] }));
-    };
+    const toggleMeal = (meal: string) => setExpandedMeals(p => ({ ...p, [meal]: !p[meal] }));
 
     return (
-        <div className="p-6 max-w-6xl mx-auto space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold text-cream-50">{t('nutrition.title')}</h1>
-                    <p className="text-dark-300 text-sm">{t('nutrition.subtitle')}</p>
-                </div>
-            </div>
+        <div className="space-y-5">
+            <header className="forge-anim">
+                <h1 className="text-[24px] font-semibold tracking-tight" style={{ color: '#f2ece0' }}>Ernährung</h1>
+                <p className="text-[13px] mt-1" style={{ color: TEXT_DIM }}>Deine Makros im Überblick</p>
+            </header>
 
-            {/* ═══ Calorie Trend Chart ════════════════════════════════ */}
-            <div className="card-glass p-6">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-orange-500/10 border-orange-500/30 text-orange-400">
-                            <Flame className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-lg font-semibold text-cream-50">{lang === 'de' ? 'Kalorien Trend' : 'Calorie Trend'}</h2>
-                    </div>
-                    <div className="flex gap-2">
-                        {[7, 14, 30].map(d => (
-                            <button
-                                key={d}
-                                onClick={() => setHistoryDays(d)}
-                                className={`px-3 py-1 text-xs rounded-lg transition-colors ${historyDays === d
-                                    ? 'bg-gold-500 text-dark-900 font-semibold'
-                                    : 'bg-dark-700 text-dark-300 hover:text-cream-100'
-                                    }`}
-                            >
-                                {t(`nutrition.period${d}` as any)}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                {loadingHistory ? (
-                    <div className="h-64 flex items-center justify-center">
-                        <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
-                    </div>
-                ) : chartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={220}>
-                        <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                            <XAxis dataKey="date" stroke="#666" fontSize={11} />
-                            <YAxis stroke="#666" fontSize={11} unit=" kcal" />
-                            <Tooltip
-                                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px' }}
-                                labelStyle={{ color: '#fafaf5' }}
-                                formatter={(value) => [`${Math.round(Number(value ?? 0))} kcal`, '']}
-                            />
-                            <Legend />
-                            <Line type="monotone" dataKey="calories" name={t('dashboard.calories')} stroke={COLORS.calories} strokeWidth={2} dot={{ r: 3 }} />
-                            <Line type="monotone" dataKey="calorieGoal" name={lang === 'de' ? 'Ziel' : 'Goal'} stroke="#666" strokeWidth={1} strokeDasharray="5 5" dot={false} />
-                        </LineChart>
-                    </ResponsiveContainer>
-                ) : (
-                    <p className="text-dark-400 text-center py-12">{t('nutrition.noData')}</p>
-                )}
-            </div>
-
-            {/* ═══ Macro Trend Chart (Protein/Carbs/Fat) ═══════════════════ */}
-            <div className="card-glass p-6">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-red-500/10 border-red-500/30 text-red-400">
-                        <TrendingUp className="w-5 h-5" />
-                    </div>
-                    <h2 className="text-lg font-semibold text-cream-50">{t('nutrition.macroTrend')}</h2>
-                </div>
-
-                {loadingHistory ? (
-                    <div className="h-48 flex items-center justify-center">
-                        <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
-                    </div>
-                ) : chartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={200}>
-                        <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                            <XAxis dataKey="date" stroke="#666" fontSize={11} />
-                            <YAxis stroke="#666" fontSize={11} unit="g" />
-                            <Tooltip
-                                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px' }}
-                                labelStyle={{ color: '#fafaf5' }}
-                                formatter={(value) => [`${Math.round(Number(value ?? 0))}g`, '']}
-                            />
-                            <Legend />
-                            <Line type="monotone" dataKey="protein" name={t('dashboard.protein')} stroke={COLORS.protein} strokeWidth={2} dot={{ r: 3 }} />
-                            <Line type="monotone" dataKey="carbs" name={t('dashboard.carbs')} stroke={COLORS.carbs} strokeWidth={2} dot={{ r: 3 }} />
-                            <Line type="monotone" dataKey="fat" name={t('dashboard.fat')} stroke={COLORS.fat} strokeWidth={2} dot={{ r: 3 }} />
-                        </LineChart>
-                    </ResponsiveContainer>
-                ) : (
-                    <p className="text-dark-400 text-center py-12">{t('nutrition.noData')}</p>
-                )}
-            </div>
-
-            {/* ═══ Today Overview Row ═══════════════════════════════ */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Calories by Meal Pie Chart */}
-                <div className="card-glass p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-amber-500/10 border-amber-500/30 text-amber-400">
-                            <Flame className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-lg font-semibold text-cream-50">{t('nutrition.caloriesByMeal')}</h2>
-                    </div>
-
-                    {loadingToday ? (
-                        <div className="h-64 flex items-center justify-center">
-                            <Loader2 className="w-6 h-6 text-gold-400 animate-spin" />
-                        </div>
-                    ) : mealPieData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={280}>
-                            <PieChart>
-                                <Pie
-                                    data={mealPieData}
-                                    cx="50%"
-                                    cy="45%"
-                                    innerRadius={45}
-                                    outerRadius={75}
-                                    paddingAngle={2}
-                                    dataKey="value"
-                                >
-                                    {mealPieData.map((entry) => (
-                                        <Cell key={entry.key} fill={MEAL_COLORS[entry.key] || '#666'} />
-                                    ))}
-                                </Pie>
-                                <Tooltip
-                                    contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px' }}
-                                    formatter={(value) => [`${Math.round(Number(value ?? 0))} kcal`, '']}
-                                />
-                                <Legend
-                                    verticalAlign="bottom"
-                                    height={50}
-                                    formatter={(value) => {
-                                        const item = mealPieData.find(d => d.name === value);
-                                        return `${value}: ${item ? Math.round(item.value) : 0} kcal`;
-                                    }}
-                                />
-                            </PieChart>
+            {/* ── Kalorien-Trend ── */}
+            <ForgeCard title="Kalorien" icon={<Flame size={15} style={{ color: SAND }} />}
+                right={<PeriodTabs value={historyDays} onChange={setHistoryDays} />}>
+                {loadingHistory
+                    ? <Spinner />
+                    : chartData.length > 0
+                        ? <ResponsiveContainer width="100%" height={180}>
+                            <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,247,235,0.06)" />
+                                <XAxis dataKey="date" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+                                <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+                                <Tooltip contentStyle={CHART_STYLE} labelStyle={{ color: '#f2ece0' }}
+                                    formatter={(v) => [`${Math.round(Number(v))} kcal`, '']} />
+                                <Line type="monotone" dataKey="calories" name="Kalorien"
+                                    stroke={SAND} strokeWidth={2} dot={false} />
+                                <Line type="monotone" dataKey="calorieGoal" name="Ziel"
+                                    stroke={TEXT_DIM} strokeWidth={1} strokeDasharray="4 4" dot={false} />
+                            </LineChart>
                         </ResponsiveContainer>
-                    ) : (
-                        <p className="text-dark-400 text-center py-12">{t('nutrition.noData')}</p>
-                    )}
-                </div>
+                        : <Empty />
+                }
+            </ForgeCard>
 
-                {/* Macros by Meal Stacked Bar */}
-                <div className="card-glass p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-emerald-500/10 border-emerald-500/30 text-emerald-400">
-                            <Beef className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-lg font-semibold text-cream-50">{t('nutrition.macrosByMeal')}</h2>
-                    </div>
-
-                    {loadingToday ? (
-                        <div className="h-48 flex items-center justify-center">
-                            <Loader2 className="w-6 h-6 text-gold-400 animate-spin" />
-                        </div>
-                    ) : mealBarData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={200}>
-                            <BarChart data={mealBarData} layout="vertical" margin={{ left: 60 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                                <XAxis type="number" stroke="#666" fontSize={11} />
-                                <YAxis type="category" dataKey="name" stroke="#666" fontSize={11} width={60} />
-                                <Tooltip
-                                    contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px' }}
-                                    formatter={(value) => [`${Math.round(Number(value ?? 0))}g`, '']}
-                                />
-                                <Legend />
-                                <Bar dataKey="protein" name={t('dashboard.protein')} stackId="a" fill={COLORS.protein} />
-                                <Bar dataKey="carbs" name={t('dashboard.carbs')} stackId="a" fill={COLORS.carbs} />
-                                <Bar dataKey="fat" name={t('dashboard.fat')} stackId="a" fill={COLORS.fat} />
-                            </BarChart>
+            {/* ── Makro-Trend ── */}
+            <ForgeCard title="Makros" icon={<TrendingUp size={15} style={{ color: SAND }} />}>
+                {loadingHistory
+                    ? <Spinner />
+                    : chartData.length > 0
+                        ? <ResponsiveContainer width="100%" height={160}>
+                            <LineChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,247,235,0.06)" />
+                                <XAxis dataKey="date" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+                                <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+                                <Tooltip contentStyle={CHART_STYLE} labelStyle={{ color: '#f2ece0' }}
+                                    formatter={(v) => [`${Math.round(Number(v))}g`, '']} />
+                                <Line type="monotone" dataKey="protein" name="Protein" stroke="#f87171" strokeWidth={2} dot={false} />
+                                <Line type="monotone" dataKey="carbs" name="Carbs" stroke="#fbbf24" strokeWidth={2} dot={false} />
+                                <Line type="monotone" dataKey="fat" name="Fett" stroke="#34d399" strokeWidth={2} dot={false} />
+                            </LineChart>
                         </ResponsiveContainer>
-                    ) : (
-                        <p className="text-dark-400 text-center py-12">{t('nutrition.noData')}</p>
-                    )}
-                </div>
-            </div>
+                        : <Empty />
+                }
+            </ForgeCard>
 
-            {/* ═══ Food Items List ══════════════════════════════════ */}
-            <div className="card-glass p-6">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-violet-500/10 border-violet-500/30 text-violet-400">
-                        <UtensilsCrossed className="w-5 h-5" />
-                    </div>
-                    <h2 className="text-lg font-semibold text-cream-50">{t('nutrition.foodItems')}</h2>
-                </div>
-
-                {loadingToday ? (
-                    <div className="h-32 flex items-center justify-center">
-                        <Loader2 className="w-6 h-6 text-gold-400 animate-spin" />
-                    </div>
-                ) : todayNutrition?.food_items ? (
-                    <div className="space-y-2">
-                        {['breakfast', 'lunch', 'dinner', 'snack'].map(mealKey => {
-                            const items = todayNutrition.food_items?.[mealKey] || [];
-                            if (items.length === 0) return null;
-                            const isExpanded = expandedMeals[mealKey];
-                            const mealTotals = todayNutrition.meals[mealKey];
-
+            {/* ── Heutige Mahlzeiten ── */}
+            <ForgeCard title="Heute gegessen" icon={<UtensilsCrossed size={15} style={{ color: SAND }} />}>
+                {loadingToday ? <Spinner /> : todayNutrition?.food_items
+                    ? <div className="space-y-1.5">
+                        {(['breakfast', 'lunch', 'dinner', 'snack'] as const).map(key => {
+                            const items: FoodItem[] = todayNutrition.food_items?.[key] || [];
+                            if (!items.length) return null;
+                            const meal = todayNutrition.meals[key];
+                            const open = expandedMeals[key];
                             return (
-                                <div key={mealKey} className="bg-dark-700/50 rounded-xl overflow-hidden">
-                                    <button
-                                        onClick={() => toggleMeal(mealKey)}
-                                        className="w-full flex items-center justify-between p-4 hover:bg-dark-700/70 transition-colors"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div
-                                                className="w-3 h-3 rounded-full"
-                                                style={{ backgroundColor: MEAL_COLORS[mealKey] }}
-                                            />
-                                            <span className="font-medium text-cream-100">
-                                                {t(`nutrition.${mealKey}` as any)}
+                                <div key={key} className="rounded-2xl overflow-hidden"
+                                    style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid ${CARD_BORDER}` }}>
+                                    <button onClick={() => toggleMeal(key)}
+                                        className="w-full flex items-center justify-between px-4 py-3 cursor-pointer tap">
+                                        <div className="flex items-center gap-2.5">
+                                            <span className="w-2.5 h-2.5 rounded-full shrink-0"
+                                                style={{ background: MEAL_COLORS[key] }} />
+                                            <span className="text-[13px] font-medium" style={{ color: '#f2ece0' }}>
+                                                {MEAL_LABELS[key]}
                                             </span>
-                                            <span className="text-dark-300 text-sm">
-                                                ({items.length} {lang === 'de' ? 'Artikel' : 'items'})
+                                            <span className="text-[11px]" style={{ color: TEXT_DIM }}>
+                                                {items.length} Artikel
                                             </span>
                                         </div>
-                                        <div className="flex items-center gap-4">
-                                            <span className="text-sm text-orange-400">{Math.round(mealTotals?.calories || 0)} kcal</span>
-                                            <span className="text-sm text-red-400">P: {Math.round(mealTotals?.protein || 0)}g</span>
-                                            {isExpanded ? <ChevronUp size={16} className="text-dark-400" /> : <ChevronDown size={16} className="text-dark-400" />}
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-[12px] tabular-nums" style={{ color: SAND }}>
+                                                {Math.round(meal?.calories || 0)} kcal
+                                            </span>
+                                            <span className="text-[11px]" style={{ color: TEXT_DIM }}>
+                                                P {Math.round(meal?.protein || 0)}g
+                                            </span>
+                                            {open ? <ChevronUp size={14} style={{ color: TEXT_DIM }} />
+                                                : <ChevronDown size={14} style={{ color: TEXT_DIM }} />}
                                         </div>
                                     </button>
-                                    {isExpanded && (
-                                        <div className="px-4 pb-4 space-y-2">
-                                            {items.map((item: FoodItem, i: number) => (
-                                                <div key={i} className="flex items-center justify-between py-2 px-3 bg-dark-800/50 rounded-lg text-sm">
+                                    {open && (
+                                        <div className="px-4 pb-3 space-y-1.5"
+                                            style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
+                                            {items.map((item, i) => (
+                                                <div key={i} className="flex items-center justify-between py-1.5 text-[12px]">
                                                     <div>
-                                                        <span className="text-cream-100">{item.name}</span>
-                                                        {item.brand && <span className="text-dark-400 ml-2">({item.brand})</span>}
-                                                        <span className="text-dark-400 ml-2">{item.amount}g</span>
+                                                        <span style={{ color: '#f2ece0' }}>{item.name}</span>
+                                                        {item.brand && <span style={{ color: TEXT_DIM }}> · {item.brand}</span>}
+                                                        <span style={{ color: TEXT_DIM }}> · {item.amount}g</span>
                                                     </div>
-                                                    <div className="flex gap-3 text-xs">
-                                                        <span className="text-orange-400">{Math.round(item.calories)} kcal</span>
-                                                        <span className="text-red-400">P: {item.protein}g</span>
-                                                        <span className="text-yellow-400">C: {item.carbs}g</span>
-                                                        <span className="text-emerald-400">F: {item.fat}g</span>
+                                                    <div className="flex gap-3 shrink-0" style={{ color: TEXT_DIM }}>
+                                                        <span style={{ color: SAND }}>{Math.round(item.calories)} kcal</span>
+                                                        <span>P {item.protein}g</span>
                                                     </div>
                                                 </div>
                                             ))}
@@ -398,143 +179,110 @@ export default function NutritionPage() {
                             );
                         })}
                     </div>
-                ) : (
-                    <p className="text-dark-400 text-center py-8">{t('nutrition.noData')}</p>
-                )}
-            </div>
+                    : <Empty text="Keine Daten" />
+                }
+            </ForgeCard>
 
-            {/* ═══ AI Analysis Section ══════════════════════════════ */}
-            <div className="card-glass p-6">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-purple-500/10 border-purple-500/30 text-purple-400">
-                            <Sparkles className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-lg font-semibold text-cream-50">{t('nutrition.aiAnalysis')}</h2>
-                    </div>
-                    {!analysis && (
-                        <button
-                            onClick={fetchAnalysis}
-                            disabled={loadingAnalysis}
-                            className="btn-gold px-4 py-2 text-sm flex items-center gap-2"
-                        >
-                            {loadingAnalysis ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                            {lang === 'de' ? 'Analyse starten' : 'Start Analysis'}
-                        </button>
-                    )}
-                </div>
+            {/* ── Top Lebensmittel ── */}
+            {(stats || loadingStats) && (
+                <ForgeCard title="Top Lebensmittel" icon={<Beef size={15} style={{ color: SAND }} />}
+                    right={<PeriodTabs value={statsDays} onChange={setStatsDays} options={[7, 14, 30]} />}>
+                    {loadingStats ? <Spinner /> : stats?.top_protein && stats.top_protein.length > 0
+                        ? <>
+                            <p className="text-[11px] uppercase tracking-[0.15em] mb-2" style={{ color: TEXT_DIM }}>
+                                Top Protein-Quellen
+                            </p>
+                            <ResponsiveContainer width="100%" height={140}>
+                                <BarChart
+                                    data={stats.top_protein.slice(0, 6).map(f => ({ name: f.name.slice(0, 14), value: f.protein_g }))}
+                                    layout="vertical" margin={{ left: 0, right: 8, top: 0, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,247,235,0.06)" horizontal={false} />
+                                    <XAxis type="number" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+                                    <YAxis type="category" dataKey="name" tick={{ ...AXIS_STYLE, fontSize: 10 }} width={90} axisLine={false} tickLine={false} />
+                                    <Tooltip contentStyle={CHART_STYLE} formatter={(v) => [`${Math.round(Number(v))}g`, 'Protein']} />
+                                    <Bar dataKey="value" fill={SAND} radius={[0, 4, 4, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </>
+                        : <Empty />
+                    }
+                </ForgeCard>
+            )}
 
-                {analysis ? (
-                    <div className="bg-gradient-to-br from-purple-500/10 to-violet-500/10 border border-purple-500/20 rounded-xl p-5">
-                        <p className="text-cream-200 text-sm leading-relaxed whitespace-pre-line">{analysis.analysis}</p>
-                    </div>
-                ) : loadingAnalysis ? (
-                    <div className="h-32 flex items-center justify-center">
-                        <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
-                    </div>
-                ) : (
-                    <p className="text-dark-400 text-center py-8">
-                        {lang === 'de' ? 'Klicke auf "Analyse starten" für KI-basierte Ernährungstipps' : 'Click "Start Analysis" for AI-powered nutrition tips'}
+            {/* ── KI-Analyse ── */}
+            <ForgeCard title="Coach-Analyse" icon={<Sparkles size={15} style={{ color: SAND }} />}>
+                {analysis
+                    ? <p className="text-[13px] leading-relaxed whitespace-pre-line" style={{ color: TEXT_MID }}>
+                        {analysis.analysis}
                     </p>
-                )}
-            </div>
-
-            {/* ═══ Food Statistics ══════════════════════════════════ */}
-            <div className="card-glass p-6">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl border flex items-center justify-center bg-blue-500/10 border-blue-500/30 text-blue-400">
-                            <Award className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-lg font-semibold text-cream-50">{t('nutrition.topFoods')}</h2>
-                    </div>
-                    <div className="flex gap-2">
-                        {[7, 14, 30].map(d => (
-                            <button
-                                key={d}
-                                onClick={() => setStatsDays(d)}
-                                className={`px-3 py-1 text-xs rounded-lg transition-colors ${statsDays === d
-                                    ? 'bg-gold-500 text-dark-900 font-semibold'
-                                    : 'bg-dark-700 text-dark-300 hover:text-cream-100'
-                                    }`}
-                            >
-                                {t(`nutrition.period${d}` as any)}
+                    : loadingAnalysis
+                        ? <Spinner />
+                        : <div className="text-center py-4 space-y-3">
+                            <p className="text-[13px]" style={{ color: TEXT_DIM }}>
+                                Lass den Coach deine Ernährung analysieren.
+                            </p>
+                            <button onClick={async () => {
+                                setLoadingAnalysis(true);
+                                try { setAnalysis(await getNutritionAnalysis()); }
+                                catch { }
+                                setLoadingAnalysis(false);
+                            }}
+                                className="btn-forge text-sm px-5 py-2 mx-auto">
+                                Analyse starten
                             </button>
-                        ))}
-                    </div>
-                </div>
-
-                {loadingStats ? (
-                    <div className="h-64 flex items-center justify-center">
-                        <Loader2 className="w-8 h-8 text-gold-400 animate-spin" />
-                    </div>
-                ) : stats ? (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        {/* Top 10 Foods Bar Chart */}
-                        <div>
-                            <h3 className="text-sm font-medium text-cream-100 mb-3 flex items-center gap-2">
-                                <UtensilsCrossed size={14} /> {t('nutrition.topFoods')}
-                            </h3>
-                            {stats.top_foods.length > 0 ? (
-                                <ResponsiveContainer width="100%" height={250}>
-                                    <BarChart data={stats.top_foods.slice(0, 8)} layout="vertical" margin={{ left: 80 }}>
-                                        <XAxis type="number" stroke="#666" fontSize={10} />
-                                        <YAxis type="category" dataKey="name" stroke="#666" fontSize={10} width={80} tick={{ fontSize: 9 }} />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', fontSize: 12 }}
-                                            formatter={(value) => [`${Number(value ?? 0)}x`, t('nutrition.times')]}
-                                        />
-                                        <Bar dataKey="count" fill="#3b82f6" radius={[0, 4, 4, 0]} />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            ) : <p className="text-dark-400 text-sm">{t('nutrition.noData')}</p>}
                         </div>
-
-                        {/* Top Protein Sources */}
-                        <div>
-                            <h3 className="text-sm font-medium text-cream-100 mb-3 flex items-center gap-2">
-                                <Beef size={14} /> {t('nutrition.topProtein')}
-                            </h3>
-                            {stats.top_protein.length > 0 ? (
-                                <ResponsiveContainer width="100%" height={250}>
-                                    <BarChart data={stats.top_protein.slice(0, 8)} layout="vertical" margin={{ left: 80 }}>
-                                        <XAxis type="number" stroke="#666" fontSize={10} />
-                                        <YAxis type="category" dataKey="name" stroke="#666" fontSize={10} width={80} tick={{ fontSize: 9 }} />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', fontSize: 12 }}
-                                            formatter={(value) => [`${Math.round(Number(value ?? 0))}g`, t('dashboard.protein')]}
-                                        />
-                                        <Bar dataKey="protein_g" fill="#ef4444" radius={[0, 4, 4, 0]} />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            ) : <p className="text-dark-400 text-sm">{t('nutrition.noData')}</p>}
-                        </div>
-
-                        {/* Top Calorie Items */}
-                        <div>
-                            <h3 className="text-sm font-medium text-cream-100 mb-3 flex items-center gap-2">
-                                <Flame size={14} /> {t('nutrition.topCalories')}
-                            </h3>
-                            {stats.top_calories.length > 0 ? (
-                                <ResponsiveContainer width="100%" height={250}>
-                                    <BarChart data={stats.top_calories.slice(0, 8)} layout="vertical" margin={{ left: 80 }}>
-                                        <XAxis type="number" stroke="#666" fontSize={10} />
-                                        <YAxis type="category" dataKey="name" stroke="#666" fontSize={10} width={80} tick={{ fontSize: 9 }} />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', fontSize: 12 }}
-                                            formatter={(value) => [`${Math.round(Number(value ?? 0))} kcal`, t('dashboard.calories')]}
-                                        />
-                                        <Bar dataKey="calories" fill="#f97316" radius={[0, 4, 4, 0]} />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            ) : <p className="text-dark-400 text-sm">{t('nutrition.noData')}</p>}
-                        </div>
-                    </div>
-                ) : (
-                    <p className="text-dark-400 text-center py-12">{t('nutrition.noData')}</p>
-                )}
-            </div>
-
+                }
+            </ForgeCard>
         </div>
     );
+}
+
+/* ── Shared sub-components ── */
+function ForgeCard({ title, icon, right, children }: {
+    title: string; icon: React.ReactNode; right?: React.ReactNode; children: React.ReactNode;
+}) {
+    return (
+        <div className="forge-anim rounded-[24px] p-5"
+            style={{ background: CARD_BG, border: `1px solid ${CARD_BORDER}` }}>
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                    {icon}
+                    <span className="text-[14px] font-medium" style={{ color: '#f2ece0' }}>{title}</span>
+                </div>
+                {right}
+            </div>
+            {children}
+        </div>
+    );
+}
+
+function PeriodTabs({ value, onChange, options = [7, 14, 30] }: {
+    value: number; onChange: (v: number) => void; options?: number[];
+}) {
+    return (
+        <div className="flex gap-1">
+            {options.map(d => (
+                <button key={d} onClick={() => onChange(d)}
+                    className="tap text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all"
+                    style={{
+                        background: value === d ? `${SAND}18` : 'transparent',
+                        color: value === d ? SAND : TEXT_DIM,
+                        border: `1px solid ${value === d ? `${SAND}33` : 'transparent'}`,
+                    }}>
+                    {d}T
+                </button>
+            ))}
+        </div>
+    );
+}
+
+function Spinner() {
+    return (
+        <div className="h-24 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 animate-spin" style={{ color: SAND }} />
+        </div>
+    );
+}
+function Empty({ text = 'Keine Daten' }: { text?: string }) {
+    return <p className="text-center py-8 text-[13px]" style={{ color: TEXT_DIM }}>{text}</p>;
 }
