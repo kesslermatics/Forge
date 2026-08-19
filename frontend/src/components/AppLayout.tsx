@@ -113,9 +113,10 @@ function ForgeIcon() {
     return (
         <div className="w-8 h-8 rounded-xl flex items-center justify-center"
             style={{ background: 'linear-gradient(135deg, rgba(232,197,138,0.25), rgba(200,164,100,0.15))', border: '1px solid rgba(232,197,138,0.3)' }}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 2L10.5 6.5H13L9.5 9.5L11 14L8 11.5L5 14L6.5 9.5L3 6.5H5.5L8 2Z"
-                    fill={SAND} fillOpacity="0.9" />
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M15 4H9C8.45 4 8 4.45 8 5V10C8 10.55 8.45 11 9 11H15C15.55 11 16 10.55 16 10V5C16 4.45 15.55 4 15 4Z" fill="#e8c58a" />
+                <path d="M13.5 10.5L8 19.5C7.72 19.97 8.05 20.5 8.58 20.5H15.42C15.95 20.5 16.28 19.97 16 19.5L13.5 10.5Z" fill="#c8a870" />
+                <path d="M9 4H15V6.5H9V4Z" fill="#f2d9a8" opacity="0.55" />
             </svg>
         </div>
     );

@@ -530,23 +530,20 @@ def compute_achievements(
     nutrition_by_date: dict,
 ) -> list[dict]:
     """
-    Compute all unlocked + locked achievements.
-    Returns a list of achievement dicts, each with:
-    - id, name_de, name_en, desc_de, desc_en, icon, category, unlocked, unlocked_date, progress, target
+    Personalised achievements for Robert (172cm / 67kg).
+    Strength targets are relative to bodyweight — realistic and motivating.
     """
 
     achievements = []
+    BW = 67.0  # bodyweight in kg
 
-    # ── Helpers ──
-    all_exercises = defaultdict(list)  # name -> list of {date, e1rm, volume}
+    # ── Pre-computation pass ──
+    all_exercises: dict = defaultdict(list)
     total_workouts = len(workouts)
     total_volume_all_time = 0.0
-    all_workout_dates = set()
-    exercise_prs = {}  # name -> max e1rm
 
     for w in workouts:
         wd = _extract_workout_date(w) or ""
-        all_workout_dates.add(wd)
         for ex in w.get("exercises", []):
             name = ex.get("title", "Unknown")
             for s in ex.get("sets", []):
@@ -556,215 +553,215 @@ def compute_achievements(
                     total_volume_all_time += weight * reps
                     e1rm = weight * (1 + reps / 30.0)
                     all_exercises[name].append({"date": wd, "e1rm": e1rm, "weight": weight, "reps": reps})
-                    if name not in exercise_prs or e1rm > exercise_prs[name]:
-                        exercise_prs[name] = e1rm
 
     total_nutrition_days = len(nutrition_dates)
+    unique_exercises = len(all_exercises)
 
-    # ── WORKOUT COUNT ACHIEVEMENTS ──
-    workout_milestones = [
-        (1, "first_workout", "Erste Session", "First Session", "Dein erstes Workout!", "Your first workout!", "🏋️"),
-        (10, "10_workouts", "10 Workouts", "10 Workouts", "10 Workouts geschafft!", "Completed 10 workouts!", "💪"),
-        (25, "25_workouts", "25 Workouts", "25 Workouts", "25 Workouts — das ist Hingabe!", "25 workouts — that's dedication!", "🔥"),
-        (50, "50_workouts", "50 Sessions", "50 Sessions", "50 Workouts, du bist ein Beast!", "50 workouts, you're a beast!", "🦁"),
-        (100, "100_workouts", "Century Club", "Century Club", "100 Workouts — du bist eine Legende!", "100 workouts — legendary!", "🏆"),
-        (200, "200_workouts", "Gym Rat", "Gym Rat", "200 Workouts — das Gym ist dein Zuhause!", "200 workouts — the gym is your home!", "🐀"),
-    ]
-    for target, aid, name_de, name_en, desc_de, desc_en, icon in workout_milestones:
-        achievements.append({
-            "id": aid,
-            "name_de": name_de, "name_en": name_en,
-            "desc_de": desc_de, "desc_en": desc_en,
-            "icon": icon,
-            "category": "training",
-            "unlocked": total_workouts >= target,
-            "unlocked_date": None,
-            "progress": min(total_workouts, target),
-            "target": target,
-        })
-
-    # ── VOLUME ACHIEVEMENTS ──
-    vol_milestones = [
-        (10000, "10k_volume", "10 Tonnen", "10 Tons", "10.000 kg Gesamtvolumen!", "10,000 kg total volume!", "⚡"),
-        (50000, "50k_volume", "50 Tonnen", "50 Tons", "50.000 kg — du hast einen LKW gehoben!", "50,000 kg — you lifted a truck!", "🚛"),
-        (100000, "100k_volume", "100K Club", "100K Club", "100.000 kg Gesamtvolumen!", "100,000 kg total volume!", "💎"),
-        (500000, "500k_volume", "Halbmillionär", "Half Million", "500.000 kg — unfassbar!", "500,000 kg — incredible!", "🌟"),
-        (1000000, "1m_volume", "Millionär", "Millionaire", "1.000.000 kg Volumen. Respekt.", "1,000,000 kg volume. Respect.", "👑"),
-    ]
-    for target, aid, name_de, name_en, desc_de, desc_en, icon in vol_milestones:
-        achievements.append({
-            "id": aid,
-            "name_de": name_de, "name_en": name_en,
-            "desc_de": desc_de, "desc_en": desc_en,
-            "icon": icon,
-            "category": "training",
-            "unlocked": total_volume_all_time >= target,
-            "unlocked_date": None,
-            "progress": min(round(total_volume_all_time), target),
-            "target": target,
-        })
-
-    # ── STRENGTH MILESTONES (specific exercises) ──
-    strength_targets = [
-        ("Bench Press (Barbell)", 60, "bench_60", "60kg Bank", "60kg Bench", "60kg Bankdrücken!", "60kg bench press!", "🏋️"),
-        ("Bench Press (Barbell)", 80, "bench_80", "80kg Bank", "80kg Bench", "80kg Bankdrücken!", "80kg bench press!", "🏋️"),
-        ("Bench Press (Barbell)", 100, "bench_100", "100kg Bank", "100kg Bench", "100kg Bankdrücken — willkommen im Club!", "100kg bench press — welcome to the club!", "🏅"),
-        ("Bench Press (Barbell)", 140, "bench_140", "140kg Bank", "140kg Bench", "140kg Bankdrücken — Elite!", "140kg bench — Elite!", "🥇"),
-        ("Squat (Barbell)", 100, "squat_100", "100kg Kniebeuge", "100kg Squat", "100kg Squat geschafft!", "100kg squat achieved!", "🦵"),
-        ("Squat (Barbell)", 140, "squat_140", "140kg Kniebeuge", "140kg Squat", "140kg Squat — mörderisch!", "140kg squat — killer!", "🦵"),
-        ("Squat (Barbell)", 180, "squat_180", "180kg Kniebeuge", "180kg Squat", "180kg Squat — absolutes Beast!", "180kg squat — absolute beast!", "🦵"),
-        ("Deadlift (Barbell)", 100, "deadlift_100", "100kg Kreuzheben", "100kg Deadlift", "100kg Kreuzheben!", "100kg deadlift!", "💀"),
-        ("Deadlift (Barbell)", 140, "deadlift_140", "140kg Kreuzheben", "140kg Deadlift", "140kg Kreuzheben!", "140kg deadlift!", "💀"),
-        ("Deadlift (Barbell)", 180, "deadlift_180", "180kg Kreuzheben", "180kg Deadlift", "180kg Kreuzheben — Biest!", "180kg deadlift — Beast!", "💀"),
-        ("Deadlift (Barbell)", 220, "deadlift_220", "220kg Kreuzheben", "220kg Deadlift", "220kg Kreuzheben — Legendenstatus!", "220kg deadlift — Legendary!", "💀"),
-        ("Overhead Press (Barbell)", 60, "ohp_60", "60kg OHP", "60kg OHP", "60kg Overhead Press!", "60kg overhead press!", "🙌"),
-        ("Overhead Press (Barbell)", 80, "ohp_80", "80kg OHP", "80kg OHP", "80kg Overhead Press — stark!", "80kg OHP — strong!", "🙌"),
-    ]
-
-    for ex_name, target_kg, aid, name_de, name_en, desc_de, desc_en, icon in strength_targets:
-        # Check all exercise name variants
-        max_weight = 0
+    def _max_weight(keyword: str) -> float:
+        best = 0.0
         for ename, data_list in all_exercises.items():
-            if ex_name.lower() in ename.lower():
+            if keyword.lower() in ename.lower():
                 for d in data_list:
-                    if d["weight"] > max_weight:
-                        max_weight = d["weight"]
-        achievements.append({
-            "id": aid,
-            "name_de": name_de, "name_en": name_en,
-            "desc_de": desc_de, "desc_en": desc_en,
-            "icon": icon,
-            "category": "strength",
-            "unlocked": max_weight >= target_kg,
-            "unlocked_date": None,
-            "progress": min(round(max_weight), target_kg),
-            "target": target_kg,
-        })
+                    if d["weight"] > best:
+                        best = d["weight"]
+        return best
 
-    # ── NUTRITION ACHIEVEMENTS ──
-    nutrition_milestones = [
-        (7, "7_days_tracked", "Eine Woche getrackt", "One Week Tracked", "7 Tage Ernährung getrackt!", "7 days of nutrition tracked!", "🥗"),
-        (30, "30_days_tracked", "Ein Monat getrackt", "One Month Tracked", "30 Tage getrackt — top Disziplin!", "30 days tracked — great discipline!", "📊"),
-        (90, "90_days_tracked", "Quartals-Tracker", "Quarterly Tracker", "90 Tage Ernährung getrackt!", "90 days tracked!", "📈"),
-        (180, "180_days_tracked", "Halb-Jahres-Tracker", "Half Year Tracker", "180 Tage — ein halbes Jahr Ernährungstracking!", "180 days — half a year of tracking!", "🌟"),
-        (365, "365_days_tracked", "Jahres-Tracker", "Year Tracker", "365 Tage — ein ganzes Jahr getrackt!", "365 days tracked — a full year!", "👑"),
-    ]
-    for target, aid, name_de, name_en, desc_de, desc_en, icon in nutrition_milestones:
+    def _max_e1rm(keyword: str) -> float:
+        best = 0.0
+        for ename, data_list in all_exercises.items():
+            if keyword.lower() in ename.lower():
+                for d in data_list:
+                    if d["e1rm"] > best:
+                        best = d["e1rm"]
+        return best
+
+    def badge(aid, name_de, name_en, desc_de, desc_en, icon, category, unlocked, progress, target):
         achievements.append({
             "id": aid,
             "name_de": name_de, "name_en": name_en,
             "desc_de": desc_de, "desc_en": desc_en,
             "icon": icon,
-            "category": "nutrition",
-            "unlocked": total_nutrition_days >= target,
+            "category": category,
+            "unlocked": unlocked,
             "unlocked_date": None,
-            "progress": min(total_nutrition_days, target),
+            "progress": min(progress, target),
             "target": target,
         })
 
-    # ── PROTEIN TARGET ACHIEVEMENTS ──
-    protein_target_days = 0
-    for d, nutr in nutrition_by_date.items():
-        protein_goal = nutr.get("goals", {}).get("protein", 0)
-        actual_protein = nutr.get("protein", 0)
-        if protein_goal > 0 and actual_protein >= protein_goal * 0.95:
-            protein_target_days += 1
+    # ════════════════════════════════════════════
+    #  TRAINING — Session count
+    # ════════════════════════════════════════════
+    for target, aid, n_de, n_en, d_de, d_en, ico in [
+        (1,   "first_workout",  "Erste Session",  "First Session",   "Du hast angefangen. Das zählt.",              "You started. That counts.",                    "🔨"),
+        (10,  "10_workouts",    "10 Sessions",     "10 Sessions",     "10 Workouts in den Knochen.",                 "10 workouts in the books.",                    "💪"),
+        (25,  "25_workouts",    "25 Sessions",     "25 Sessions",     "Kein Zufall mehr — das ist Gewohnheit.",      "Not a coincidence anymore — it's a habit.",    "🔥"),
+        (50,  "50_workouts",    "50 Sessions",     "50 Sessions",     "Halbe Hundert. Du meinst es ernst.",          "Fifty sessions. You mean business.",           "⚡"),
+        (100, "100_workouts",   "Century",         "Century",         "100 Sessions. Die meisten hören vorher auf.", "100 sessions. Most people quit before this.",  "🏆"),
+        (200, "200_workouts",   "200 Sessions",    "200 Sessions",    "200 Workouts. Das Gym ist dein Zuhause.",     "200 workouts. The gym is home.",               "👑"),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, ico, "training",
+              total_workouts >= target, min(total_workouts, target), target)
 
-    prot_milestones = [
-        (7, "protein_7", "Protein-Woche", "Protein Week", "7 Tage Protein-Ziel erreicht!", "Hit protein target 7 days!", "🥩"),
-        (30, "protein_30", "Protein-Monat", "Protein Month", "30 Tage Protein-Ziel — Muskeln sagen danke!", "30 days protein target — muscles say thanks!", "🥩"),
-        (100, "protein_100", "Protein-Maschine", "Protein Machine", "100 Tage Protein-Ziel erreicht!", "100 days hitting protein target!", "🥩"),
-    ]
-    for target, aid, name_de, name_en, desc_de, desc_en, icon in prot_milestones:
-        achievements.append({
-            "id": aid,
-            "name_de": name_de, "name_en": name_en,
-            "desc_de": desc_de, "desc_en": desc_en,
-            "icon": icon,
-            "category": "nutrition",
-            "unlocked": protein_target_days >= target,
-            "unlocked_date": None,
-            "progress": min(protein_target_days, target),
-            "target": target,
-        })
+    # ════════════════════════════════════════════
+    #  TRAINING — Total volume
+    # ════════════════════════════════════════════
+    for target, aid, n_de, n_en, d_de, d_en, ico in [
+        (10_000,   "vol_10k",  "10 Tonnen",       "10 Tons",        "10.000 kg bewegt. Gut warm.",             "10,000 kg moved. Just warming up.",         "⚡"),
+        (50_000,   "vol_50k",  "50 Tonnen",       "50 Tons",        "50.000 kg — einen LKW gehoben.",          "50,000 kg — you lifted a truck.",           "🚛"),
+        (150_000,  "vol_150k", "150 Tonnen",      "150 Tons",       "150.000 kg Volumen. Nachhaltig.",          "150,000 kg volume. Consistent work.",       "💎"),
+        (500_000,  "vol_500k", "500 Tonnen",      "500 Tons",       "500.000 kg. Absolute Hingabe.",            "500,000 kg. Absolute dedication.",          "🌟"),
+        (1_000_000,"vol_1m",   "Eine Million kg", "One Million kg", "1.000.000 kg. Respekt, kein anderes Wort.","1,000,000 kg. Respect, no other word.",     "🔱"),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, ico, "training",
+              total_volume_all_time >= target, min(round(total_volume_all_time), target), target)
 
-    # ── STREAK ACHIEVEMENTS ──
-    training_weeks = set()
-    for d in workout_dates:
-        try:
-            dt = datetime.strptime(d, "%Y-%m-%d").date()
-            iso = dt.isocalendar()
-            training_weeks.add((iso[0], iso[1]))
-        except Exception:
-            continue
+    # ════════════════════════════════════════════
+    #  STRENGTH — Relative to bodyweight (67 kg)
+    #  Using actual heaviest set weight lifted
+    # ════════════════════════════════════════════
 
-    # Compute longest training streak
+    # Bench Press — 0.75×BW → 1×BW → 1.25×BW → 1.5×BW → 1.75×BW
+    bench_w = _max_weight("bench press")
+    for target_kg, aid, n_de, n_en, d_de, d_en in [
+        (round(BW * 0.75), "bench_75bw",  "Bank 0.75× KG",  "Bench 0.75× BW",  f"{round(BW*0.75)}kg Bankdrücken — guter Einstieg.",         f"{round(BW*0.75)}kg bench — solid start."),
+        (round(BW * 1.0),  "bench_1bw",   "Körpergewicht Bank", "Bodyweight Bench", f"{round(BW)}kg Bankdrücken — das eigene Gewicht. Benchmark.",f"{round(BW)}kg bench — your own bodyweight."),
+        (round(BW * 1.25), "bench_125bw", "Bank 1.25× KG",  "Bench 1.25× BW",  f"{round(BW*1.25)}kg Bank — du drückst ordentlich.",         f"{round(BW*1.25)}kg bench — you're pressing seriously."),
+        (round(BW * 1.5),  "bench_150bw", "Bank 1.5× KG",   "Bench 1.5× BW",   f"{round(BW*1.5)}kg Bank — Top 15% weltweit für dein Gewicht.",f"{round(BW*1.5)}kg bench — top 15% for your weight class."),
+        (round(BW * 1.75), "bench_175bw", "Bank 1.75× KG",  "Bench 1.75× BW",  f"{round(BW*1.75)}kg Bank — Elite-Niveau.",                  f"{round(BW*1.75)}kg bench — elite level."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "🏋️", "strength",
+              bench_w >= target_kg, min(round(bench_w), target_kg), target_kg)
+
+    # Squat — 1×BW → 1.5×BW → 2×BW → 2.25×BW
+    squat_w = _max_weight("squat")
+    for target_kg, aid, n_de, n_en, d_de, d_en in [
+        (round(BW * 1.0),  "squat_1bw",   "Kniebeuge KG",    "Bodyweight Squat", f"{round(BW)}kg Kniebeuge — eigenes Gewicht gesquattet.",    f"{round(BW)}kg squat — your bodyweight."),
+        (round(BW * 1.5),  "squat_15bw",  "Kniebeuge 1.5× KG","Squat 1.5× BW",  f"{round(BW*1.5)}kg Kniebeuge — stärker als 70% der Gym-Nutzer.", f"{round(BW*1.5)}kg squat — stronger than 70%."),
+        (round(BW * 2.0),  "squat_2bw",   "Kniebeuge 2× KG", "Squat 2× BW",     f"{round(BW*2.0)}kg Kniebeuge — Advanced-Niveau.",           f"{round(BW*2.0)}kg squat — advanced level."),
+        (round(BW * 2.25), "squat_225bw", "Kniebeuge 2.25× KG","Squat 2.25× BW", f"{round(BW*2.25)}kg Kniebeuge — Elite-Quads.",              f"{round(BW*2.25)}kg squat — elite quads."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "🦵", "strength",
+              squat_w >= target_kg, min(round(squat_w), target_kg), target_kg)
+
+    # Deadlift — 1.5×BW → 2×BW → 2.5×BW → 3×BW
+    dl_w = _max_weight("deadlift")
+    for target_kg, aid, n_de, n_en, d_de, d_en in [
+        (round(BW * 1.5),  "dl_15bw",  "Kreuzheben 1.5× KG", "Deadlift 1.5× BW",  f"{round(BW*1.5)}kg Kreuzheben — solide Basis.",               f"{round(BW*1.5)}kg deadlift — solid foundation."),
+        (round(BW * 2.0),  "dl_2bw",   "Doppeltes KG",        "Double Bodyweight",  f"{round(BW*2.0)}kg Kreuzheben — doppeltes Körpergewicht.",     f"{round(BW*2.0)}kg deadlift — double bodyweight."),
+        (round(BW * 2.5),  "dl_25bw",  "Kreuzheben 2.5× KG", "Deadlift 2.5× BW",  f"{round(BW*2.5)}kg Kreuzheben — Top 10% für dein Gewicht.",    f"{round(BW*2.5)}kg deadlift — top 10% for your weight."),
+        (round(BW * 3.0),  "dl_3bw",   "Dreifaches KG",       "Triple Bodyweight",  f"{round(BW*3.0)}kg Kreuzheben — das ist Kraftsport auf höchstem Niveau.", f"{round(BW*3.0)}kg deadlift — elite powerlifting territory."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "💀", "strength",
+              dl_w >= target_kg, min(round(dl_w), target_kg), target_kg)
+
+    # OHP — 0.5×BW → 0.75×BW → 1×BW → 1.2×BW
+    ohp_w = _max_weight("overhead press")
+    for target_kg, aid, n_de, n_en, d_de, d_en in [
+        (round(BW * 0.5),  "ohp_05bw",  "OHP 0.5× KG",  "OHP 0.5× BW",  f"{round(BW*0.5)}kg OHP — die halbe Miete.",                  f"{round(BW*0.5)}kg OHP — halfway there."),
+        (round(BW * 0.75), "ohp_075bw", "OHP 0.75× KG", "OHP 0.75× BW", f"{round(BW*0.75)}kg OHP — starke Schultern.",                f"{round(BW*0.75)}kg OHP — strong shoulders."),
+        (round(BW * 1.0),  "ohp_1bw",   "OHP Körpergewicht","OHP Bodyweight",f"{round(BW)}kg OHP — das eigene Gewicht über den Kopf. Respekt.", f"{round(BW)}kg OHP — bodyweight overhead. Respect."),
+        (round(BW * 1.2),  "ohp_12bw",  "OHP 1.2× KG",  "OHP 1.2× BW",  f"{round(BW*1.2)}kg OHP — Elite-Schultern.",                  f"{round(BW*1.2)}kg OHP — elite shoulders."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "🙌", "strength",
+              ohp_w >= target_kg, min(round(ohp_w), target_kg), target_kg)
+
+    # Pull-ups — bodyweight reps milestones
+    pullup_max_reps = 0
+    for ename, data_list in all_exercises.items():
+        if "pull" in ename.lower() and ("up" in ename.lower() or "chin" in ename.lower()):
+            for d in data_list:
+                if d["weight"] == 0 or d["weight"] < 5:  # bodyweight or near
+                    if d["reps"] > pullup_max_reps:
+                        pullup_max_reps = d["reps"]
+
+    for target_reps, aid, n_de, n_en, d_de, d_en in [
+        (5,  "pullup_5",  "5 Klimmzüge",  "5 Pull-ups",  "5 saubere Klimmzüge am Stück.",              "5 clean pull-ups in a row."),
+        (10, "pullup_10", "10 Klimmzüge", "10 Pull-ups", "10 Klimmzüge — das ist Rückenpower.",        "10 pull-ups — that's back strength."),
+        (15, "pullup_15", "15 Klimmzüge", "15 Pull-ups", "15 Klimmzüge am Stück — Elite-Calisthenics.", "15 pull-ups in a row — elite."),
+        (20, "pullup_20", "20 Klimmzüge", "20 Pull-ups", "20 Klimmzüge — absoluter Ausnahmeathlet.",   "20 pull-ups — exceptional athlete."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "🐒", "strength",
+              pullup_max_reps >= target_reps, min(pullup_max_reps, target_reps), target_reps)
+
+    # ════════════════════════════════════════════
+    #  NUTRITION — Days tracked
+    # ════════════════════════════════════════════
+    for target, aid, n_de, n_en, d_de, d_en, ico in [
+        (7,   "tracked_7",   "Eine Woche",    "One Week",      "7 Tage durchgezogen.",              "7 days straight.",                      "🥗"),
+        (30,  "tracked_30",  "Ein Monat",     "One Month",     "30 Tage getrackt. Disziplin.",      "30 days tracked. Discipline.",          "📊"),
+        (90,  "tracked_90",  "3 Monate",      "3 Months",      "90 Tage — das wird zur Routine.",   "90 days — becoming routine.",           "📈"),
+        (180, "tracked_180", "Halbes Jahr",   "Half a Year",   "180 Tage Tracking. Konsequent.",    "180 days of tracking. Consistent.",     "🌟"),
+        (365, "tracked_365", "Ein ganzes Jahr","Full Year",    "365 Tage getrackt. Das ist selten.", "365 days tracked. That's rare.",        "👑"),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, ico, "nutrition",
+              total_nutrition_days >= target, min(total_nutrition_days, target), target)
+
+    # ── Protein target days ──
+    protein_target_days = sum(
+        1 for nutr in nutrition_by_date.values()
+        if nutr.get("goals", {}).get("protein", 0) > 0
+        and nutr.get("protein", 0) >= nutr["goals"]["protein"] * 0.95
+    )
+    for target, aid, n_de, n_en, d_de, d_en, ico in [
+        (7,   "prot_7",   "Protein-Woche",    "Protein Week",    "7× Protein-Ziel getroffen.",           "7 days hitting protein target.",      "🥩"),
+        (30,  "prot_30",  "Protein-Monat",    "Protein Month",   "30× Protein-Ziel — Muskeln sagen Danke.", "30 days — muscles say thanks.",    "🥩"),
+        (100, "prot_100", "Protein-Maschine", "Protein Machine", "100 Tage Protein-Ziel. Konsequent.",  "100 days hitting protein. Consistent.", "🥩"),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, ico, "nutrition",
+              protein_target_days >= target, min(protein_target_days, target), target)
+
+    # ════════════════════════════════════════════
+    #  CONSISTENCY — Weekly training streaks
+    # ════════════════════════════════════════════
     training_streak = compute_weekly_streaks(workout_dates, nutrition_dates)
     longest_training = training_streak["training"]["longest_streak"]
-    longest_combined = training_streak["combined"]["longest_streak"]
 
-    streak_milestones = [
-        (4, "streak_4", "4-Wochen-Streak", "4 Week Streak", "4 Wochen am Stück trainiert!", "4 consecutive weeks of training!", "🔥"),
-        (8, "streak_8", "8-Wochen-Streak", "8 Week Streak", "8 Wochen am Stück — Gewohnheit geformt!", "8 weeks straight — habit formed!", "🔥"),
-        (12, "streak_12", "Quartals-Streak", "Quarter Streak", "12 Wochen Streak — nichts hält dich auf!", "12 week streak — unstoppable!", "💫"),
-        (26, "streak_26", "Halbjahres-Streak", "Half Year Streak", "26 Wochen Streak — Lifestyle!", "26 week streak — lifestyle!", "⭐"),
-        (52, "streak_52", "Jahres-Streak", "Year Streak", "52 Wochen — ein ganzes Jahr durchgezogen!", "52 week streak — a full year!", "👑"),
-    ]
-    for target, aid, name_de, name_en, desc_de, desc_en, icon in streak_milestones:
-        achievements.append({
-            "id": aid,
-            "name_de": name_de, "name_en": name_en,
-            "desc_de": desc_de, "desc_en": desc_en,
-            "icon": icon,
-            "category": "consistency",
-            "unlocked": longest_training >= target,
-            "unlocked_date": None,
-            "progress": min(longest_training, target),
-            "target": target,
-        })
+    for target, aid, n_de, n_en, d_de, d_en, ico in [
+        (2,  "streak_2",  "2 Wochen",        "2 Weeks",          "2 Wochen am Stück. Anlauf genommen.",     "2 weeks straight. Momentum building.",    "🔥"),
+        (4,  "streak_4",  "4 Wochen",        "4 Weeks",          "4 Wochen — ein Monat ohne Pause.",        "4 weeks — a full month without missing.", "🔥"),
+        (8,  "streak_8",  "8 Wochen",        "8 Weeks",          "8 Wochen — Gewohnheit ist geformt.",      "8 weeks — habit is formed.",              "💫"),
+        (12, "streak_12", "12 Wochen",       "12 Weeks",         "12 Wochen Streak. Nichts hält dich auf.", "12 week streak. Nothing stops you.",      "⭐"),
+        (26, "streak_26", "Halbes Jahr",     "Half Year",        "26 Wochen — Fitness als Lebensweise.",    "26 weeks — fitness as a lifestyle.",      "🌟"),
+        (52, "streak_52", "52 Wochen",       "52 Weeks",         "Ein Jahr durchgezogen. Das ist selten.",  "A full year. That's rare.",               "👑"),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, ico, "consistency",
+              longest_training >= target, min(longest_training, target), target)
 
-    # ── WEIGHT ACHIEVEMENTS ──
+    # ════════════════════════════════════════════
+    #  BODY — Weight tracking milestones
+    # ════════════════════════════════════════════
     if weight_entries and len(weight_entries) >= 2:
         first_w = weight_entries[0]["weight_kg"]
         last_w = weight_entries[-1]["weight_kg"]
         total_change = abs(round(last_w - first_w, 1))
+        for target, aid, n_de, n_en, d_de, d_en in [
+            (1,  "body_1kg",  "1kg bewegt",      "1kg Changed",    "1kg Körpergewicht verändert.",          "1kg body weight change."),
+            (3,  "body_3kg",  "3kg Transformation","3kg Transform", "3kg — der Körper formt sich.",          "3kg — the body is changing."),
+            (5,  "body_5kg",  "5kg Transformation","5kg Transform", "5kg Veränderung — sichtbarer Fortschritt.", "5kg — visible progress."),
+            (8,  "body_8kg",  "8kg Transformation","8kg Transform", "8kg — das ist eine echte Transformation.", "8kg — that's a real transformation."),
+        ]:
+            badge(aid, n_de, n_en, d_de, d_en, "⚖️", "body",
+                  total_change >= target, min(round(total_change, 1), target), target)
 
-        weight_milestones = [
-            (2, "weight_2kg", "2kg Veränderung", "2kg Change", "2kg Gewichtsveränderung!", "2kg body weight change!", "⚖️"),
-            (5, "weight_5kg", "5kg Veränderung", "5kg Change", "5kg Körpergewicht verändert!", "5kg body weight change!", "⚖️"),
-            (10, "weight_10kg", "10kg Transformation", "10kg Transform", "10kg — das ist eine Transformation!", "10kg — that's a transformation!", "🔄"),
-        ]
-        for target, aid, name_de, name_en, desc_de, desc_en, icon in weight_milestones:
-            achievements.append({
-                "id": aid,
-                "name_de": name_de, "name_en": name_en,
-                "desc_de": desc_de, "desc_en": desc_en,
-                "icon": icon,
-                "category": "body",
-                "unlocked": total_change >= target,
-                "unlocked_date": None,
-                "progress": min(round(total_change, 1), target),
-                "target": target,
-            })
+    # ── Consistency in weighing: days with weight entries ──
+    weight_tracked_days = len(weight_entries)
+    for target, aid, n_de, n_en, d_de, d_en in [
+        (14, "weigh_14", "14× gewogen",    "14 Weigh-ins",   "14 Tage Gewicht getrackt.",          "14 days of weight tracking."),
+        (60, "weigh_60", "60× gewogen",    "60 Weigh-ins",   "60 Tage Gewicht eingetragen. Daten.", "60 days of weight data. Solid."),
+        (180,"weigh_180","180× gewogen",   "180 Weigh-ins",  "180 Tage Waage. Konsequent.",        "180 weigh-ins. Consistent."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "📏", "body",
+              weight_tracked_days >= target, min(weight_tracked_days, target), target)
 
-    # ── EXERCISE VARIETY ──
-    unique_exercises = len(all_exercises)
-    variety_milestones = [
-        (10, "variety_10", "10 Übungen", "10 Exercises", "10 verschiedene Übungen gemacht!", "Performed 10 different exercises!", "🎯"),
-        (25, "variety_25", "25 Übungen", "25 Exercises", "25 verschiedene Übungen — vielseitig!", "25 different exercises — versatile!", "🎯"),
-        (50, "variety_50", "50 Übungen", "50 Exercises", "50 verschiedene Übungen — komplett!", "50 different exercises — complete!", "🎯"),
-    ]
-    for target, aid, name_de, name_en, desc_de, desc_en, icon in variety_milestones:
-        achievements.append({
-            "id": aid,
-            "name_de": name_de, "name_en": name_en,
-            "desc_de": desc_de, "desc_en": desc_en,
-            "icon": icon,
-            "category": "training",
-            "unlocked": unique_exercises >= target,
-            "unlocked_date": None,
-            "progress": min(unique_exercises, target),
-            "target": target,
-        })
+    # ════════════════════════════════════════════
+    #  TRAINING — Exercise variety
+    # ════════════════════════════════════════════
+    for target, aid, n_de, n_en, d_de, d_en in [
+        (10, "var_10", "10 Übungen",  "10 Exercises", "10 verschiedene Übungen. Vielseitig.",       "10 different exercises. Versatile."),
+        (25, "var_25", "25 Übungen",  "25 Exercises", "25 Übungen — du kennst dich aus.",           "25 exercises — you know your stuff."),
+        (50, "var_50", "50 Übungen",  "50 Exercises", "50 Übungen — kein blinder Fleck mehr.",      "50 exercises — no blind spots left."),
+    ]:
+        badge(aid, n_de, n_en, d_de, d_en, "🎯", "training",
+              unique_exercises >= target, min(unique_exercises, target), target)
 
     return achievements
