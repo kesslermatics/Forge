@@ -598,6 +598,7 @@ export interface ForgeMachineProfile {
 }
 
 export interface ForgeMachineProfileInput {
+  id?: string;
   name: string;
   model?: string | null;
   notes?: string | null;
@@ -636,6 +637,7 @@ export interface ForgeExerciseHistorySession {
   name: string;
   completed_at: string;
   started_at: string;
+  machine_profile_id: string | null;
   machine_profile_name: string | null;
   sets: ForgeExerciseHistorySet[];
 }
@@ -701,7 +703,10 @@ export interface ForgePlanInput {
 }
 
 export const getForgeExercises = () => apiRequest<ForgeExercise[]>('/api/forge/exercises');
-export const getForgeExerciseHistory = (id: string) => apiRequest<ForgeExerciseHistory>(`/api/forge/exercises/${id}/history`);
+export const getForgeExerciseHistory = (id: string, machineProfileId?: string | null) => {
+  const query = machineProfileId ? `?machine_profile_id=${encodeURIComponent(machineProfileId)}` : '';
+  return apiRequest<ForgeExerciseHistory>(`/api/forge/exercises/${id}/history${query}`);
+};
 export const createForgeExercise = (data: ForgeExerciseInput) =>
   apiRequest<ForgeExercise>('/api/forge/exercises', { method: 'POST', body: JSON.stringify(data) });
 export const updateForgeExercise = (id: string, data: ForgeExerciseInput) =>
@@ -796,6 +801,7 @@ export interface ForgeSessionCoachGuidance {
 export interface ForgeSessionExercise {
   id: string;
   source_exercise_id: string | null;
+  machine_profile_id: string | null;
   name: string;
   icon: string;
   equipment: ForgeEquipment;
@@ -864,7 +870,7 @@ export const listForgeSessions = (limit = 50, offset = 0) =>
 export const getForgeSession = (id: string) => apiRequest<ForgeSession>(`/api/forge/sessions/${id}`);
 export const deleteForgeSession = (id: string) =>
   apiRequest<void>(`/api/forge/sessions/${id}`, { method: 'DELETE' });
-export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_name?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>
+export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_id?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises`, { method: 'POST', body: JSON.stringify(data) });
 export const updateForgeSessionSet = (sessionId: string, setId: string, data: ForgeSessionSetInput) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/sets/${setId}`, { method: 'PATCH', body: JSON.stringify(data) });
@@ -883,7 +889,7 @@ export const applyForgeSessionAction = (sessionId: string, message_id: string) =
 export const dismissForgeSessionAction = (sessionId: string, message_id: string) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/actions/dismiss`, { method: 'POST', body: JSON.stringify({ message_id }) });
 
-export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId: string, data: { machine_profile_name?: string | null; notes?: string | null }) =>
+export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId: string, data: { machine_profile_id?: string | null; notes?: string | null }) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}`, { method: 'PATCH', body: JSON.stringify(data) });
 
 export const refreshForgePlanCoachTargets = (planId: string) =>

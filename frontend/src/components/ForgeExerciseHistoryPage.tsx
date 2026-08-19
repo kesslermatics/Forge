@@ -28,14 +28,15 @@ export default function ForgeExerciseHistoryPage() {
   const { exerciseId } = useParams<{ exerciseId: string }>();
   const navigate = useNavigate();
   const [history, setHistory] = useState<ForgeExerciseHistory | null>(null);
+  const [machineProfileId, setMachineProfileId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!exerciseId) return;
-    getForgeExerciseHistory(exerciseId)
+    getForgeExerciseHistory(exerciseId, machineProfileId)
       .then(setHistory)
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Übungshistorie konnte nicht geladen werden.'));
-  }, [exerciseId]);
+  }, [exerciseId, machineProfileId]);
 
   const chartData = useMemo(() => (history?.sessions ?? []).slice().reverse().flatMap((session) => {
     const logged = session.sets.filter((set) => set.actual_weight_kg != null && set.actual_reps != null);
@@ -58,7 +59,7 @@ export default function ForgeExerciseHistoryPage() {
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start gap-3">
       <button onClick={() => navigate('/forge')} className="tap mt-1 cursor-pointer" style={{ color: DIM }} aria-label="Zurück zu Übungen"><ArrowLeft size={18} /></button>
-      <div className="min-w-0"><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Übungshistorie</p><h1 className="text-[23px] font-semibold tracking-tight mt-1 truncate" style={{ color: TEXT }}>{exercise.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{exercise.primary_muscle_group} · {sessions.length} abgeschlossene {sessions.length === 1 ? 'Session' : 'Sessions'}</p></div>
+      <div className="min-w-0 flex-1"><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Übungshistorie</p><h1 className="text-[23px] font-semibold tracking-tight mt-1 truncate" style={{ color: TEXT }}>{exercise.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{exercise.primary_muscle_group} · {sessions.length} abgeschlossene {sessions.length === 1 ? 'Session' : 'Sessions'}</p>{exercise.machine_profiles.length > 0 && <select value={machineProfileId ?? ''} onChange={(event) => setMachineProfileId(event.target.value || null)} className="mt-2 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Alle Maschinenprofile</option>{exercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select>}</div>
     </header>
 
     <section className="card-forge p-4" style={{ borderColor: `${SAND}24` }}>
@@ -68,7 +69,7 @@ export default function ForgeExerciseHistoryPage() {
     </section>
 
     <section className="space-y-2"><div className="flex items-center justify-between px-1"><h2 className="text-[14px] font-semibold" style={{ color: TEXT }}>Geloggte Sätze</h2><span className="text-[11px]" style={{ color: DIM }}>{sessions.length} Einträge</span></div>
-      {sessions.length ? sessions.map((session) => <article key={`${session.id}-${session.machine_profile_name ?? ''}`} className="card-forge overflow-hidden"><div className="p-4 flex items-start justify-between gap-3"><div><p className="text-[13px] font-medium" style={{ color: TEXT }}>{session.name}</p><p className="text-[11px] mt-1" style={{ color: DIM }}>{fullDate(session.completed_at || session.started_at)}{session.machine_profile_name ? ` · ${session.machine_profile_name}` : ''}</p></div><span className="text-[10px] uppercase tracking-wider" style={{ color: SAND }}>{session.sets.filter((set) => set.actual_weight_kg != null && set.actual_reps != null).length} Sätze</span></div><div className="border-t" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '52px 1fr 1fr', color: DIM }}><span>Satz</span><span className="text-center">Geloggte Leistung</span><span className="text-right">e1RM</span></div>{session.sets.map((set, index) => { const e1rm = estimatedOneRepMax(set); return <div key={set.position} className="grid px-4 py-2.5 text-[12px] tabular-nums" style={{ gridTemplateColumns: '52px 1fr 1fr', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}><span style={{ color: DIM }}>{set.set_type === 'warmup' ? 'Warm-up' : `Satz ${set.position + 1}`}</span><span className="text-center font-medium" style={{ color: set.actual_weight_kg != null && set.actual_reps != null ? TEXT : DIM }}>{formatLoad(set.actual_weight_kg, set.actual_reps)}</span><span className="text-right" style={{ color: e1rm != null ? MINT : DIM }}>{e1rm != null ? `${e1rm.toFixed(1)} kg` : '—'}</span>{set.note && <p className="col-span-3 pt-1 text-[10px]" style={{ color: DIM }}>{set.note}</p>}</div>; })}</div></article>) : <div className="card-forge p-6 text-center text-[12px]" style={{ color: DIM }}>Schließe eine Forge-Session mit dieser Übung ab, dann erscheint sie hier.</div>}
+      {sessions.length ? sessions.map((session) => <article key={`${session.id}-${session.machine_profile_id ?? 'unprofiled'}`} className="card-forge overflow-hidden"><div className="p-4 flex items-start justify-between gap-3"><div><p className="text-[13px] font-medium" style={{ color: TEXT }}>{session.name}</p><p className="text-[11px] mt-1" style={{ color: DIM }}>{fullDate(session.completed_at || session.started_at)}{session.machine_profile_name ? ` · ${session.machine_profile_name}` : ''}</p></div><span className="text-[10px] uppercase tracking-wider" style={{ color: SAND }}>{session.sets.filter((set) => set.actual_weight_kg != null && set.actual_reps != null).length} Sätze</span></div><div className="border-t" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '52px 1fr 1fr', color: DIM }}><span>Satz</span><span className="text-center">Geloggte Leistung</span><span className="text-right">e1RM</span></div>{session.sets.map((set, index) => { const e1rm = estimatedOneRepMax(set); return <div key={set.position} className="grid px-4 py-2.5 text-[12px] tabular-nums" style={{ gridTemplateColumns: '52px 1fr 1fr', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}><span style={{ color: DIM }}>{set.set_type === 'warmup' ? 'Warm-up' : `Satz ${set.position + 1}`}</span><span className="text-center font-medium" style={{ color: set.actual_weight_kg != null && set.actual_reps != null ? TEXT : DIM }}>{formatLoad(set.actual_weight_kg, set.actual_reps)}</span><span className="text-right" style={{ color: e1rm != null ? MINT : DIM }}>{e1rm != null ? `${e1rm.toFixed(1)} kg` : '—'}</span>{set.note && <p className="col-span-3 pt-1 text-[10px]" style={{ color: DIM }}>{set.note}</p>}</div>; })}</div></article>) : <div className="card-forge p-6 text-center text-[12px]" style={{ color: DIM }}>Schließe eine Forge-Session mit dieser Übung ab, dann erscheint sie hier.</div>}
     </section>
   </div>;
 }

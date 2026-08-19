@@ -122,16 +122,33 @@ def _validate_exercise_input(data: ForgeExerciseInput) -> None:
 
 def _apply_exercise_input(exercise: ForgeExercise, data: ForgeExerciseInput) -> None:
     _validate_exercise_input(data)
+    profile_names = [profile.name.strip().lower() for profile in data.machine_profiles]
+    if len(profile_names) != len(set(profile_names)):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile names must be unique per exercise.")
+
     exercise.name = data.name.strip()
     exercise.icon = data.icon.strip()
     exercise.equipment = data.equipment
     exercise.primary_muscle_group = data.primary_muscle_group.strip()
     exercise.secondary_muscle_groups = [group.strip() for group in data.secondary_muscle_groups]
-    exercise.machine_profiles.clear()
-    for profile in data.machine_profiles:
-        exercise.machine_profiles.append(
-            ForgeMachineProfile(name=profile.name.strip(), model=profile.model, notes=profile.notes)
-        )
+
+    existing_profiles = {profile.id: profile for profile in exercise.machine_profiles}
+    supplied_profile_ids = {profile.id for profile in data.machine_profiles if profile.id is not None}
+    unknown_profile_ids = supplied_profile_ids - existing_profiles.keys()
+    if unknown_profile_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more machine profiles do not belong to this exercise.")
+
+    for profile in list(exercise.machine_profiles):
+        if profile.id not in supplied_profile_ids:
+            exercise.machine_profiles.remove(profile)
+    for profile_input in data.machine_profiles:
+        profile = existing_profiles.get(profile_input.id) if profile_input.id is not None else None
+        if profile is None:
+            profile = ForgeMachineProfile()
+            exercise.machine_profiles.append(profile)
+        profile.name = profile_input.name.strip()
+        profile.model = profile_input.model
+        profile.notes = profile_input.notes
 
 
 def _owned_exercises(db: Session, user_id: UUID, exercise_ids: list[UUID]) -> dict[UUID, ForgeExercise]:
@@ -196,7 +213,12 @@ async def list_exercises(
 
 
 @router.get("/exercises/{exercise_id}/history", response_model=ForgeExerciseHistoryResponse)
-async def get_exercise_history(exercise_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_exercise_history(
+    exercise_id: UUID,
+    machine_profile_id: UUID | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Return actual logged sets from completed native Forge sessions for one library exercise."""
     exercise = db.query(ForgeExercise).filter(
         ForgeExercise.id == exercise_id,
@@ -204,14 +226,24 @@ async def get_exercise_history(exercise_id: UUID, current_user: User = Depends(g
     ).first()
     if exercise is None:
         raise _not_found("Exercise not found")
+    if machine_profile_id is not None:
+        profile = db.query(ForgeMachineProfile).filter(
+            ForgeMachineProfile.id == machine_profile_id,
+            ForgeMachineProfile.exercise_id == exercise.id,
+        ).first()
+        if profile is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile does not belong to this exercise.")
 
-    rows = db.query(ForgeWorkoutSession, ForgeSessionExercise).join(
+    rows_query = db.query(ForgeWorkoutSession, ForgeSessionExercise).join(
         ForgeSessionExercise, ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
     ).filter(
         ForgeWorkoutSession.user_id == current_user.id,
         ForgeWorkoutSession.status == "completed",
         ForgeSessionExercise.source_exercise_id == exercise_id,
-    ).order_by(ForgeWorkoutSession.completed_at.desc(), ForgeWorkoutSession.started_at.desc()).all()
+    )
+    if machine_profile_id is not None:
+        rows_query = rows_query.filter(ForgeSessionExercise.source_machine_profile_id == machine_profile_id)
+    rows = rows_query.order_by(ForgeWorkoutSession.completed_at.desc(), ForgeWorkoutSession.started_at.desc()).all()
 
     return {
         "exercise": _serialize_exercise(exercise),
@@ -221,6 +253,7 @@ async def get_exercise_history(exercise_id: UUID, current_user: User = Depends(g
                 "name": session.name,
                 "completed_at": session.completed_at,
                 "started_at": session.started_at,
+                "machine_profile_id": session_exercise.source_machine_profile_id,
                 "machine_profile_name": session_exercise.machine_profile_name,
                 "sets": [
                     {
@@ -272,7 +305,10 @@ async def update_exercise(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You already have an exercise with this name.")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An exercise name must be unique and profiles used by plans or sessions cannot be removed.",
+        )
     db.refresh(exercise)
     return _serialize_exercise(exercise)
 
@@ -432,6 +468,7 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
                 "equipment": exercise.equipment,
                 "primary_muscle_group": exercise.primary_muscle_group,
                 "secondary_muscle_groups": exercise.secondary_muscle_groups or [],
+                "machine_profile_id": exercise.source_machine_profile_id,
                 "machine_profile_name": exercise.machine_profile_name,
                 "notes": exercise.notes,
                 "coach_guidance": exercise.coach_guidance,
@@ -515,6 +552,27 @@ def _owned_session(db: Session, user_id: UUID, session_id: UUID) -> ForgeWorkout
     if session is None:
         raise _not_found("Session not found")
     return session
+
+
+def _session_machine_profile(
+    db: Session,
+    user_id: UUID,
+    source_exercise_id: UUID | None,
+    machine_profile_id: UUID | None,
+) -> ForgeMachineProfile | None:
+    """Resolve a submitted profile ID and verify it belongs to this user's source exercise."""
+    if machine_profile_id is None:
+        return None
+    if source_exercise_id is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A machine profile requires a library exercise.")
+    profile = db.query(ForgeMachineProfile).join(ForgeExercise).filter(
+        ForgeMachineProfile.id == machine_profile_id,
+        ForgeMachineProfile.exercise_id == source_exercise_id,
+        ForgeExercise.user_id == user_id,
+    ).first()
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile does not belong to this exercise.")
+    return profile
 
 
 def _apply_program_input(db: Session, program: ForgeTrainingProgram, data: ForgeProgramInput, user_id: UUID) -> None:
@@ -647,7 +705,8 @@ def _session_guidance_by_plan_exercise(plan: ForgeTrainingPlan, progression: dic
     guidance: dict[UUID, dict] = {}
     for position, plan_exercise in enumerate(plan.exercises):
         target = targets[position] if position < len(targets) else {}
-        progression_data = progression.get(plan_exercise.exercise.name.strip().lower(), {})
+        progression_key = _native_progression_key(plan_exercise.exercise.id, plan_exercise.machine_profile_id)
+        progression_data = progression.get(progression_key, {})
         progression_status = target.get("progression_status") or progression_data.get("signal") or "FIRST_SESSION"
         guidance[plan_exercise.id] = {
             "progression_status": progression_status,
@@ -669,6 +728,7 @@ def _snapshot_plan_into_session(plan: ForgeTrainingPlan, session: ForgeWorkoutSe
             equipment=exercise.equipment,
             primary_muscle_group=exercise.primary_muscle_group,
             secondary_muscle_groups=exercise.secondary_muscle_groups or [],
+            source_machine_profile_id=plan_exercise.machine_profile_id,
             machine_profile_name=plan_exercise.machine_profile.name if plan_exercise.machine_profile else None,
             notes=plan_exercise.notes,
             coach_guidance=guidance_by_plan_exercise.get(plan_exercise.id),
@@ -747,17 +807,16 @@ async def list_completed_sessions(
 async def delete_session(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Discard an active session or explicitly remove a completed history entry."""
     session = _owned_session(db, current_user.id, session_id)
-    source_plan = None
-    if session.status == "completed" and session.source_plan_id is not None:
-        source_plan = db.query(ForgeTrainingPlan).filter(
-            ForgeTrainingPlan.id == session.source_plan_id,
+    plans_to_refresh = []
+    if session.status == "completed":
+        plans_to_refresh = db.query(ForgeTrainingPlan).filter(
             ForgeTrainingPlan.user_id == current_user.id,
-        ).first()
+        ).all()
     db.delete(session)
     db.flush()
-    # Historical deletion changes the data behind persisted progression suggestions.
-    if source_plan is not None:
-        _refresh_native_coach_targets(db, current_user.id, source_plan)
+    # Completed-session history is shared by matching canonical exercise/profile IDs.
+    for plan in plans_to_refresh:
+        _refresh_native_coach_targets(db, current_user.id, plan)
     db.commit()
 
 
@@ -778,14 +837,21 @@ async def add_session_exercise(session_id: UUID, data: ForgeSessionExerciseInput
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Exercise does not belong to you.")
     if exercise is None and not (data.name or "").strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose a library exercise or supply a name.")
+    machine_profile = _session_machine_profile(
+        db,
+        current_user.id,
+        exercise.id if exercise else None,
+        data.machine_profile_id,
+    )
     session_exercise = ForgeSessionExercise(
         source_exercise_id=exercise.id if exercise else None,
+        source_machine_profile_id=machine_profile.id if machine_profile else None,
         name=exercise.name if exercise else data.name.strip(),
         icon=exercise.icon if exercise else "Dumbbell",
         equipment=exercise.equipment if exercise else "other",
         primary_muscle_group=exercise.primary_muscle_group if exercise else "Other",
         secondary_muscle_groups=exercise.secondary_muscle_groups if exercise else [],
-        machine_profile_name=data.machine_profile_name,
+        machine_profile_name=machine_profile.name if machine_profile else None,
         notes=data.notes,
         position=len(session.exercises),
     )
@@ -805,7 +871,17 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
     exercise = next((item for item in session.exercises if item.id == session_exercise_id), None)
     if exercise is None:
         raise _not_found("Session exercise not found")
-    for key, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    if "machine_profile_id" in updates:
+        machine_profile = _session_machine_profile(
+            db,
+            current_user.id,
+            exercise.source_exercise_id,
+            updates.pop("machine_profile_id"),
+        )
+        exercise.source_machine_profile_id = machine_profile.id if machine_profile else None
+        exercise.machine_profile_name = machine_profile.name if machine_profile else None
+    for key, value in updates.items():
         setattr(exercise, key, value)
     db.commit()
     db.refresh(session)
@@ -899,6 +975,9 @@ async def complete_session(session_id: UUID, current_user: User = Depends(get_cu
         current = session.program.routines[session.program.rotation_cursor % len(session.program.routines)]
         if current.plan_id == session.source_plan_id:
             session.program.rotation_cursor = (session.program.rotation_cursor + 1) % len(session.program.routines)
+    # A just-completed profile contributes to every plan that selects the same profile.
+    for plan in db.query(ForgeTrainingPlan).filter(ForgeTrainingPlan.user_id == current_user.id).all():
+        _refresh_native_coach_targets(db, current_user.id, plan)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -1057,6 +1136,13 @@ async def dismiss_session_action(session_id: UUID, data: ForgeApplySessionAction
 
 # ── Native-only progression adapter ─────────────────────────────────────────
 
+def _native_progression_key(exercise_id: UUID | None, machine_profile_id: UUID | None) -> str | None:
+    """Stable identity for native progression; labels remain immutable snapshots only."""
+    if exercise_id is None:
+        return None
+    return f"{exercise_id}:{machine_profile_id or 'unprofiled'}"
+
+
 def _native_plan_template(plan: ForgeTrainingPlan) -> list[dict]:
     """Normalize a native routine into the deterministic progression template shape."""
     template = []
@@ -1064,6 +1150,7 @@ def _native_plan_template(plan: ForgeTrainingPlan) -> list[dict]:
         note_parts = [part for part in [plan_exercise.notes, plan_exercise.machine_profile.notes if plan_exercise.machine_profile else None] if part]
         template.append({
             "title": plan_exercise.exercise.name,
+            "progression_key": _native_progression_key(plan_exercise.exercise.id, plan_exercise.machine_profile_id),
             "muscle_group": plan_exercise.exercise.primary_muscle_group,
             "notes": "\n".join(note_parts),
             "sets": [
@@ -1079,10 +1166,9 @@ def _native_plan_template(plan: ForgeTrainingPlan) -> list[dict]:
 
 
 def _native_completed_sessions(db: Session, user_id: UUID, plan: ForgeTrainingPlan) -> list[dict]:
-    """Return completed native sessions in the legacy-neutral shape used by progression."""
+    """Return all completed native sessions, keyed by canonical exercise and machine profile."""
     sessions = db.query(ForgeWorkoutSession).filter(
         ForgeWorkoutSession.user_id == user_id,
-        ForgeWorkoutSession.source_plan_id == plan.id,
         ForgeWorkoutSession.status == "completed",
     ).order_by(ForgeWorkoutSession.completed_at.desc()).all()
     return [
@@ -1093,6 +1179,7 @@ def _native_completed_sessions(db: Session, user_id: UUID, plan: ForgeTrainingPl
             "exercises": [
                 {
                     "title": exercise.name,
+                    "progression_key": _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id),
                     "muscle_group": exercise.primary_muscle_group,
                     "notes": exercise.notes or "",
                     "sets": [
@@ -1107,6 +1194,7 @@ def _native_completed_sessions(db: Session, user_id: UUID, plan: ForgeTrainingPl
                     ],
                 }
                 for exercise in session.exercises
+                if _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id) is not None
             ],
         }
         for session in sessions
@@ -1114,24 +1202,24 @@ def _native_completed_sessions(db: Session, user_id: UUID, plan: ForgeTrainingPl
 
 
 def _refresh_native_coach_targets(db: Session, user_id: UUID, plan: ForgeTrainingPlan) -> tuple[dict, list[dict]]:
-    """Persist previous performance and deterministic coach suggestions without Hevy."""
+    """Persist targets using a distinct history bucket for every selected machine profile."""
     template = _native_plan_template(plan)
     history = _native_completed_sessions(db, user_id, plan)
     progression = _compute_exercise_progression(history, template)
     targets = _build_deterministic_set_targets(template, progression, [])
-    targets_by_name = {target["name"].strip().lower(): target for target in targets}
+    targets_by_key = {target.get("progression_key"): target for target in targets}
 
-    latest_by_name: dict[str, dict] = {}
-    if history:
-        latest_by_name = {
-            exercise.get("title", "").strip().lower(): exercise
-            for exercise in history[0].get("exercises", [])
-        }
+    latest_by_key: dict[str, dict] = {}
+    for completed_session in history:
+        for exercise in completed_session.get("exercises", []):
+            progression_key = exercise.get("progression_key")
+            if progression_key and progression_key not in latest_by_key:
+                latest_by_key[progression_key] = exercise
 
     for plan_exercise in plan.exercises:
-        exercise_key = plan_exercise.exercise.name.strip().lower()
-        target = targets_by_name.get(exercise_key)
-        latest = latest_by_name.get(exercise_key, {})
+        progression_key = _native_progression_key(plan_exercise.exercise.id, plan_exercise.machine_profile_id)
+        target = targets_by_key.get(progression_key)
+        latest = latest_by_key.get(progression_key, {})
         latest_sets = latest.get("sets", [])
         target_sets = target.get("set_targets", []) if target else []
         for position, plan_set in enumerate(plan_exercise.sets):

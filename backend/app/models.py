@@ -150,6 +150,7 @@ class ForgeMachineProfile(Base):
 
     exercise = relationship("ForgeExercise", back_populates="machine_profiles")
     plan_exercises = relationship("ForgePlanExercise", back_populates="machine_profile")
+    session_exercises = relationship("ForgeSessionExercise", back_populates="machine_profile")
 
 
 class ForgeTrainingPlan(Base):
@@ -304,6 +305,7 @@ class ForgeSessionExercise(Base):
     session_id = Column(UUID(as_uuid=True), ForeignKey("forge_workout_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     source_exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_exercises.id", ondelete="SET NULL"), nullable=True)
     source_plan_exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_plan_exercises.id", ondelete="SET NULL"), nullable=True)
+    source_machine_profile_id = Column(UUID(as_uuid=True), ForeignKey("forge_machine_profiles.id", ondelete="RESTRICT"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     icon = Column(String(64), nullable=False, server_default="Dumbbell")
     equipment = Column(String(16), nullable=False, server_default="other")
@@ -315,6 +317,7 @@ class ForgeSessionExercise(Base):
     position = Column(Integer, nullable=False)
 
     session = relationship("ForgeWorkoutSession", back_populates="exercises")
+    machine_profile = relationship("ForgeMachineProfile", back_populates="session_exercises")
     sets = relationship(
         "ForgeSessionSet",
         back_populates="session_exercise",

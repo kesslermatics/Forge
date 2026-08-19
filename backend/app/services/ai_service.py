@@ -765,7 +765,9 @@ def _compute_exercise_progression(
 
     for tex in template_exercises:
         ex_name = tex.get("title", "").strip()
-        ex_key = ex_name.lower()
+        # Native Forge supplies a stable canonical-exercise/profile key. Other callers
+        # retain the established name-based behavior until they opt into that key.
+        ex_key = str(tex.get("progression_key") or ex_name.lower())
         muscle_group = tex.get("muscle_group", "")
         min_reps, max_reps = _get_rep_range(ex_name, muscle_group)
 
@@ -773,7 +775,8 @@ def _compute_exercise_progression(
         sessions_data = []
         for session in matching_sessions:
             for ex in session.get("exercises", []):
-                if ex.get("title", "").strip().lower() != ex_key:
+                history_key = str(ex.get("progression_key") or ex.get("title", "").strip().lower())
+                if history_key != ex_key:
                     continue
 
                 working_sets = [
@@ -929,7 +932,7 @@ def _build_deterministic_set_targets(
 
     for template_exercise in template_exercises:
         exercise_name = template_exercise.get("title", "").strip()
-        exercise_key = exercise_name.lower()
+        exercise_key = str(template_exercise.get("progression_key") or exercise_name.lower())
         data = progression.get(exercise_key, {})
         min_reps, max_reps = _get_rep_range(
             exercise_name,
@@ -995,6 +998,7 @@ def _build_deterministic_set_targets(
 
         deterministic_targets.append({
             "name": exercise_name,
+            "progression_key": exercise_key,
             "progression_status": signal,
             "set_targets": set_targets,
             "reasoning": model_reasoning or data.get("suggestion", ""),

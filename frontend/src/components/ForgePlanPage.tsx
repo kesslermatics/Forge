@@ -266,7 +266,7 @@ export default function ForgePlanPage() {
       equipment: exercise.equipment,
       primary_muscle_group: exercise.primary_muscle_group,
       secondary_muscle_groups: exercise.secondary_muscle_groups,
-      machine_profiles: exercise.machine_profiles.map((profile) => ({ name: profile.name, model: profile.model, notes: profile.notes })),
+      machine_profiles: exercise.machine_profiles.map((profile) => ({ id: profile.id, name: profile.name, model: profile.model, notes: profile.notes })),
     } : emptyExercise());
     setExerciseEditor(true);
   };

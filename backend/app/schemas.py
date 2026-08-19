@@ -176,6 +176,7 @@ ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "machine",
 
 
 class ForgeMachineProfileInput(BaseModel):
+    id: Optional[UUID] = None
     name: str = Field(..., min_length=1, max_length=100)
     model: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
@@ -224,6 +225,7 @@ class ForgeExerciseHistorySessionResponse(BaseModel):
     name: str
     completed_at: Any
     started_at: Any
+    machine_profile_id: Optional[UUID] = None
     machine_profile_name: Optional[str] = None
     sets: list[ForgeExerciseHistorySetResponse]
 
@@ -373,7 +375,7 @@ class ForgeSessionCoachGuidanceResponse(BaseModel):
 class ForgeSessionExerciseInput(BaseModel):
     exercise_id: Optional[UUID] = None
     name: Optional[str] = Field(None, max_length=255)
-    machine_profile_name: Optional[str] = Field(None, max_length=100)
+    machine_profile_id: Optional[UUID] = None
     notes: Optional[str] = Field(None, max_length=500)
     sets: list[ForgeSessionSetInput] = Field(default_factory=list, max_length=20)
 
@@ -386,6 +388,7 @@ class ForgeSessionExerciseResponse(BaseModel):
     equipment: str
     primary_muscle_group: str
     secondary_muscle_groups: list[str]
+    machine_profile_id: Optional[UUID] = None
     machine_profile_name: Optional[str] = None
     notes: Optional[str] = None
     coach_guidance: Optional[ForgeSessionCoachGuidanceResponse] = None
@@ -441,5 +444,5 @@ class ForgeApplySessionActionRequest(BaseModel):
 
 
 class ForgeSessionExerciseUpdate(BaseModel):
-    machine_profile_name: Optional[str] = Field(None, max_length=100)
+    machine_profile_id: Optional[UUID] = None
     notes: Optional[str] = Field(None, max_length=500)
