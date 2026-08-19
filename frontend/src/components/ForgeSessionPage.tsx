@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, CirclePlus, Loader2, MessageSquare, Plus, Send, Trash2 } from 'lucide-react';
+import { ArrowLeft, BrainCircuit, Check, ChevronLeft, ChevronRight, CirclePlus, Clock3, Loader2, MessageSquare, Plus, Send, Trash2 } from 'lucide-react';
 import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction,
-  completeForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet,
+  completeForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, deleteForgeSession,
   dismissForgeSessionAction, getForgeExercises, getForgeSession,
   sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
@@ -32,6 +32,22 @@ const displayLoad = (weight: number | null, reps: number | null) => {
   return `${weight != null && weight > 0 ? `${weight} kg` : 'BW'}${reps != null ? ` × ${reps}` : ''}`;
 };
 
+const formatDuration = (startedAt: string, completedAt: string | null) => {
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  const seconds = Math.max(0, Math.floor((end - new Date(startedAt).getTime()) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours} Std. ${minutes} Min.` : `${minutes} Min.`;
+};
+
+const guidanceStatusLabel = (status: string) => ({
+  INCREASE_WEIGHT: 'Gewicht erhöhen',
+  KEEP_PROGRESSING: 'Wiederholungen aufbauen',
+  STAGNATED: 'Leistung absichern',
+  REGRESSED: 'Leistung stabilisieren',
+  FIRST_SESSION: 'Kontrollierter Start',
+}[status] ?? 'Trainingsziel');
+
 export default function ForgeSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
@@ -45,6 +61,8 @@ export default function ForgeSessionPage() {
   const [chatInput, setChatInput] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const [actualDrafts, setActualDrafts] = useState<Record<string, string>>({});
+  const [checkedSetId, setCheckedSetId] = useState<string | null>(null);
+  const [celebratingCompletion, setCelebratingCompletion] = useState(false);
   const sessionRef = useRef<ForgeSession | null>(null);
   const pendingActualChanges = useRef<Record<string, Partial<Pick<ForgeSessionSetInput, 'actual_weight_kg' | 'actual_reps'>>>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -112,9 +130,20 @@ export default function ForgeSessionPage() {
     finally { setSaving(false); }
   };
 
-  const updateSet = (set: ForgeSessionSet, changes: Partial<ForgeSessionSetInput>) => {
+  const toggleSet = async (set: ForgeSessionSet) => {
     if (!session) return;
-    void mutate(() => updateForgeSessionSet(session.id, set.id, toInput(set, changes)));
+    await flushSetAutosave(set.id);
+    const liveSet = sessionRef.current?.exercises.flatMap((exercise) => exercise.sets).find((item) => item.id === set.id) ?? set;
+    const nextCompleted = !liveSet.completed;
+    if (nextCompleted) {
+      setCheckedSetId(liveSet.id);
+      window.setTimeout(() => setCheckedSetId((current) => current === liveSet.id ? null : current), 650);
+    }
+    await mutate(() => updateForgeSessionSet(session.id, liveSet.id, toInput(liveSet, {
+      completed: nextCompleted,
+      actual_weight_kg: nextCompleted ? (liveSet.actual_weight_kg ?? liveSet.target_weight_kg) : liveSet.actual_weight_kg,
+      actual_reps: nextCompleted ? (liveSet.actual_reps ?? liveSet.target_reps) : liveSet.actual_reps,
+    })));
   };
 
   const addSet = () => {
@@ -148,14 +177,27 @@ export default function ForgeSessionPage() {
   };
 
   const complete = async () => {
-    if (!session || !window.confirm('Session wirklich abschließen? Danach bleibt sie als Historie gespeichert.')) return;
+    if (!session || !window.confirm('Session wirklich abschließen? Danach bleibt sie inklusive Dauer als Historie gespeichert.')) return;
     setSaving(true); setError(null);
     try {
       await flushAllSetAutosaves();
       setSessionSafe(await completeForgeSession(session.id));
+      setCelebratingCompletion(true);
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : 'Session konnte nicht abgeschlossen werden.');
     } finally { setSaving(false); }
+  };
+
+  const discard = async () => {
+    if (!session || !window.confirm('Aktive Session wirklich verwerfen? Bereits eingetragene Sätze gehen verloren.')) return;
+    setSaving(true); setError(null);
+    try {
+      await deleteForgeSession(session.id);
+      navigate('/dashboard');
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Session konnte nicht verworfen werden.');
+      setSaving(false);
+    }
   };
 
   if (loading) return <div className="py-20 flex justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div>;
@@ -164,25 +206,32 @@ export default function ForgeSessionPage() {
   const completedSets = session.exercises.flatMap((exercise) => exercise.sets).filter((set) => set.completed).length;
   const totalSets = session.exercises.flatMap((exercise) => exercise.sets).length;
   const activeLibraryExercise = library.find((exercise) => exercise.id === activeExercise?.source_exercise_id) ?? null;
+  const duration = formatDuration(session.started_at, session.completed_at);
+  const activeTargetSummary = activeExercise?.sets.filter((set) => set.set_type === 'working').map((set) => displayLoad(set.target_weight_kg, set.target_reps)).join(' · ') ?? '';
 
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start justify-between gap-3">
-      <div className="flex gap-3"><button onClick={() => navigate('/dashboard')} className="tap mt-1 cursor-pointer" style={{ color: DIM }}><ArrowLeft size={18} /></button><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{session.status === 'active' ? 'Live Session' : 'Abgeschlossen'}</p><h1 className="text-[22px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>{session.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen</p></div></div>
-      {session.status === 'active' && <button onClick={() => void complete()} disabled={saving} className="tap text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>Beenden</button>}
+      <div className="flex gap-3"><button onClick={() => navigate('/dashboard')} className="tap mt-1 cursor-pointer" style={{ color: DIM }}><ArrowLeft size={18} /></button><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{session.status === 'active' ? 'Live Session' : 'Abgeschlossen'}</p><h1 className="text-[22px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>{session.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · {duration}</p></div></div>
+      {session.status === 'active' && <div className="flex items-center gap-3"><button onClick={() => void discard()} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button><button onClick={() => void complete()} disabled={saving} className="tap text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>Beenden</button></div>}
     </header>
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
+
+    {session.status === 'completed' && <section className={`card-forge p-5 flex items-center gap-4 ${celebratingCompletion ? 'forge-session-complete' : ''}`} style={{ borderColor: `${SAND}44`, background: 'rgba(232,197,138,0.08)' }}><div className={`forge-completion-mark ${celebratingCompletion ? 'forge-completion-bloom' : ''}`}><Check size={22} /></div><div><p className="text-[15px] font-semibold" style={{ color: TEXT }}>Stark gemacht.</p><p className="text-[12px] mt-1" style={{ color: DIM }}>{completedSets} von {totalSets} Sätzen · Dauer {duration}</p></div><Clock3 className="ml-auto" size={18} style={{ color: SAND }} /></section>}
 
     {activeExercise ? <>
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
         <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{activeLibraryExercise?.machine_profiles.length ? <select value={activeExercise.machine_profile_name ?? ''} disabled={session.status !== 'active'} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_name: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Maschine wählen</option>{activeLibraryExercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.name}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.primary_muscle_group}{activeExercise.machine_profile_name ? ` · ${activeExercise.machine_profile_name}` : ''}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
+        {activeExercise.coach_guidance && <aside className="mx-4 mb-4 rounded-2xl p-3.5" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
+          <div className="flex items-start gap-2"><BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p><span className="rounded-full px-2 py-0.5 text-[9px] font-medium" style={{ color: SAND, background: 'rgba(232,197,138,0.12)' }}>{guidanceStatusLabel(activeExercise.coach_guidance.progression_status)}</span></div><p className="text-[12px] leading-relaxed mt-2" style={{ color: 'rgba(242,236,226,0.76)' }}>{activeExercise.coach_guidance.rationale}</p><p className="text-[10px] mt-2" style={{ color: DIM }}>Heutiges Ziel: {activeTargetSummary || 'Siehe Satz-Ziele unten'} · Arbeitsbereich {activeExercise.coach_guidance.rep_range} Wdh.</p></div></div>
+        </aside>}
         <div className="border-y" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
           <div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', color: DIM }}><span>Satz</span><span className="text-center">Ziel</span><span className="text-center">Heute</span><span /></div>
-          {activeExercise.sets.map((set, index) => <div key={set.id} className="grid items-center gap-2 px-4 py-3" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}>
+          {activeExercise.sets.map((set, index) => <div key={set.id} className={`grid items-center gap-2 px-4 py-3 ${set.completed ? 'forge-set-done' : ''} ${checkedSetId === set.id ? 'forge-set-check' : ''}`} style={{ gridTemplateColumns: '36px 1fr 1fr 32px', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}>
             <span className="text-[11px]" style={{ color: DIM }}>{set.set_type === 'warmup' ? 'W' : index + 1}</span>
             <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps)}</span>
-            <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder="kg" className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder="Wdh." className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
-            {session.status === 'active' ? <button onClick={() => updateSet(set, { completed: !set.completed, actual_weight_kg: set.actual_weight_kg ?? set.target_weight_kg, actual_reps: set.actual_reps ?? set.target_reps })} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
+            <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : 'kg'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
+            {session.status === 'active' ? <button onClick={() => void toggleSet(set)} disabled={saving} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-50" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
           </div>)}
         </div>
         {session.status === 'active' && <div className="p-3 flex gap-3"><button onClick={addSet} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={14} />Satz</button>{activeExercise.sets.length > 1 && <button onClick={() => void mutate(() => deleteForgeSessionSet(session.id, activeExercise.sets[activeExercise.sets.length - 1].id))} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: DIM }}><Trash2 size={13} />Letzten löschen</button>}</div>}
@@ -192,9 +241,10 @@ export default function ForgeSessionPage() {
     {session.status === 'active' && <button onClick={() => setAddOpen(!addOpen)} className="w-full card-forge p-3 flex items-center justify-center gap-2 text-[12px] font-medium tap cursor-pointer" style={{ color: SAND }}><CirclePlus size={15} />Übung hinzufügen</button>}
     {addOpen && <div className="card-forge p-3 space-y-2">{library.map((exercise) => <button key={exercise.id} onClick={() => addExercise(exercise)} className="w-full text-left rounded-xl px-3 py-3 tap cursor-pointer" style={{ background: 'rgba(255,247,235,0.035)' }}><span className="text-[13px] font-medium" style={{ color: TEXT }}>{exercise.name}</span><span className="block text-[10px] mt-0.5" style={{ color: DIM }}>{exercise.primary_muscle_group}</span></button>)}</div>}
 
-    <section className="card-forge overflow-hidden" style={{ borderColor: chatOpen ? `${SAND}2b` : BORDER }}>
-      <button onClick={() => setChatOpen(!chatOpen)} className="w-full p-4 flex items-center justify-between tap cursor-pointer"><span className="flex items-center gap-2 text-[13px] font-medium" style={{ color: TEXT }}><MessageSquare size={16} style={{ color: SAND }} />Forge in dieser Session</span><span className="text-[11px]" style={{ color: DIM }}>{chatOpen ? 'Schließen' : 'Fragen'}</span></button>
+    <section className="card-forge overflow-hidden" style={{ borderColor: chatOpen ? `${SAND}44` : BORDER }}>
+      <button onClick={() => setChatOpen(!chatOpen)} className="w-full p-4 flex items-center justify-between tap cursor-pointer"><span className="flex items-center gap-2 text-[13px] font-medium" style={{ color: TEXT }}><MessageSquare size={16} style={{ color: SAND }} />Rückfrage zu dieser Session</span><span className="text-[11px]" style={{ color: DIM }}>{chatOpen ? 'Einklappen' : 'Fragen'}</span></button>
       {chatOpen && <div className="border-t p-3 space-y-3" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
+        {session.messages.length === 0 && <p className="rounded-xl px-3 py-2.5 text-[11px]" style={{ color: DIM, background: 'rgba(232,197,138,0.06)' }}>Maschine besetzt, Schmerzen oder unklarer Plan? Frag mich direkt für diese Session.</p>}
         {session.messages.map((message) => <div key={message.id} className={message.role === 'user' ? 'pl-8' : 'pr-4'}><div className="rounded-2xl px-3 py-2.5 text-[12px] leading-relaxed" style={{ color: message.role === 'user' ? '#16130f' : TEXT, background: message.role === 'user' ? SAND : 'rgba(255,247,235,0.06)' }}>{message.content}</div>{message.proposed_action && <div className="mt-2 rounded-xl p-3" style={{ border: `1px solid ${SAND}44`, background: 'rgba(232,197,138,0.06)' }}><p className="text-[11px] font-medium" style={{ color: SAND }}>{message.proposed_action.title}</p>{message.action_status === 'pending' ? <div className="flex gap-3 mt-2"><button onClick={() => void mutate(() => applyForgeSessionAction(session.id, message.id))} className="text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>Übernehmen</button><button onClick={() => void mutate(() => dismissForgeSessionAction(session.id, message.id))} className="text-[11px] cursor-pointer" style={{ color: DIM }}>Ablehnen</button></div> : <p className="text-[10px] mt-1" style={{ color: DIM }}>{message.action_status === 'applied' ? 'Übernommen' : 'Abgelehnt'}</p>}</div>}</div>)}
         {session.status === 'active' && <div className="flex gap-2"><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void sendChat(); }} placeholder="z. B. Maschine besetzt – Alternative?" className="input-forge min-w-0 flex-1 text-[12px]" /><button onClick={() => void sendChat()} disabled={saving || !chatInput.trim()} className="tap w-10 rounded-xl flex items-center justify-center cursor-pointer" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}>{saving ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}</button></div>}
       </div>}

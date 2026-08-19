@@ -37,6 +37,7 @@ from app.schemas import (
     ForgeSessionExerciseInput,
     ForgeSessionExerciseUpdate,
     ForgeSessionResponse,
+    ForgeSessionSummaryResponse,
     ForgeSessionSetInput,
     ForgeStartSessionRequest,
     ForgeTodayResponse,
@@ -433,6 +434,7 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
                 "secondary_muscle_groups": exercise.secondary_muscle_groups or [],
                 "machine_profile_name": exercise.machine_profile_name,
                 "notes": exercise.notes,
+                "coach_guidance": exercise.coach_guidance,
                 "position": exercise.position,
                 "sets": [
                     {
@@ -464,6 +466,24 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
             }
             for message in session.messages
         ],
+    }
+
+
+def _serialize_session_summary(session: ForgeWorkoutSession) -> dict:
+    """Return history metadata without exposing the full immutable session snapshot."""
+    all_sets = [set_data for exercise in session.exercises for set_data in exercise.sets]
+    completed_at = session.completed_at or session.started_at
+    duration_seconds = max(0, int((completed_at - session.started_at).total_seconds())) if completed_at and session.started_at else 0
+    return {
+        "id": session.id,
+        "name": session.name,
+        "status": "completed",
+        "source_plan_id": session.source_plan_id,
+        "started_at": session.started_at,
+        "completed_at": completed_at,
+        "duration_seconds": duration_seconds,
+        "completed_sets": sum(set_data.completed for set_data in all_sets),
+        "total_sets": len(all_sets),
     }
 
 
@@ -599,7 +619,46 @@ async def get_today_routine(current_user: User = Depends(get_current_user), db: 
     }
 
 
-def _snapshot_plan_into_session(plan: ForgeTrainingPlan, session: ForgeWorkoutSession) -> None:
+def _native_session_rationale(progression_data: dict, progression_status: str) -> str:
+    """Explain a deterministic native target in German without inventing training data."""
+    rep_range = progression_data.get("rep_range", "8–12")
+    current_weight = progression_data.get("current_weight_kg")
+    latest_reps = progression_data.get("latest_reps") or []
+    latest_reps_text = "/".join(str(reps) for reps in latest_reps)
+
+    if progression_status == "INCREASE_WEIGHT":
+        next_weight = progression_data.get("suggested_weight_kg")
+        weight_text = f" auf die bestätigte nächste Last von {next_weight:g} kg" if isinstance(next_weight, (int, float)) else " auf die bestätigte nächste Last"
+        return f"Alle vergleichbaren Arbeitssätze lagen am oberen Ende des {rep_range}-Bereichs. Nach dem Prinzip der doppelten Progression geht es deshalb{weight_text}; die Wiederholungen starten wieder am unteren Bereich."
+    if progression_status == "STAGNATED":
+        return f"Das Wiederholungsvolumen war über drei vergleichbare Sessions bei gleicher Last stabil. Halte Gewicht und Satzanzahl im {rep_range}-Bereich und prüfe Technik, Pausen und Erholung, bevor du mehr Last oder Volumen erzwingst."
+    if progression_status == "REGRESSED":
+        return f"Die vergleichbare Gesamtwiederholungszahl ist zuletzt gesunken. Das Ziel bleibt bewusst im {rep_range}-Bereich bei gleicher Last, damit du erst die vorherige Leistung sauber stabilisierst statt vorschnell zu erhöhen."
+    if progression_status == "FIRST_SESSION":
+        return f"Es gibt noch keinen vergleichbaren Verlauf. Starte kontrolliert im {rep_range}-Bereich; bei sauberer Technik werden zuerst Wiederholungen aufgebaut, bevor das Gewicht steigt."
+
+    weight_text = f" bei {current_weight:g} kg" if isinstance(current_weight, (int, float)) else ""
+    previous_text = f" (zuletzt {latest_reps_text} Wdh.)" if latest_reps_text else ""
+    return f"Du hast im {rep_range}-Bereich noch Wiederholungen aufzubauen{weight_text}{previous_text}. Die Last bleibt deshalb konstant; das nächste messbare Ziel ist eine saubere zusätzliche Wiederholung, bevor das Gewicht erhöht wird."
+
+
+def _session_guidance_by_plan_exercise(plan: ForgeTrainingPlan, progression: dict, targets: list[dict]) -> dict[UUID, dict]:
+    """Freeze the deterministic coach explanation next to each planned session exercise."""
+    guidance: dict[UUID, dict] = {}
+    for position, plan_exercise in enumerate(plan.exercises):
+        target = targets[position] if position < len(targets) else {}
+        progression_data = progression.get(plan_exercise.exercise.name.strip().lower(), {})
+        progression_status = target.get("progression_status") or progression_data.get("signal") or "FIRST_SESSION"
+        guidance[plan_exercise.id] = {
+            "progression_status": progression_status,
+            "rep_range": progression_data.get("rep_range", "8–12"),
+            "rationale": _native_session_rationale(progression_data, progression_status),
+        }
+    return guidance
+
+
+def _snapshot_plan_into_session(plan: ForgeTrainingPlan, session: ForgeWorkoutSession, guidance_by_plan_exercise: dict[UUID, dict] | None = None) -> None:
+    guidance_by_plan_exercise = guidance_by_plan_exercise or {}
     for exercise_position, plan_exercise in enumerate(plan.exercises):
         exercise = plan_exercise.exercise
         session_exercise = ForgeSessionExercise(
@@ -612,6 +671,7 @@ def _snapshot_plan_into_session(plan: ForgeTrainingPlan, session: ForgeWorkoutSe
             secondary_muscle_groups=exercise.secondary_muscle_groups or [],
             machine_profile_name=plan_exercise.machine_profile.name if plan_exercise.machine_profile else None,
             notes=plan_exercise.notes,
+            coach_guidance=guidance_by_plan_exercise.get(plan_exercise.id),
             position=exercise_position,
         )
         for set_position, plan_set in enumerate(plan_exercise.sets):
@@ -640,7 +700,8 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
     program = _owned_program(db, current_user.id, data.program_id) if data.program_id else None
     if program is not None and not any(link.plan_id == plan.id for link in program.routines):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This routine is not part of the selected program.")
-    _refresh_native_coach_targets(db, current_user.id, plan)
+    progression, targets = _refresh_native_coach_targets(db, current_user.id, plan)
+    guidance_by_plan_exercise = _session_guidance_by_plan_exercise(plan, progression, targets)
     session = ForgeWorkoutSession(
         user_id=current_user.id,
         program_id=program.id if program else None,
@@ -648,7 +709,7 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
         name=plan.name,
         status="active",
     )
-    _snapshot_plan_into_session(plan, session)
+    _snapshot_plan_into_session(plan, session, guidance_by_plan_exercise)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -663,6 +724,41 @@ async def get_active_session(current_user: User = Depends(get_current_user), db:
         ForgeWorkoutSession.status == "active",
     ).order_by(ForgeWorkoutSession.started_at.desc()).first()
     return _serialize_session(session) if session is not None else None
+
+
+@router.get("/sessions", response_model=list[ForgeSessionSummaryResponse])
+async def list_completed_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List completed native Forge workouts for the authenticated user's history."""
+    if not 1 <= limit <= 100 or offset < 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Limit must be 1–100 and offset cannot be negative.")
+    sessions = db.query(ForgeWorkoutSession).filter(
+        ForgeWorkoutSession.user_id == current_user.id,
+        ForgeWorkoutSession.status == "completed",
+    ).order_by(ForgeWorkoutSession.completed_at.desc()).offset(offset).limit(limit).all()
+    return [_serialize_session_summary(session) for session in sessions]
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Discard an active session or explicitly remove a completed history entry."""
+    session = _owned_session(db, current_user.id, session_id)
+    source_plan = None
+    if session.status == "completed" and session.source_plan_id is not None:
+        source_plan = db.query(ForgeTrainingPlan).filter(
+            ForgeTrainingPlan.id == session.source_plan_id,
+            ForgeTrainingPlan.user_id == current_user.id,
+        ).first()
+    db.delete(session)
+    db.flush()
+    # Historical deletion changes the data behind persisted progression suggestions.
+    if source_plan is not None:
+        _refresh_native_coach_targets(db, current_user.id, source_plan)
+    db.commit()
 
 
 @router.get("/sessions/{session_id}", response_model=ForgeSessionResponse)
@@ -1039,6 +1135,11 @@ def _refresh_native_coach_targets(db: Session, user_id: UUID, plan: ForgeTrainin
         latest_sets = latest.get("sets", [])
         target_sets = target.get("set_targets", []) if target else []
         for position, plan_set in enumerate(plan_exercise.sets):
+            # A refresh must remove values that belonged only to deleted history.
+            plan_set.previous_weight_kg = None
+            plan_set.previous_reps = None
+            plan_set.coach_suggested_weight_kg = None
+            plan_set.coach_suggested_reps = None
             if position < len(latest_sets):
                 plan_set.previous_weight_kg = latest_sets[position].get("weight_kg")
                 plan_set.previous_reps = latest_sets[position].get("reps")

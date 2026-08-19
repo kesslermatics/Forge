@@ -311,6 +311,7 @@ class ForgeSessionExercise(Base):
     secondary_muscle_groups = Column(JSON, nullable=False, default=list)
     machine_profile_name = Column(String(100), nullable=True)
     notes = Column(String(500), nullable=True)
+    coach_guidance = Column(JSON, nullable=True)
     position = Column(Integer, nullable=False)
 
     session = relationship("ForgeWorkoutSession", back_populates="exercises")

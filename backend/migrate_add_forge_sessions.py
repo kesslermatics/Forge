@@ -61,6 +61,7 @@ STATEMENTS = [
         secondary_muscle_groups JSONB NOT NULL DEFAULT '[]'::jsonb,
         machine_profile_name VARCHAR(100),
         notes VARCHAR(500),
+        coach_guidance JSONB,
         position INTEGER NOT NULL,
         CONSTRAINT uq_forge_session_exercise_position UNIQUE (session_id, position)
     );

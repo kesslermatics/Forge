@@ -3,22 +3,23 @@ import dynamicIconImports from 'lucide-react/dynamicIconImports';
 import { useNavigate } from 'react-router-dom';
 import {
   Bot, CirclePlus, Dumbbell, Loader2,
-  Pencil, Plus, Save, Sparkles, Trash2, TrendingUp, Wrench,
+  Pencil, Plus, Save, Sparkles, Trash2, TrendingUp, Wrench, Clock3,
 } from 'lucide-react';
 import {
-  createForgeExercise, createForgePlan, createForgeProgram, deleteForgeExercise, deleteForgePlan,
+  createForgeExercise, createForgePlan, createForgeProgram, deleteForgeExercise, deleteForgePlan, deleteForgeSession,
   generateForgeExerciseDraft, generateForgePlanDraft, getForgeExercises, getForgePrograms,
-  getForgePlans, refreshForgePlanCoachTargets, updateForgeExercise, updateForgePlan, updateForgeProgram,
+  getForgePlans, listForgeSessions, refreshForgePlanCoachTargets, updateForgeExercise, updateForgePlan, updateForgeProgram,
 } from '../api/api';
 import type {
   ForgeEquipment, ForgeExercise, ForgeExerciseInput, ForgeMachineProfileInput,
-  ForgePlan, ForgePlanInput, ForgePlanSetInput, ForgeProgram, ForgeProgramInput,
+  ForgePlan, ForgePlanInput, ForgePlanSetInput, ForgeProgram, ForgeProgramInput, ForgeSessionSummary,
 } from '../api/api';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
 const DIM = 'rgba(242,236,226,0.48)';
 const BORDER = 'rgba(232,197,138,0.11)';
+const HISTORY_PAGE_SIZE = 50;
 
 const MUSCLE_GROUPS = [
   'Chest', 'Back', 'Lats', 'Traps', 'Shoulders', 'Biceps', 'Triceps',
@@ -83,8 +84,11 @@ const formatSet = (weight: number | null, reps: number | null) => {
 
 export default function ForgePlanPage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'plan' | 'exercises'>('plan');
+  const [tab, setTab] = useState<'plan' | 'exercises' | 'history'>('plan');
   const [plans, setPlans] = useState<ForgePlan[]>([]);
+  const [history, setHistory] = useState<ForgeSessionSummary[]>([]);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [programs, setPrograms] = useState<ForgeProgram[]>([]);
   const [programEditor, setProgramEditor] = useState(false);
   const [programDraft, setProgramDraft] = useState<ForgeProgramInput | null>(null);
@@ -114,8 +118,8 @@ export default function ForgePlanPage() {
   const load = async () => {
     setLoading(true); setError(null);
     try {
-      const [loadedPlans, loadedExercises, loadedPrograms] = await Promise.all([getForgePlans(), getForgeExercises(), getForgePrograms()]);
-      setPlans(loadedPlans); setExercises(loadedExercises); setPrograms(loadedPrograms);
+      const [loadedPlans, loadedExercises, loadedPrograms, loadedHistory] = await Promise.all([getForgePlans(), getForgeExercises(), getForgePrograms(), listForgeSessions(HISTORY_PAGE_SIZE)]);
+      setPlans(loadedPlans); setExercises(loadedExercises); setPrograms(loadedPrograms); setHistory(loadedHistory); setHasMoreHistory(loadedHistory.length === HISTORY_PAGE_SIZE);
       setSelectedPlanId((current) => current ?? loadedPlans[0]?.id ?? null);
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : 'Forge konnte nicht geladen werden.');
@@ -320,6 +324,30 @@ export default function ForgePlanPage() {
     } finally { setSaving(false); }
   };
 
+  const loadMoreHistory = async () => {
+    if (historyLoading || !hasMoreHistory) return;
+    setHistoryLoading(true); setError(null);
+    try {
+      const next = await listForgeSessions(HISTORY_PAGE_SIZE, history.length);
+      setHistory((current) => [...current, ...next]);
+      setHasMoreHistory(next.length === HISTORY_PAGE_SIZE);
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Weiterer Verlauf konnte nicht geladen werden.');
+    } finally { setHistoryLoading(false); }
+  };
+
+  const removeSession = async (session: ForgeSessionSummary) => {
+    if (!window.confirm(`„${session.name}“ aus deinem Verlauf löschen? Das entfernt die Session auch aus Trainingshistorie und Forge-Vorschlägen.`)) return;
+    setSaving(true); setError(null); setNotice(null);
+    try {
+      await deleteForgeSession(session.id);
+      setHistory((current) => current.filter((item) => item.id !== session.id));
+      setNotice('Workout aus dem Verlauf gelöscht. Forge-Ziele wurden aktualisiert.');
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Workout konnte nicht gelöscht werden.');
+    } finally { setSaving(false); }
+  };
+
   if (loading) return <div className="py-20 flex justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div>;
 
   return (
@@ -330,8 +358,8 @@ export default function ForgePlanPage() {
         <p className="text-[13px] mt-1" style={{ color: DIM }}>Deine Übungen, deine Maschinen, dein Plan.</p>
       </header>
 
-      <div className="grid grid-cols-2 rounded-2xl p-1" style={{ background: 'rgba(255,247,235,0.055)', border: `1px solid ${BORDER}` }}>
-        {([['plan', 'Plan'], ['exercises', 'Übungen']] as const).map(([value, label]) => (
+      <div className="grid grid-cols-3 rounded-2xl p-1" style={{ background: 'rgba(255,247,235,0.055)', border: `1px solid ${BORDER}` }}>
+        {([['plan', 'Plan'], ['exercises', 'Übungen'], ['history', 'Verlauf']] as const).map(([value, label]) => (
           <button key={value} onClick={() => setTab(value)} className="tap rounded-xl py-2.5 text-[13px] font-medium cursor-pointer"
             style={{ background: tab === value ? 'rgba(232,197,138,0.16)' : 'transparent', color: tab === value ? SAND : DIM }}>
             {label}
@@ -364,7 +392,7 @@ export default function ForgePlanPage() {
             <EmptyState icon={<Dumbbell size={22} />} title="Noch kein Plan" copy="Lege zuerst eigene Übungen an und erstelle dann einen Plan – manuell oder mit Forge." action="Plan erstellen" onClick={() => startPlan()} />
           )}
         </section>
-      ) : (
+      ) : tab === 'exercises' ? (
         <section className="space-y-4">
           <AiPrompt
             placeholder="z. B. Lege eine Life-Fitness Leg Press für Quads und Glutes an"
@@ -380,9 +408,33 @@ export default function ForgePlanPage() {
               : <EmptyState icon={<Wrench size={22} />} title="Deine Übungsbibliothek ist leer" copy="Erstelle eigene Bewegungen und hinterlege für Maschinen getrennte Profile." action="Übung anlegen" onClick={() => startExercise()} />}
           </>}
         </section>
-      )}
+      ) : <WorkoutHistory sessions={history} saving={saving} hasMore={hasMoreHistory} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory()} onOpen={(session) => navigate(`/forge/session/${session.id}`)} onDelete={(session) => void removeSession(session)} />}
     </div>
   );
+}
+
+function WorkoutHistory({ sessions, saving, hasMore, loadingMore, onLoadMore, onOpen, onDelete }: { sessions: ForgeSessionSummary[]; saving: boolean; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void; onOpen: (session: ForgeSessionSummary) => void; onDelete: (session: ForgeSessionSummary) => void }) {
+  const formatDuration = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours ? `${hours} Std. ${minutes} Min.` : `${minutes} Min.`;
+  };
+
+  return <section className="space-y-3">
+    <div className="card-forge p-5" style={{ borderColor: `${SAND}20` }}>
+      <h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>Workout-Verlauf</h2>
+      <p className="text-[12px] mt-1" style={{ color: DIM }}>Abgeschlossene Forge-Sessions sind schreibgeschützt. Öffne sie zum Ansehen oder lösche sie bewusst.</p>
+    </div>
+    {sessions.length ? <>{sessions.map((session) => <article key={session.id} className="card-forge p-4 flex items-center gap-3">
+      <button onClick={() => onOpen(session)} className="tap min-w-0 flex-1 text-left cursor-pointer">
+        <p className="text-[14px] font-medium truncate" style={{ color: TEXT }}>{session.name}</p>
+        <p className="text-[11px] mt-1" style={{ color: DIM }}>{new Date(session.completed_at).toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })} · {session.completed_sets}/{session.total_sets} Sätze</p>
+      </button>
+      <div className="shrink-0 text-right"><p className="flex items-center justify-end gap-1 text-[11px]" style={{ color: SAND }}><Clock3 size={12} />{formatDuration(session.duration_seconds)}</p><button onClick={() => onDelete(session)} disabled={saving} className="tap mt-2 p-1 cursor-pointer disabled:opacity-50" aria-label={`${session.name} löschen`} style={{ color: DIM }}><Trash2 size={15} /></button></div>
+    </article>)}
+      {hasMore && <button onClick={onLoadMore} disabled={loadingMore} className="w-full card-forge p-3 tap text-[12px] font-medium cursor-pointer disabled:opacity-50" style={{ color: SAND }}>{loadingMore ? <span className="flex items-center justify-center gap-2"><Loader2 size={15} className="animate-spin" />Lädt…</span> : 'Weitere Workouts laden'}</button>}
+    </> : <EmptyState icon={<TrendingUp size={22} />} title="Noch keine Workouts" copy="Schließe deine erste Forge-Session ab, dann erscheint sie hier mit Dauer und Satzfortschritt." action="Zum Dashboard" onClick={() => window.location.assign('/dashboard')} />}
+  </section>;
 }
 
 function AiPrompt({ placeholder, value, onChange, onGenerate, generating }: { placeholder: string; value: string; onChange: (value: string) => void; onGenerate: () => void; generating: boolean }) {

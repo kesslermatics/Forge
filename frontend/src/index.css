@@ -194,3 +194,38 @@ body {
 /* ── Tap feedback ──────────────────────────────────── */
 .tap { transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .tap:active { transform: scale(0.97); }
+
+/* ── Forge session feedback ─────────────────────────── */
+@keyframes forge-set-check {
+  0% { transform: scale(1); background-color: rgba(232,197,138,0.08); }
+  45% { transform: scale(1.015); background-color: rgba(232,197,138,0.2); }
+  100% { transform: scale(1); background-color: rgba(232,197,138,0.075); }
+}
+@keyframes forge-complete-pop {
+  0% { opacity: 0; transform: translateY(10px) scale(0.97); }
+  55% { opacity: 1; transform: translateY(0) scale(1.015); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes forge-check-bloom {
+  0% { transform: scale(0.72); box-shadow: 0 0 0 0 rgba(232,197,138,0.5); }
+  60% { transform: scale(1.08); box-shadow: 0 0 0 10px rgba(232,197,138,0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(232,197,138,0); }
+}
+.forge-set-done { background-color: rgba(232,197,138,0.075) !important; }
+.forge-set-check { animation: forge-set-check 0.65s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.forge-session-complete { animation: forge-complete-pop 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.forge-completion-mark {
+  display: flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  color: #16130f;
+  background: #e8c58a;
+}
+.forge-completion-bloom { animation: forge-check-bloom 0.8s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .forge-set-check, .forge-session-complete, .forge-completion-bloom { animation: none; }
+}

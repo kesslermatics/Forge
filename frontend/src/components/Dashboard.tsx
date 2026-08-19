@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWeather, sendChatMessage, getWeightHistory,
-    getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession,
+    getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession, deleteForgeSession,
 } from '../api/api';
 import type {
     UserInfo, Briefing, WeatherData,
@@ -187,6 +187,17 @@ export default function Dashboard() {
         } finally { setStartingSession(false); }
     };
 
+    const handleDiscardForgeSession = async () => {
+        if (!activeForgeSession || startingSession || !window.confirm('Aktive Session wirklich verwerfen? Bereits eingetragene Sätze gehen verloren.')) return;
+        setStartingSession(true); setForgeError(null);
+        try {
+            await deleteForgeSession(activeForgeSession.id);
+            setActiveForgeSession(null);
+        } catch (caught: unknown) {
+            setForgeError(caught instanceof Error ? caught.message : 'Session konnte nicht verworfen werden.');
+        } finally { setStartingSession(false); }
+    };
+
     return (
         <div className="space-y-4">
             {/* ── Greeting ── */}
@@ -216,7 +227,7 @@ export default function Dashboard() {
                 const totalSets = activeForgeSession.exercises.flatMap((exercise) => exercise.sets).length;
                 return <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}44` }}>
                     <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Aktive Session</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{activeForgeSession.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · sicher gespeichert</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
-                    <button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge w-full mt-4 flex items-center justify-center gap-2"><Dumbbell size={15} />Session fortsetzen</button>
+                    <div className="grid grid-cols-2 gap-2 mt-4"><button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge flex items-center justify-center gap-2"><Dumbbell size={15} />Fortsetzen</button><button onClick={() => void handleDiscardForgeSession()} disabled={startingSession} className="tap rounded-xl text-[12px] font-medium cursor-pointer disabled:opacity-50" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Verwerfen</button></div>
                 </section>;
             })() : homeRoutine && (
                 <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}2c` }}>

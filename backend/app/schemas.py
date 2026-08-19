@@ -364,6 +364,12 @@ class ForgeSessionSetResponse(ForgeSessionSetInput):
     position: int
 
 
+class ForgeSessionCoachGuidanceResponse(BaseModel):
+    progression_status: Literal["INCREASE_WEIGHT", "KEEP_PROGRESSING", "STAGNATED", "REGRESSED", "FIRST_SESSION"]
+    rep_range: str
+    rationale: str
+
+
 class ForgeSessionExerciseInput(BaseModel):
     exercise_id: Optional[UUID] = None
     name: Optional[str] = Field(None, max_length=255)
@@ -382,6 +388,7 @@ class ForgeSessionExerciseResponse(BaseModel):
     secondary_muscle_groups: list[str]
     machine_profile_name: Optional[str] = None
     notes: Optional[str] = None
+    coach_guidance: Optional[ForgeSessionCoachGuidanceResponse] = None
     position: int
     sets: list[ForgeSessionSetResponse]
 
@@ -405,6 +412,19 @@ class ForgeSessionResponse(BaseModel):
     completed_at: Optional[Any] = None
     exercises: list[ForgeSessionExerciseResponse]
     messages: list[ForgeSessionMessageResponse] = Field(default_factory=list)
+
+
+class ForgeSessionSummaryResponse(BaseModel):
+    """Compact, immutable completed-session data for the Forge workout history."""
+    id: UUID
+    name: str
+    status: Literal["completed"]
+    source_plan_id: Optional[UUID] = None
+    started_at: Any
+    completed_at: Any
+    duration_seconds: int
+    completed_sets: int
+    total_sets: int
 
 
 class ForgeStartSessionRequest(BaseModel):
