@@ -25,6 +25,7 @@ from app.models import (
 from app.schemas import (
     ForgeDraftResponse,
     ForgeExerciseDraftRequest,
+    ForgeExerciseHistoryResponse,
     ForgeExerciseInput,
     ForgeExerciseResponse,
     ForgePlanDraftRequest,
@@ -191,6 +192,50 @@ async def list_exercises(
 ):
     exercises = db.query(ForgeExercise).filter(ForgeExercise.user_id == current_user.id).order_by(ForgeExercise.name).all()
     return [_serialize_exercise(exercise) for exercise in exercises]
+
+
+@router.get("/exercises/{exercise_id}/history", response_model=ForgeExerciseHistoryResponse)
+async def get_exercise_history(exercise_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return actual logged sets from completed native Forge sessions for one library exercise."""
+    exercise = db.query(ForgeExercise).filter(
+        ForgeExercise.id == exercise_id,
+        ForgeExercise.user_id == current_user.id,
+    ).first()
+    if exercise is None:
+        raise _not_found("Exercise not found")
+
+    rows = db.query(ForgeWorkoutSession, ForgeSessionExercise).join(
+        ForgeSessionExercise, ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
+    ).filter(
+        ForgeWorkoutSession.user_id == current_user.id,
+        ForgeWorkoutSession.status == "completed",
+        ForgeSessionExercise.source_exercise_id == exercise_id,
+    ).order_by(ForgeWorkoutSession.completed_at.desc(), ForgeWorkoutSession.started_at.desc()).all()
+
+    return {
+        "exercise": _serialize_exercise(exercise),
+        "sessions": [
+            {
+                "id": session.id,
+                "name": session.name,
+                "completed_at": session.completed_at,
+                "started_at": session.started_at,
+                "machine_profile_name": session_exercise.machine_profile_name,
+                "sets": [
+                    {
+                        "position": set_data.position,
+                        "set_type": set_data.set_type,
+                        "actual_weight_kg": set_data.actual_weight_kg,
+                        "actual_reps": set_data.actual_reps,
+                        "completed": set_data.completed,
+                        "note": set_data.note,
+                    }
+                    for set_data in session_exercise.sets
+                ],
+            }
+            for session, session_exercise in rows
+        ],
+    }
 
 
 @router.post("/exercises", response_model=ForgeExerciseResponse, status_code=status.HTTP_201_CREATED)

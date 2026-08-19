@@ -622,6 +622,29 @@ export interface ForgeExerciseInput {
   machine_profiles: ForgeMachineProfileInput[];
 }
 
+export interface ForgeExerciseHistorySet {
+  position: number;
+  set_type: ForgeSetType;
+  actual_weight_kg: number | null;
+  actual_reps: number | null;
+  completed: boolean;
+  note: string | null;
+}
+
+export interface ForgeExerciseHistorySession {
+  id: string;
+  name: string;
+  completed_at: string;
+  started_at: string;
+  machine_profile_name: string | null;
+  sets: ForgeExerciseHistorySet[];
+}
+
+export interface ForgeExerciseHistory {
+  exercise: ForgeExercise;
+  sessions: ForgeExerciseHistorySession[];
+}
+
 export interface ForgePlanSet {
   id: string;
   position: number;
@@ -678,6 +701,7 @@ export interface ForgePlanInput {
 }
 
 export const getForgeExercises = () => apiRequest<ForgeExercise[]>('/api/forge/exercises');
+export const getForgeExerciseHistory = (id: string) => apiRequest<ForgeExerciseHistory>(`/api/forge/exercises/${id}/history`);
 export const createForgeExercise = (data: ForgeExerciseInput) =>
   apiRequest<ForgeExercise>('/api/forge/exercises', { method: 'POST', body: JSON.stringify(data) });
 export const updateForgeExercise = (id: string, data: ForgeExerciseInput) =>

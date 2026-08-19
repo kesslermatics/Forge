@@ -210,6 +210,29 @@ class ForgeExerciseResponse(BaseModel):
         from_attributes = True
 
 
+class ForgeExerciseHistorySetResponse(BaseModel):
+    position: int
+    set_type: Literal["warmup", "working"]
+    actual_weight_kg: Optional[float] = None
+    actual_reps: Optional[int] = None
+    completed: bool
+    note: Optional[str] = None
+
+
+class ForgeExerciseHistorySessionResponse(BaseModel):
+    id: UUID
+    name: str
+    completed_at: Any
+    started_at: Any
+    machine_profile_name: Optional[str] = None
+    sets: list[ForgeExerciseHistorySetResponse]
+
+
+class ForgeExerciseHistoryResponse(BaseModel):
+    exercise: ForgeExerciseResponse
+    sessions: list[ForgeExerciseHistorySessionResponse]
+
+
 class ForgePlanSetInput(BaseModel):
     set_type: Literal["warmup", "working"] = "working"
     previous_weight_kg: Optional[float] = Field(None, ge=0, le=1000)

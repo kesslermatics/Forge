@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import dynamicIconImports from 'lucide-react/dynamicIconImports';
+import { useNavigate } from 'react-router-dom';
 import {
   Bot, CirclePlus, Dumbbell, Loader2,
-  Pencil, Plus, Save, Sparkles, Trash2, Wrench,
+  Pencil, Plus, Save, Sparkles, Trash2, TrendingUp, Wrench,
 } from 'lucide-react';
 import {
   createForgeExercise, createForgePlan, createForgeProgram, deleteForgeExercise, deleteForgePlan,
@@ -81,6 +82,7 @@ const formatSet = (weight: number | null, reps: number | null) => {
 };
 
 export default function ForgePlanPage() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<'plan' | 'exercises'>('plan');
   const [plans, setPlans] = useState<ForgePlan[]>([]);
   const [programs, setPrograms] = useState<ForgeProgram[]>([]);
@@ -374,7 +376,7 @@ export default function ForgePlanPage() {
             onCancel={() => { setExerciseEditor(false); setEditingExerciseId(null); }} onSave={() => void saveExercise()}
           /> : <>
             <button onClick={() => startExercise()} className="btn-forge w-full flex items-center justify-center gap-2"><CirclePlus size={16} />Eigene Übung</button>
-            {exercises.length ? <div className="space-y-2">{exercises.map((exercise) => <ExerciseCard key={exercise.id} exercise={exercise} onEdit={() => startExercise(exercise)} onDelete={() => void removeExercise(exercise)} />)}</div>
+            {exercises.length ? <div className="space-y-2">{exercises.map((exercise) => <ExerciseCard key={exercise.id} exercise={exercise} onHistory={() => navigate(`/forge/exercises/${exercise.id}/history`)} onEdit={() => startExercise(exercise)} onDelete={() => void removeExercise(exercise)} />)}</div>
               : <EmptyState icon={<Wrench size={22} />} title="Deine Übungsbibliothek ist leer" copy="Erstelle eigene Bewegungen und hinterlege für Maschinen getrennte Profile." action="Übung anlegen" onClick={() => startExercise()} />}
           </>}
         </section>
@@ -443,8 +445,9 @@ function ExerciseEditor({ draft, saving, onChange, onToggleSecondary, onUpdatePr
   </div>;
 }
 
-function ExerciseCard({ exercise, onEdit, onDelete }: { exercise: ForgeExercise; onEdit: () => void; onDelete: () => void }) {
-  return <div className="card-forge p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(232,197,138,0.11)', color: SAND }}><ForgeExerciseIcon name={exercise.icon} size={17} /></div><div className="min-w-0 flex-1"><h3 className="text-[13px] font-medium truncate" style={{ color: TEXT }}>{exercise.name}</h3><p className="text-[11px] truncate mt-0.5" style={{ color: DIM }}>{equipmentLabel(exercise.equipment)} · {exercise.primary_muscle_group}{exercise.secondary_muscle_groups.length ? ` + ${exercise.secondary_muscle_groups.join(', ')}` : ''}</p>{exercise.machine_profiles.length > 0 && <p className="text-[10px] mt-1" style={{ color: SAND }}>{exercise.machine_profiles.map((profile) => profile.name).join(' · ')}</p>}</div><button onClick={onEdit} className="tap cursor-pointer" style={{ color: SAND }}><Pencil size={15} /></button><button onClick={onDelete} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={15} /></button></div>;
+function ExerciseCard({ exercise, onHistory, onEdit, onDelete }: { exercise: ForgeExercise; onHistory: () => void; onEdit: () => void; onDelete: () => void }) {
+  const openHistory = () => onHistory();
+  return <div role="button" tabIndex={0} onClick={openHistory} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openHistory(); } }} className="card-forge p-4 flex items-center gap-3 cursor-pointer" style={{ borderColor: BORDER }}><div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(232,197,138,0.11)', color: SAND }}><ForgeExerciseIcon name={exercise.icon} size={17} /></div><div className="min-w-0 flex-1"><h3 className="text-[13px] font-medium truncate" style={{ color: TEXT }}>{exercise.name}</h3><p className="text-[11px] truncate mt-0.5" style={{ color: DIM }}>{equipmentLabel(exercise.equipment)} · {exercise.primary_muscle_group}{exercise.secondary_muscle_groups.length ? ` + ${exercise.secondary_muscle_groups.join(', ')}` : ''}</p>{exercise.machine_profiles.length > 0 && <p className="text-[10px] mt-1" style={{ color: SAND }}>{exercise.machine_profiles.map((profile) => profile.name).join(' · ')}</p>}</div><TrendingUp size={15} style={{ color: SAND }} /><button onClick={(event) => { event.stopPropagation(); onEdit(); }} className="tap cursor-pointer" style={{ color: SAND }} aria-label={`${exercise.name} bearbeiten`}><Pencil size={15} /></button><button onClick={(event) => { event.stopPropagation(); onDelete(); }} className="tap cursor-pointer" style={{ color: DIM }} aria-label={`${exercise.name} löschen`}><Trash2 size={15} /></button></div>;
 }
 
 function EmptyState({ icon, title, copy, action, onClick }: { icon: React.ReactNode; title: string; copy: string; action: string; onClick: () => void }) {
@@ -461,6 +464,36 @@ function ProgramSummary({ program, onEdit, onCreate }: { program: ForgeProgram |
 
 function ProgramEditor({ draft, plans, saving, onChange, onToggleRoutine, onCancel, onSave }: { draft: ForgeProgramInput; plans: ForgePlan[]; saving: boolean; onChange: (draft: ForgeProgramInput) => void; onToggleRoutine: (plan: ForgePlan) => void; onCancel: () => void; onSave: () => void }) {
   const dayLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-  const toggleDay = (planId: string, day: number) => onChange({ ...draft, routines: draft.routines.map((routine) => routine.plan_id !== planId ? routine : { ...routine, weekdays: routine.weekdays.includes(day) ? routine.weekdays.filter((item) => item !== day) : [...routine.weekdays, day] }) });
-  return <div className="card-forge p-4 space-y-4" style={{ borderColor: `${SAND}28` }}><div className="flex justify-between"><div><p className="text-[10px] uppercase tracking-widest" style={{ color: SAND }}>Ablauf</p><h2 className="text-[16px] font-semibold mt-1" style={{ color: TEXT }}>Trainingsplan einrichten</h2></div><button onClick={onCancel} className="text-[12px] cursor-pointer" style={{ color: DIM }}>Abbrechen</button></div><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} className="input-forge w-full" placeholder="Name des Plans" /><div className="grid grid-cols-2 gap-2">{([['rotation', 'Rotierend'], ['weekly', 'Wöchentlich']] as const).map(([mode, label]) => <button key={mode} onClick={() => onChange({ ...draft, mode, routines: draft.routines.map((routine) => ({ ...routine, weekdays: mode === 'rotation' ? [] : routine.weekdays })) })} className="tap rounded-xl py-2.5 text-[12px] cursor-pointer" style={{ color: draft.mode === mode ? SAND : DIM, border: `1px solid ${draft.mode === mode ? SAND : BORDER}`, background: draft.mode === mode ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{label}</button>)}</div><p className="text-[11px] leading-relaxed" style={{ color: DIM }}>{draft.mode === 'rotation' ? 'Forge zeigt immer die nächste Routine. Erst nach Abschluss der Session springt die Rotation weiter.' : 'Ordne jeder Routine mindestens einen Wochentag zu. Auf Home erscheint nur, was heute ansteht.'}</p><div className="space-y-2">{plans.map((plan) => { const routine = draft.routines.find((item) => item.plan_id === plan.id); return <div key={plan.id} className="rounded-xl px-3 py-3" style={{ background: 'rgba(255,247,235,0.035)' }}><div className="flex justify-between items-center"><button onClick={() => onToggleRoutine(plan)} className="text-left text-[12px] cursor-pointer" style={{ color: routine ? TEXT : DIM }}>{routine ? '✓ ' : ''}{plan.name}</button>{routine && draft.mode === 'weekly' && <div className="flex gap-1">{dayLabels.map((label, day) => <button key={label} onClick={() => toggleDay(plan.id, day)} className="tap w-6 h-6 rounded-full text-[9px] cursor-pointer" style={{ color: routine.weekdays.includes(day) ? '#16130f' : DIM, background: routine.weekdays.includes(day) ? SAND : 'rgba(255,247,235,0.06)' }}>{label}</button>)}</div>}</div></div>; })}</div><button onClick={onSave} disabled={saving} className="btn-forge w-full flex items-center justify-center gap-2">{saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Ablauf speichern</button></div>;
+  const toggleDay = (planId: string, day: number) => {
+    const routine = draft.routines.find((item) => item.plan_id === planId);
+    if (!routine) {
+      onChange({ ...draft, routines: [...draft.routines, { plan_id: planId, weekdays: [day] }] });
+      return;
+    }
+    const weekdays = routine.weekdays.includes(day)
+      ? routine.weekdays.filter((item) => item !== day)
+      : [...routine.weekdays, day].sort();
+    onChange({
+      ...draft,
+      routines: weekdays.length
+        ? draft.routines.map((item) => item.plan_id === planId ? { ...item, weekdays } : item)
+        : draft.routines.filter((item) => item.plan_id !== planId),
+    });
+  };
+  return <div className="card-forge p-4 space-y-4" style={{ borderColor: `${SAND}28` }}>
+    <div className="flex justify-between"><div><p className="text-[10px] uppercase tracking-widest" style={{ color: SAND }}>Ablauf</p><h2 className="text-[16px] font-semibold mt-1" style={{ color: TEXT }}>Trainingsplan einrichten</h2></div><button onClick={onCancel} className="text-[12px] cursor-pointer" style={{ color: DIM }}>Abbrechen</button></div>
+    <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} className="input-forge w-full" placeholder="Name des Plans" />
+    <div className="grid grid-cols-2 gap-2">{([['rotation', 'Rotierend'], ['weekly', 'Wöchentlich']] as const).map(([mode, label]) => <button key={mode} onClick={() => onChange({ ...draft, mode, routines: draft.routines.map((routine) => ({ ...routine, weekdays: mode === 'rotation' ? [] : routine.weekdays })) })} className="tap rounded-xl py-2.5 text-[12px] cursor-pointer" style={{ color: draft.mode === mode ? SAND : DIM, border: `1px solid ${draft.mode === mode ? SAND : BORDER}`, background: draft.mode === mode ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{label}</button>)}</div>
+    <p className="text-[11px] leading-relaxed" style={{ color: DIM }}>{draft.mode === 'rotation' ? 'Forge zeigt immer die nächste Routine. Erst nach Abschluss der Session springt die Rotation weiter.' : 'Tippe direkt auf die Wochentage einer Routine. Du kannst dieselbe Routine mehreren Tagen zuordnen.'}</p>
+    <div className="space-y-2">{plans.map((plan) => {
+      const routine = draft.routines.find((item) => item.plan_id === plan.id);
+      return <div key={plan.id} className="rounded-xl px-3 py-3" style={{ background: 'rgba(255,247,235,0.035)' }}>
+        <div className="flex justify-between items-center gap-3">
+          {draft.mode === 'rotation' ? <button onClick={() => onToggleRoutine(plan)} className="text-left text-[12px] cursor-pointer" style={{ color: routine ? TEXT : DIM }}>{routine ? '✓ ' : ''}{plan.name}</button> : <p className="text-[12px]" style={{ color: routine ? TEXT : DIM }}>{routine ? '✓ ' : ''}{plan.name}</p>}
+          {draft.mode === 'weekly' && <div className="flex gap-1 shrink-0">{dayLabels.map((label, day) => <button key={label} onClick={() => toggleDay(plan.id, day)} className="tap w-6 h-6 rounded-full text-[9px] cursor-pointer" aria-label={`${plan.name} am ${label}`} style={{ color: routine?.weekdays.includes(day) ? '#16130f' : DIM, background: routine?.weekdays.includes(day) ? SAND : 'rgba(255,247,235,0.06)', border: `1px solid ${routine?.weekdays.includes(day) ? SAND : BORDER}` }}>{label}</button>)}</div>}
+        </div>
+      </div>;
+    })}</div>
+    <button onClick={onSave} disabled={saving} className="btn-forge w-full flex items-center justify-center gap-2">{saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Ablauf speichern</button>
+  </div>;
 }
