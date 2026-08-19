@@ -32,6 +32,7 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
     throw new Error(err.detail || `Error ${res.status}`);
   }
 
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -582,3 +583,260 @@ export const getNutritionAnalysis = () =>
   apiRequest<NutritionAnalysis>('/api/briefing/nutrition-analysis', {
     method: 'POST',
   });
+
+
+/* ── Native Forge planning ─────────────────────────────── */
+
+export type ForgeEquipment = 'none' | 'barbell' | 'dumbbell' | 'kettlebell' | 'machine' | 'other';
+export type ForgeSetType = 'warmup' | 'working';
+
+export interface ForgeMachineProfile {
+  id: string;
+  name: string;
+  model: string | null;
+  notes: string | null;
+}
+
+export interface ForgeMachineProfileInput {
+  name: string;
+  model?: string | null;
+  notes?: string | null;
+}
+
+export interface ForgeExercise {
+  id: string;
+  name: string;
+  icon: string;
+  equipment: ForgeEquipment;
+  primary_muscle_group: string;
+  secondary_muscle_groups: string[];
+  machine_profiles: ForgeMachineProfile[];
+}
+
+export interface ForgeExerciseInput {
+  name: string;
+  icon: string;
+  equipment: ForgeEquipment;
+  primary_muscle_group: string;
+  secondary_muscle_groups: string[];
+  machine_profiles: ForgeMachineProfileInput[];
+}
+
+export interface ForgePlanSet {
+  id: string;
+  position: number;
+  set_type: ForgeSetType;
+  previous_weight_kg: number | null;
+  previous_reps: number | null;
+  current_weight_kg: number | null;
+  current_reps: number | null;
+  coach_suggested_weight_kg: number | null;
+  coach_suggested_reps: number | null;
+  note: string | null;
+}
+
+export interface ForgePlanSetInput {
+  set_type: ForgeSetType;
+  previous_weight_kg?: number | null;
+  previous_reps?: number | null;
+  current_weight_kg?: number | null;
+  current_reps?: number | null;
+  coach_suggested_weight_kg?: number | null;
+  coach_suggested_reps?: number | null;
+  note?: string | null;
+}
+
+export interface ForgePlanExercise {
+  id: string;
+  position: number;
+  notes: string | null;
+  exercise: ForgeExercise;
+  machine_profile: ForgeMachineProfile | null;
+  sets: ForgePlanSet[];
+}
+
+export interface ForgePlanExerciseInput {
+  exercise_id: string;
+  machine_profile_id?: string | null;
+  notes?: string | null;
+  sets: ForgePlanSetInput[];
+}
+
+export interface ForgePlan {
+  id: string;
+  name: string;
+  description: string | null;
+  position: number;
+  exercises: ForgePlanExercise[];
+}
+
+export interface ForgePlanInput {
+  name: string;
+  description?: string | null;
+  position: number;
+  exercises: ForgePlanExerciseInput[];
+}
+
+export const getForgeExercises = () => apiRequest<ForgeExercise[]>('/api/forge/exercises');
+export const createForgeExercise = (data: ForgeExerciseInput) =>
+  apiRequest<ForgeExercise>('/api/forge/exercises', { method: 'POST', body: JSON.stringify(data) });
+export const updateForgeExercise = (id: string, data: ForgeExerciseInput) =>
+  apiRequest<ForgeExercise>(`/api/forge/exercises/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteForgeExercise = (id: string) =>
+  apiRequest<void>(`/api/forge/exercises/${id}`, { method: 'DELETE' });
+export const generateForgeExerciseDraft = (instructions: string) =>
+  apiRequest<{ draft: ForgeExerciseInput }>('/api/forge/drafts/exercise', {
+    method: 'POST', body: JSON.stringify({ instructions }),
+  });
+
+export const getForgePlans = () => apiRequest<ForgePlan[]>('/api/forge/plans');
+export const createForgePlan = (data: ForgePlanInput) =>
+  apiRequest<ForgePlan>('/api/forge/plans', { method: 'POST', body: JSON.stringify(data) });
+export const updateForgePlan = (id: string, data: ForgePlanInput) =>
+  apiRequest<ForgePlan>(`/api/forge/plans/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteForgePlan = (id: string) =>
+  apiRequest<void>(`/api/forge/plans/${id}`, { method: 'DELETE' });
+export const generateForgePlanDraft = (instructions: string, exercise_ids: string[], base_plan_id?: string) =>
+  apiRequest<{ draft: ForgePlanInput }>('/api/forge/drafts/plan', {
+    method: 'POST', body: JSON.stringify({ instructions, exercise_ids, base_plan_id: base_plan_id ?? null }),
+  });
+
+
+/* ── Native Forge programs and live sessions ───────────── */
+
+export type ForgeProgramMode = 'rotation' | 'weekly';
+
+export interface ForgeProgramRoutine {
+  id: string;
+  position: number;
+  weekdays: number[];
+  plan: ForgePlan;
+}
+
+export interface ForgeProgram {
+  id: string;
+  name: string;
+  mode: ForgeProgramMode;
+  is_active: boolean;
+  rotation_cursor: number;
+  routines: ForgeProgramRoutine[];
+}
+
+export interface ForgeProgramInput {
+  name: string;
+  mode: ForgeProgramMode;
+  is_active: boolean;
+  routines: Array<{ plan_id: string; weekdays: number[] }>;
+}
+
+export interface ForgeToday {
+  mode: ForgeProgramMode | null;
+  program: ForgeProgram | null;
+  routine: ForgePlan | null;
+  options: ForgePlan[];
+  message: string;
+}
+
+export interface ForgeSessionSet {
+  id: string;
+  position: number;
+  set_type: ForgeSetType;
+  target_weight_kg: number | null;
+  target_reps: number | null;
+  actual_weight_kg: number | null;
+  actual_reps: number | null;
+  coach_suggested_weight_kg: number | null;
+  coach_suggested_reps: number | null;
+  completed: boolean;
+  note: string | null;
+}
+
+export interface ForgeSessionSetInput {
+  set_type: ForgeSetType;
+  target_weight_kg?: number | null;
+  target_reps?: number | null;
+  actual_weight_kg?: number | null;
+  actual_reps?: number | null;
+  coach_suggested_weight_kg?: number | null;
+  coach_suggested_reps?: number | null;
+  completed: boolean;
+  note?: string | null;
+}
+
+export interface ForgeSessionExercise {
+  id: string;
+  source_exercise_id: string | null;
+  name: string;
+  icon: string;
+  equipment: ForgeEquipment;
+  primary_muscle_group: string;
+  secondary_muscle_groups: string[];
+  machine_profile_name: string | null;
+  notes: string | null;
+  position: number;
+  sets: ForgeSessionSet[];
+}
+
+export interface ForgeSessionAction {
+  type: 'adjust_set' | 'add_set' | 'add_exercise';
+  title: string;
+  payload: Record<string, unknown>;
+}
+
+export interface ForgeSessionMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  proposed_action: ForgeSessionAction | null;
+  action_status: 'pending' | 'applied' | 'dismissed' | null;
+  created_at: string;
+}
+
+export interface ForgeSession {
+  id: string;
+  program_id: string | null;
+  source_plan_id: string | null;
+  name: string;
+  status: 'active' | 'completed';
+  started_at: string;
+  completed_at: string | null;
+  exercises: ForgeSessionExercise[];
+  messages: ForgeSessionMessage[];
+}
+
+export const getForgePrograms = () => apiRequest<ForgeProgram[]>('/api/forge/programs');
+export const createForgeProgram = (data: ForgeProgramInput) =>
+  apiRequest<ForgeProgram>('/api/forge/programs', { method: 'POST', body: JSON.stringify(data) });
+export const updateForgeProgram = (id: string, data: ForgeProgramInput) =>
+  apiRequest<ForgeProgram>(`/api/forge/programs/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteForgeProgram = (id: string) =>
+  apiRequest<void>(`/api/forge/programs/${id}`, { method: 'DELETE' });
+export const getForgeToday = () => apiRequest<ForgeToday>('/api/forge/today');
+
+export const startForgeSession = (plan_id: string, program_id?: string | null) =>
+  apiRequest<ForgeSession>('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ plan_id, program_id: program_id ?? null }) });
+export const getForgeSession = (id: string) => apiRequest<ForgeSession>(`/api/forge/sessions/${id}`);
+export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_name?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises`, { method: 'POST', body: JSON.stringify(data) });
+export const updateForgeSessionSet = (sessionId: string, setId: string, data: ForgeSessionSetInput) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/sets/${setId}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const addForgeSessionSet = (sessionId: string, sessionExerciseId: string, data: ForgeSessionSetInput) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}/sets`, { method: 'POST', body: JSON.stringify(data) });
+export const deleteForgeSessionSet = (sessionId: string, setId: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/sets/${setId}`, { method: 'DELETE' });
+export const deleteForgeSessionExercise = (sessionId: string, sessionExerciseId: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}`, { method: 'DELETE' });
+export const completeForgeSession = (sessionId: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/complete`, { method: 'POST' });
+export const sendForgeSessionChat = (sessionId: string, message: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/chat`, { method: 'POST', body: JSON.stringify({ message }) });
+export const applyForgeSessionAction = (sessionId: string, message_id: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/actions/apply`, { method: 'POST', body: JSON.stringify({ message_id }) });
+export const dismissForgeSessionAction = (sessionId: string, message_id: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/actions/dismiss`, { method: 'POST', body: JSON.stringify({ message_id }) });
+
+export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId: string, data: { machine_profile_name?: string | null; notes?: string | null }) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}`, { method: 'PATCH', body: JSON.stringify(data) });
+
+export const refreshForgePlanCoachTargets = (planId: string) =>
+  apiRequest<ForgePlan>(`/api/forge/plans/${planId}/coach-targets`, { method: 'POST' });

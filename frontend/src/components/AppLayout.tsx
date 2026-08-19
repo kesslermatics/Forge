@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
 import { getMe, logoutUser, isAuthenticated } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { Loader2, Home, UtensilsCrossed, Trophy, Settings } from 'lucide-react';
+import { Loader2, Home, UtensilsCrossed, Trophy, Settings, Dumbbell } from 'lucide-react';
 import { LanguageContext } from '../i18n';
 import type { Lang } from '../i18n';
 import ForgeIcon from './ForgeIcon';
@@ -73,8 +73,9 @@ export default function AppLayout() {
                 {/* Bottom tab bar */}
                 <nav className="fixed bottom-0 left-0 right-0 z-40"
                     style={{ background: 'rgba(22,19,15,0.92)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(232,197,138,0.1)' }}>
-                    <div className="max-w-2xl mx-auto grid grid-cols-4 h-16">
+                    <div className="max-w-2xl mx-auto grid grid-cols-5 h-16">
                         <Tab to="/dashboard" icon={<Home size={22} />} label="Home" />
+                        <Tab to="/forge" icon={<Dumbbell size={22} />} label="Plan" />
                         <Tab to="/nutrition" icon={<UtensilsCrossed size={22} />} label="Ernährung" />
                         <Tab to="/achievements" icon={<Trophy size={22} />} label="Erfolge" />
                         <Tab to="/settings" icon={<Settings size={22} />} label="Einstellungen" />

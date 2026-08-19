@@ -2,7 +2,7 @@
 Pydantic schemas for request/response validation.
 """
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from uuid import UUID
 from datetime import date
 
@@ -168,3 +168,232 @@ class BriefingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ============ Native Forge Training Planning ============
+
+ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "machine", "other"]
+
+
+class ForgeMachineProfileInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    model: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = Field(None, max_length=500)
+
+
+class ForgeMachineProfileResponse(ForgeMachineProfileInput):
+    id: UUID
+
+    class Config:
+        from_attributes = True
+
+
+class ForgeExerciseInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    icon: str = Field("Dumbbell", min_length=1, max_length=64)
+    equipment: ForgeEquipment = "other"
+    primary_muscle_group: str = Field(..., min_length=1, max_length=64)
+    secondary_muscle_groups: list[str] = Field(default_factory=list, max_length=8)
+    machine_profiles: list[ForgeMachineProfileInput] = Field(default_factory=list, max_length=20)
+
+
+class ForgeExerciseResponse(BaseModel):
+    id: UUID
+    name: str
+    icon: str
+    equipment: ForgeEquipment
+    primary_muscle_group: str
+    secondary_muscle_groups: list[str]
+    machine_profiles: list[ForgeMachineProfileResponse]
+
+    class Config:
+        from_attributes = True
+
+
+class ForgePlanSetInput(BaseModel):
+    set_type: Literal["warmup", "working"] = "working"
+    previous_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    previous_reps: Optional[int] = Field(None, ge=0, le=200)
+    current_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    current_reps: Optional[int] = Field(None, ge=0, le=200)
+    coach_suggested_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    coach_suggested_reps: Optional[int] = Field(None, ge=0, le=200)
+    note: Optional[str] = Field(None, max_length=300)
+
+
+class ForgePlanSetResponse(ForgePlanSetInput):
+    id: UUID
+    position: int
+
+    class Config:
+        from_attributes = True
+
+
+class ForgePlanExerciseInput(BaseModel):
+    exercise_id: UUID
+    machine_profile_id: Optional[UUID] = None
+    notes: Optional[str] = Field(None, max_length=500)
+    sets: list[ForgePlanSetInput] = Field(default_factory=list, max_length=12)
+
+
+class ForgePlanExerciseResponse(BaseModel):
+    id: UUID
+    position: int
+    notes: Optional[str] = None
+    exercise: ForgeExerciseResponse
+    machine_profile: Optional[ForgeMachineProfileResponse] = None
+    sets: list[ForgePlanSetResponse]
+
+    class Config:
+        from_attributes = True
+
+
+class ForgePlanInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=500)
+    position: int = Field(0, ge=0, le=100)
+    exercises: list[ForgePlanExerciseInput] = Field(default_factory=list, max_length=30)
+
+
+class ForgePlanResponse(BaseModel):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    position: int
+    exercises: list[ForgePlanExerciseResponse]
+
+    class Config:
+        from_attributes = True
+
+
+class ForgeExerciseDraftRequest(BaseModel):
+    instructions: str = Field(..., min_length=3, max_length=2000)
+
+
+class ForgePlanDraftRequest(BaseModel):
+    instructions: str = Field(..., min_length=3, max_length=2000)
+    exercise_ids: list[UUID] = Field(..., min_length=1, max_length=30)
+    base_plan_id: Optional[UUID] = None
+
+
+class ForgeDraftResponse(BaseModel):
+    draft: dict
+
+
+# ============ Native Forge Programs and Sessions ============
+
+ForgeProgramMode = Literal["rotation", "weekly"]
+
+
+class ForgeProgramRoutineInput(BaseModel):
+    plan_id: UUID
+    weekdays: list[int] = Field(default_factory=list, max_length=7)
+
+
+class ForgeProgramInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    mode: ForgeProgramMode = "rotation"
+    is_active: bool = True
+    routines: list[ForgeProgramRoutineInput] = Field(default_factory=list, max_length=30)
+
+
+class ForgeProgramRoutineResponse(BaseModel):
+    id: UUID
+    position: int
+    weekdays: list[int]
+    plan: ForgePlanResponse
+
+
+class ForgeProgramResponse(BaseModel):
+    id: UUID
+    name: str
+    mode: ForgeProgramMode
+    is_active: bool
+    rotation_cursor: int
+    routines: list[ForgeProgramRoutineResponse]
+
+
+class ForgeTodayResponse(BaseModel):
+    mode: Optional[ForgeProgramMode] = None
+    program: Optional[ForgeProgramResponse] = None
+    routine: Optional[ForgePlanResponse] = None
+    options: list[ForgePlanResponse] = Field(default_factory=list)
+    message: str
+
+
+class ForgeSessionSetInput(BaseModel):
+    set_type: Literal["warmup", "working"] = "working"
+    target_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    target_reps: Optional[int] = Field(None, ge=0, le=200)
+    actual_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    actual_reps: Optional[int] = Field(None, ge=0, le=200)
+    coach_suggested_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    coach_suggested_reps: Optional[int] = Field(None, ge=0, le=200)
+    completed: bool = False
+    note: Optional[str] = Field(None, max_length=300)
+
+
+class ForgeSessionSetResponse(ForgeSessionSetInput):
+    id: UUID
+    position: int
+
+
+class ForgeSessionExerciseInput(BaseModel):
+    exercise_id: Optional[UUID] = None
+    name: Optional[str] = Field(None, max_length=255)
+    machine_profile_name: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = Field(None, max_length=500)
+    sets: list[ForgeSessionSetInput] = Field(default_factory=list, max_length=20)
+
+
+class ForgeSessionExerciseResponse(BaseModel):
+    id: UUID
+    source_exercise_id: Optional[UUID] = None
+    name: str
+    icon: str
+    equipment: str
+    primary_muscle_group: str
+    secondary_muscle_groups: list[str]
+    machine_profile_name: Optional[str] = None
+    notes: Optional[str] = None
+    position: int
+    sets: list[ForgeSessionSetResponse]
+
+
+class ForgeSessionMessageResponse(BaseModel):
+    id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    proposed_action: Optional[dict] = None
+    action_status: Optional[str] = None
+    created_at: Any
+
+
+class ForgeSessionResponse(BaseModel):
+    id: UUID
+    program_id: Optional[UUID] = None
+    source_plan_id: Optional[UUID] = None
+    name: str
+    status: Literal["active", "completed"]
+    started_at: Any
+    completed_at: Optional[Any] = None
+    exercises: list[ForgeSessionExerciseResponse]
+    messages: list[ForgeSessionMessageResponse] = Field(default_factory=list)
+
+
+class ForgeStartSessionRequest(BaseModel):
+    plan_id: UUID
+    program_id: Optional[UUID] = None
+
+
+class ForgeSessionChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+
+
+class ForgeApplySessionActionRequest(BaseModel):
+    message_id: UUID
+
+
+class ForgeSessionExerciseUpdate(BaseModel):
+    machine_profile_name: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = Field(None, max_length=500)

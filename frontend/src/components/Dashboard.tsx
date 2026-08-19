@@ -1,13 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWorkoutList, getWorkoutTips,
     getWeather, saveTrainingPlan, sendChatMessage, getWeightHistory,
-    getTodayNutrition, getStreaks,
+    getTodayNutrition, getStreaks, getForgeToday, startForgeSession,
 } from '../api/api';
 import type {
     UserInfo, Briefing, WorkoutTips, WeatherData,
-    ChatMessage, WeightHistoryEntry, TodayNutrition, StreaksData,
+    ChatMessage, WeightHistoryEntry, TodayNutrition, StreaksData, ForgeToday,
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
@@ -88,6 +88,7 @@ const PROG_META: Record<string, { label: string; color: string; bg: string }> = 
 
 export default function Dashboard() {
     const { user } = useOutletContext<LayoutContext>();
+    const navigate = useNavigate();
     const { lang } = useLanguage();
 
     const [briefing, setBriefing] = useState<Briefing | null>(null);
@@ -116,6 +117,9 @@ export default function Dashboard() {
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
     const [streaks, setStreaks] = useState<StreaksData | null>(null);
+    const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
+    const [todayRoutineId, setTodayRoutineId] = useState<string | null>(null);
+    const [startingSession, setStartingSession] = useState(false);
 
     /* load briefing + secondary data */
     useEffect(() => {
@@ -146,6 +150,7 @@ export default function Dashboard() {
         getWeightHistory(90).then(d => setWeightHistory(d.entries)).catch(() => { });
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
         getStreaks().then(setStreaks).catch(() => { });
+        getForgeToday().then(data => { setForgeToday(data); setTodayRoutineId(data.routine?.id ?? null); }).catch(() => { });
     }, []);
 
     useEffect(() => {
@@ -219,6 +224,18 @@ export default function Dashboard() {
     const weightValues = weightHistory.map(w => w.weight_kg);
     const weightCurrent = weightValues[weightValues.length - 1];
     const weightDelta = weightValues.length >= 2 ? weightCurrent - weightValues[0] : null;
+    const homeRoutine = forgeToday?.options.find(option => option.id === todayRoutineId) ?? forgeToday?.routine ?? null;
+
+    const handleStartForgeSession = async () => {
+        if (!homeRoutine || startingSession) return;
+        setStartingSession(true);
+        try {
+            const session = await startForgeSession(homeRoutine.id, forgeToday?.program?.id);
+            navigate(`/forge/session/${session.id}`);
+        } catch (caught: any) {
+            setTipsError(caught?.message || 'Session konnte nicht gestartet werden.');
+        } finally { setStartingSession(false); }
+    };
 
     return (
         <div className="space-y-4">
@@ -243,6 +260,32 @@ export default function Dashboard() {
                     )}
                 </div>
             </header>
+
+            {homeRoutine && (
+                <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}2c` }}>
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>
+                                {forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran'}
+                            </p>
+                            <h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine.name}</h2>
+                            <p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>
+                                {homeRoutine.exercises.length} Übungen · {forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}
+                            </p>
+                        </div>
+                        <Dumbbell size={22} style={{ color: SAND }} />
+                    </div>
+                    {forgeToday && forgeToday.options.length > 1 && (
+                        <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                            {forgeToday.options.map(option => <button key={option.id} onClick={() => setTodayRoutineId(option.id)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: homeRoutine.id === option.id ? SAND : TEXT_DIM, border: `1px solid ${homeRoutine.id === option.id ? SAND : CARD_BORDER}`, background: homeRoutine.id === option.id ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{option.name}</button>)}
+                        </div>
+                    )}
+                    <button onClick={handleStartForgeSession} disabled={startingSession}
+                        className="btn-forge w-full mt-4 flex items-center justify-center gap-2">
+                        {startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}Training starten
+                    </button>
+                </section>
+            )}
 
             {/* ── Loading ── */}
             {loading && (

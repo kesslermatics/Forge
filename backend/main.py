@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 from app.routes import auth, user
 from app.routes import briefing as briefing_router
+from app.routes import forge as forge_router
 from app.scheduler import start_scheduler, stop_scheduler
 
 # Configure logging
@@ -77,6 +78,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(user.router)
 app.include_router(briefing_router.router)
+app.include_router(forge_router.router)
 
 
 @app.get("/", tags=["Health"])

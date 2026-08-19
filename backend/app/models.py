@@ -2,7 +2,7 @@
 SQLAlchemy database models.
 """
 import uuid
-from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -32,6 +32,10 @@ class User(Base):
     briefings = relationship("MorningBriefing", back_populates="user", cascade="all, delete-orphan")
     workout_reviews = relationship("WorkoutReview", back_populates="user", cascade="all, delete-orphan")
     weight_entries = relationship("WeightEntry", back_populates="user", cascade="all, delete-orphan")
+    forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
+    forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
+    forge_programs = relationship("ForgeTrainingProgram", back_populates="user", cascade="all, delete-orphan")
+    forge_sessions = relationship("ForgeWorkoutSession", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
@@ -107,3 +111,250 @@ class WeightEntry(Base):
 
     def __repr__(self):
         return f"<WeightEntry(user_id={self.user_id}, date={self.date}, weight={self.weight_kg})>"
+
+
+class ForgeExercise(Base):
+    """A user-owned canonical exercise; machine variants live in child profiles."""
+
+    __tablename__ = "forge_exercises"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_forge_exercise_user_name"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    icon = Column(String(64), nullable=False, server_default="Dumbbell")
+    equipment = Column(String(16), nullable=False, server_default="other")
+    primary_muscle_group = Column(String(64), nullable=False)
+    secondary_muscle_groups = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="forge_exercises")
+    machine_profiles = relationship("ForgeMachineProfile", back_populates="exercise", cascade="all, delete-orphan")
+    plan_exercises = relationship("ForgePlanExercise", back_populates="exercise")
+
+
+class ForgeMachineProfile(Base):
+    """A machine-specific loading profile for one canonical movement."""
+
+    __tablename__ = "forge_machine_profiles"
+    __table_args__ = (UniqueConstraint("exercise_id", "name", name="uq_forge_machine_profile_name"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_exercises.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)  # e.g. Life Fitness, Matrix
+    model = Column(String(100), nullable=True)
+    notes = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    exercise = relationship("ForgeExercise", back_populates="machine_profiles")
+    plan_exercises = relationship("ForgePlanExercise", back_populates="machine_profile")
+
+
+class ForgeTrainingPlan(Base):
+    """A named, user-owned training day/plan with ordered exercises."""
+
+    __tablename__ = "forge_training_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(String(500), nullable=True)
+    position = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="forge_plans")
+    exercises = relationship(
+        "ForgePlanExercise",
+        back_populates="plan",
+        cascade="all, delete-orphan",
+        order_by="ForgePlanExercise.position",
+    )
+
+
+class ForgePlanExercise(Base):
+    """One selected canonical exercise (and optional machine profile) within a plan."""
+
+    __tablename__ = "forge_plan_exercises"
+    __table_args__ = (UniqueConstraint("plan_id", "position", name="uq_forge_plan_exercise_position"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("forge_training_plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_exercises.id", ondelete="RESTRICT"), nullable=False, index=True)
+    machine_profile_id = Column(UUID(as_uuid=True), ForeignKey("forge_machine_profiles.id", ondelete="SET NULL"), nullable=True)
+    position = Column(Integer, nullable=False)
+    notes = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    plan = relationship("ForgeTrainingPlan", back_populates="exercises")
+    exercise = relationship("ForgeExercise", back_populates="plan_exercises")
+    machine_profile = relationship("ForgeMachineProfile", back_populates="plan_exercises")
+    sets = relationship(
+        "ForgePlanSet",
+        back_populates="plan_exercise",
+        cascade="all, delete-orphan",
+        order_by="ForgePlanSet.position",
+    )
+
+
+class ForgePlanSet(Base):
+    """A prescribed set with history, editable target, and coach recommendation."""
+
+    __tablename__ = "forge_plan_sets"
+    __table_args__ = (UniqueConstraint("plan_exercise_id", "position", name="uq_forge_plan_set_position"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_plan_exercises.id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    set_type = Column(String(16), nullable=False, server_default="working")
+    previous_weight_kg = Column(Float, nullable=True)
+    previous_reps = Column(Integer, nullable=True)
+    current_weight_kg = Column(Float, nullable=True)
+    current_reps = Column(Integer, nullable=True)
+    coach_suggested_weight_kg = Column(Float, nullable=True)
+    coach_suggested_reps = Column(Integer, nullable=True)
+    note = Column(String(300), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    plan_exercise = relationship("ForgePlanExercise", back_populates="sets")
+
+
+class ForgeTrainingProgram(Base):
+    """An active program that orders native routines by rotation or weekday schedule."""
+
+    __tablename__ = "forge_training_programs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    mode = Column(String(16), nullable=False, server_default="rotation")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    rotation_cursor = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="forge_programs")
+    routines = relationship(
+        "ForgeProgramRoutine",
+        back_populates="program",
+        cascade="all, delete-orphan",
+        order_by="ForgeProgramRoutine.position",
+    )
+    sessions = relationship("ForgeWorkoutSession", back_populates="program")
+
+
+class ForgeProgramRoutine(Base):
+    """Links one routine template to a program and optionally its weekdays."""
+
+    __tablename__ = "forge_program_routines"
+    __table_args__ = (UniqueConstraint("program_id", "plan_id", name="uq_forge_program_routine_plan"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    program_id = Column(UUID(as_uuid=True), ForeignKey("forge_training_programs.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("forge_training_plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    weekdays = Column(JSON, nullable=False, default=list)  # Monday=0 through Sunday=6
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    program = relationship("ForgeTrainingProgram", back_populates="routines")
+    plan = relationship("ForgeTrainingPlan")
+
+
+class ForgeWorkoutSession(Base):
+    """An editable snapshot of a routine at the moment a user starts training."""
+
+    __tablename__ = "forge_workout_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    program_id = Column(UUID(as_uuid=True), ForeignKey("forge_training_programs.id", ondelete="SET NULL"), nullable=True, index=True)
+    source_plan_id = Column(UUID(as_uuid=True), ForeignKey("forge_training_plans.id", ondelete="SET NULL"), nullable=True, index=True)
+    name = Column(String(255), nullable=False)
+    status = Column(String(16), nullable=False, server_default="active")
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="forge_sessions")
+    program = relationship("ForgeTrainingProgram", back_populates="sessions")
+    exercises = relationship(
+        "ForgeSessionExercise",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ForgeSessionExercise.position",
+    )
+    messages = relationship(
+        "ForgeSessionMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ForgeSessionMessage.created_at",
+    )
+
+
+class ForgeSessionExercise(Base):
+    """A session-local exercise snapshot, allowing live deviation from the routine."""
+
+    __tablename__ = "forge_session_exercises"
+    __table_args__ = (UniqueConstraint("session_id", "position", name="uq_forge_session_exercise_position"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("forge_workout_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_exercises.id", ondelete="SET NULL"), nullable=True)
+    source_plan_exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_plan_exercises.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String(255), nullable=False)
+    icon = Column(String(64), nullable=False, server_default="Dumbbell")
+    equipment = Column(String(16), nullable=False, server_default="other")
+    primary_muscle_group = Column(String(64), nullable=False)
+    secondary_muscle_groups = Column(JSON, nullable=False, default=list)
+    machine_profile_name = Column(String(100), nullable=True)
+    notes = Column(String(500), nullable=True)
+    position = Column(Integer, nullable=False)
+
+    session = relationship("ForgeWorkoutSession", back_populates="exercises")
+    sets = relationship(
+        "ForgeSessionSet",
+        back_populates="session_exercise",
+        cascade="all, delete-orphan",
+        order_by="ForgeSessionSet.position",
+    )
+
+
+class ForgeSessionSet(Base):
+    """A live set with planned, actual, and coach-proposed values."""
+
+    __tablename__ = "forge_session_sets"
+    __table_args__ = (UniqueConstraint("session_exercise_id", "position", name="uq_forge_session_set_position"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_session_exercises.id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    set_type = Column(String(16), nullable=False, server_default="working")
+    target_weight_kg = Column(Float, nullable=True)
+    target_reps = Column(Integer, nullable=True)
+    actual_weight_kg = Column(Float, nullable=True)
+    actual_reps = Column(Integer, nullable=True)
+    coach_suggested_weight_kg = Column(Float, nullable=True)
+    coach_suggested_reps = Column(Integer, nullable=True)
+    completed = Column(Boolean, nullable=False, server_default="false")
+    note = Column(String(300), nullable=True)
+
+    session_exercise = relationship("ForgeSessionExercise", back_populates="sets")
+
+
+class ForgeSessionMessage(Base):
+    """Persisted, session-scoped coaching chat with an optional pending action."""
+
+    __tablename__ = "forge_session_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("forge_workout_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(16), nullable=False)
+    content = Column(String(4000), nullable=False)
+    proposed_action = Column(JSON, nullable=True)
+    action_status = Column(String(16), nullable=True)  # pending, applied, dismissed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    session = relationship("ForgeWorkoutSession", back_populates="messages")

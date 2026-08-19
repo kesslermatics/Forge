@@ -7,6 +7,8 @@ import NutritionPage from './components/NutritionPage';
 import AchievementsTab from './components/AchievementsTab';
 import SetupPage from './components/SetupPage';
 import SettingsPage from './components/SettingsPage';
+import ForgePlanPage from './components/ForgePlanPage';
+import ForgeSessionPage from './components/ForgeSessionPage';
 import PreviewShowcase from './preview/PreviewShowcase';
 
 function App() {
@@ -25,6 +27,8 @@ function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/nutrition" element={<NutritionPage />} />
           <Route path="/achievements" element={<AchievementsTab />} />
+          <Route path="/forge" element={<ForgePlanPage />} />
+          <Route path="/forge/session/:sessionId" element={<ForgeSessionPage />} />
           <Route path="/setup" element={<SetupPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

@@ -675,106 +675,116 @@ async def generate_session_review(
 # ════════════════════════════════════════════════════════
 
 def _parse_available_weights(notes: str) -> list[float]:
-    """Parse available weight values from exercise notes like 'only 5 12 19 26 33'."""
+    """Parse an explicitly labelled list of permitted exercise weights from notes."""
     if not notes:
         return []
-    # Look for sequences of numbers (at least 3) that look like a weight list
-    numbers = re.findall(r'\d+(?:\.\d+)?', notes)
-    if len(numbers) >= 3:
-        return sorted(float(n) for n in numbers)
-    return []
+
+    # Never infer load options from arbitrary numbers: notes can also contain dates,
+    # rep targets, tempo cues, or machine-seat settings. A list must be explicitly
+    # labelled, for example: "Gewichte: 5, 12, 19" or "only 5 12 19".
+    match = re.search(
+        r"(?:available\s+weights?|verf[uü]gbare\s+gewichte|gewichte|only)\s*[:=]?\s*"
+        r"((?:\d+(?:[.,]\d+)?[\s,;/]*){2,})",
+        notes,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return []
+
+    values = [float(value.replace(",", ".")) for value in re.findall(r"\d+(?:[.,]\d+)?", match.group(1))]
+    return sorted(set(values))
 
 
 def _find_next_weight(current: float, available: list[float]) -> Optional[float]:
-    """Find the next weight step up from available weights."""
-    for w in available:
-        if w > current + 0.1:
-            return w
-    return None  # no higher weight available
+    """Return the smallest explicitly permitted load above the current load."""
+    return next((weight for weight in available if weight > current + 0.1), None)
 
 
-def _is_compound_exercise(exercise_name: str, muscle_group: str = "") -> bool:
-    """Heuristic to detect compound vs isolation exercises."""
-    name_lower = exercise_name.lower()
-    compound_keywords = [
-        "bench press", "squat", "deadlift", "row", "press", "pull-up", "pullup",
-        "chin-up", "chinup", "dip", "overhead press", "ohp", "clean", "snatch",
-        "lunge", "leg press", "hip thrust", "rack pull", "t-bar",
-        "bankdrücken", "kniebeuge", "kreuzheben", "rudern",
-    ]
-    for kw in compound_keywords:
-        if kw in name_lower:
-            return True
-    # Also consider muscle group hints
+def _get_rep_range(exercise_name: str, muscle_group: str = "") -> tuple[int, int]:
+    """Choose a practical hypertrophy rep range from the exercise name/equipment."""
+    name = exercise_name.lower()
+    isolation_keywords = (
+        "curl", "extension", "raise", "fly", "flye", "lateral", "straight arm",
+        "pullover", "leg curl", "leg extension", "abduction", "adduction", "calf",
+        "triceps", "biceps",
+    )
+    heavy_compound_keywords = (
+        "barbell bench", "bench press", "squat", "deadlift", "overhead press", "ohp",
+        "pull-up", "pullup", "chin-up", "chinup", "dip", "barbell row", "hip thrust",
+        "bankdrücken", "kniebeuge", "kreuzheben",
+    )
+    machine_or_cable_keywords = (
+        "cable", "machine", "maschinen", "pulldown", "row", "rudern", "leg press",
+        "chest press", "shoulder press",
+    )
+
+    if any(keyword in name for keyword in isolation_keywords):
+        return (10, 20)
+    if any(keyword in name for keyword in heavy_compound_keywords):
+        return (6, 10)
+    if any(keyword in name for keyword in machine_or_cable_keywords):
+        return (8, 15)
+
     compound_groups = {"chest", "back", "legs", "quadriceps", "hamstrings", "glutes", "full body"}
     if muscle_group.lower() in compound_groups:
-        return True
-    return False
+        return (6, 12)
+    return (8, 12)
 
 
 def _compute_exercise_progression(
     matching_sessions: list[dict],
     template_exercises: list[dict],
 ) -> dict:
-    """
-    Pre-compute progression analysis for each exercise across recent sessions.
-
-    Uses the Double Progression model:
-    - Rep range 8-12 (hypertrophy default)
-    - Increase weight when first set hits top AND all sets meet minimum
-    - Track total reps as session-over-session progress metric
-
-    Returns a dict keyed by exercise name (lowered) with progression signals.
-    """
+    """Pre-compute conservative, exercise-aware double-progression signals."""
     analysis = {}
-    MIN_REPS = 8
-    MAX_REPS = 12
 
     for tex in template_exercises:
         ex_name = tex.get("title", "").strip()
         ex_key = ex_name.lower()
         muscle_group = tex.get("muscle_group", "")
+        min_reps, max_reps = _get_rep_range(ex_name, muscle_group)
 
-        # Collect this exercise's data from all matching sessions (most recent first)
+        # Collect this exercise's data from all matching sessions (most recent first).
         sessions_data = []
         for session in matching_sessions:
             for ex in session.get("exercises", []):
-                if ex.get("title", "").strip().lower() == ex_key:
-                    working_sets = [
-                        s for s in ex.get("sets", [])
-                        if s.get("type", "normal") in ("normal", "working", "")
-                        and s.get("weight_kg") is not None
-                        and s.get("reps") is not None
-                        and s.get("weight_kg", 0) > 0
-                    ]
-                    if working_sets:
-                        # Use the most common (mode) weight as "working weight"
-                        # to filter out warmup sets that have lower weight
-                        weights = [s["weight_kg"] for s in working_sets]
-                        top_weight = max(weights)
-                        # Working sets = sets at or near the top weight (within 10%)
-                        true_working = [
-                            s for s in working_sets
-                            if s["weight_kg"] >= top_weight * 0.9
-                        ]
-                        if not true_working:
-                            true_working = working_sets
+                if ex.get("title", "").strip().lower() != ex_key:
+                    continue
 
-                        sessions_data.append({
-                            "date": session.get("start_time", "")[:10],
-                            "sets": true_working,
-                            "weight": top_weight,
-                            "reps_per_set": [s["reps"] for s in true_working],
-                            "total_reps": sum(s["reps"] for s in true_working),
-                            "num_sets": len(true_working),
-                        })
-                    break
+                working_sets = [
+                    set_data for set_data in ex.get("sets", [])
+                    if set_data.get("type", "normal") in ("normal", "working", "")
+                    and set_data.get("weight_kg") is not None
+                    and set_data.get("reps") is not None
+                    and set_data.get("weight_kg", 0) > 0
+                ]
+                if working_sets:
+                    top_weight = max(set_data["weight_kg"] for set_data in working_sets)
+                    # Preserve the existing warm-up filter while allowing legitimate
+                    # back-off work that remains close to the top load.
+                    true_working = [
+                        set_data for set_data in working_sets
+                        if set_data["weight_kg"] >= top_weight * 0.9
+                    ] or working_sets
+                    sessions_data.append({
+                        "date": session.get("start_time", "")[:10],
+                        "sets": true_working,
+                        "weight": top_weight,
+                        "reps_per_set": [set_data["reps"] for set_data in true_working],
+                        "total_reps": sum(set_data["reps"] for set_data in true_working),
+                        "num_sets": len(true_working),
+                    })
+                break
 
         if not sessions_data:
             analysis[ex_key] = {
                 "exercise_name": ex_name,
                 "signal": "FIRST_SESSION",
-                "suggestion": f"First time tracking. Start with moderate weight, 3 working sets in the 8-12 rep range. Focus on controlled reps.",
+                "suggestion": (
+                    f"No matched history. Keep the template's working-set count and start "
+                    f"conservatively in the {min_reps}-{max_reps} rep range."
+                ),
+                "rep_range": f"{min_reps}-{max_reps}",
                 "sessions_count": 0,
             }
             continue
@@ -782,111 +792,190 @@ def _compute_exercise_progression(
         latest = sessions_data[0]
         current_weight = latest["weight"]
 
-        # Count consecutive sessions at current weight (most recent first)
+        # Compare only consecutive sessions at the same load; total reps at different
+        # weights cannot identify either progression or regression reliably.
         sessions_at_weight = 0
         total_reps_at_weight = []
-        for sd in sessions_data:
-            if abs(sd["weight"] - current_weight) < 0.5:
+        for session_data in sessions_data:
+            if abs(session_data["weight"] - current_weight) < 0.5:
                 sessions_at_weight += 1
-                total_reps_at_weight.append(sd["total_reps"])
+                total_reps_at_weight.append(session_data["total_reps"])
             else:
                 break
 
-        # Rep analysis
-        first_set_reps = latest["reps_per_set"][0]
-        last_set_reps = latest["reps_per_set"][-1]
-        all_sets_meet_minimum = all(r >= MIN_REPS for r in latest["reps_per_set"])
-        first_set_at_top = first_set_reps >= MAX_REPS
-
-        # Total reps trend
-        reps_trending_up = False
-        reps_stagnated = False
-        if len(total_reps_at_weight) >= 2:
-            reps_trending_up = total_reps_at_weight[0] > total_reps_at_weight[1]
-            if len(total_reps_at_weight) >= 3:
-                reps_stagnated = (
-                    abs(total_reps_at_weight[0] - total_reps_at_weight[1]) <= 1
-                    and abs(total_reps_at_weight[1] - total_reps_at_weight[2]) <= 1
-                )
-
-        # Check for regression
+        reps_trending_up = (
+            len(total_reps_at_weight) >= 2
+            and total_reps_at_weight[0] > total_reps_at_weight[1]
+        )
+        reps_stagnated = (
+            len(total_reps_at_weight) >= 3
+            and all(
+                abs(total_reps_at_weight[index] - total_reps_at_weight[index + 1]) <= 1
+                for index in range(2)
+            )
+        )
         regressed = (
-            len(sessions_data) >= 2
-            and latest["total_reps"] < sessions_data[1].get("total_reps", 0) - 3
+            len(total_reps_at_weight) >= 2
+            and total_reps_at_weight[0] < total_reps_at_weight[1] - 3
         )
 
-        # Determine weight step
-        compound = _is_compound_exercise(ex_name, muscle_group)
-        default_step = 2.5 if compound else 1.25
+        latest_reps = latest["reps_per_set"]
+        all_sets_at_top = all(reps >= max_reps for reps in latest_reps)
+        available_weights = _parse_available_weights(tex.get("notes", ""))
+        suggested_next_weight = _find_next_weight(current_weight, available_weights)
 
-        # Check for weight constraints from notes
-        notes = tex.get("notes", "")
-        available_weights = _parse_available_weights(notes)
-        suggested_next_weight = None
-
-        if available_weights:
-            nw = _find_next_weight(current_weight, available_weights)
-            if nw is not None:
-                suggested_next_weight = nw
-        else:
-            suggested_next_weight = round(current_weight + default_step, 2)
-
-        # Determine signal
-        if first_set_at_top and all_sets_meet_minimum:
+        if all_sets_at_top and suggested_next_weight is not None:
             signal = "INCREASE_WEIGHT"
-            if suggested_next_weight:
-                suggestion = (
-                    f"All criteria met for weight increase! First set hit {first_set_reps} reps, "
-                    f"all sets ≥{MIN_REPS}. Step up to {suggested_next_weight}kg. "
-                    f"Expect reps to drop to ~{MIN_REPS}-{MIN_REPS + 2} range."
-                )
-            else:
-                suggestion = (
-                    f"All criteria met for weight increase! First set hit {first_set_reps} reps, "
-                    f"all sets ≥{MIN_REPS}. No higher weight available — add reps or a set instead."
-                )
+            suggestion = (
+                f"All working sets reached the top of the {min_reps}-{max_reps} range. "
+                f"Use the next verified load: {suggested_next_weight}kg."
+            )
+        elif all_sets_at_top:
+            signal = "KEEP_PROGRESSING"
+            suggestion = (
+                f"All working sets reached the top of the {min_reps}-{max_reps} range, "
+                "but no verified next load is recorded. Keep the current load until the "
+                "available increments are confirmed; do not invent an intermediate weight."
+            )
         elif regressed:
             signal = "REGRESSED"
             suggestion = (
-                f"Total reps dropped ({sessions_data[1]['total_reps']}→{latest['total_reps']}). "
-                f"Likely fatigue or off-day. Keep {current_weight}kg and aim to match previous best."
+                f"Comparable same-load total reps dropped ({total_reps_at_weight[1]}→"
+                f"{total_reps_at_weight[0]}). Keep {current_weight}kg and aim to match "
+                "the prior result; do not force a heavier target."
             )
-        elif sessions_at_weight >= 3 and reps_stagnated:
+        elif reps_stagnated:
             signal = "STAGNATED"
-            trend_str = "/".join(str(r) for r in total_reps_at_weight[:3])
+            trend = "/".join(str(reps) for reps in total_reps_at_weight[:3])
             suggestion = (
-                f"Same weight ({current_weight}kg) for {sessions_at_weight} sessions, "
-                f"total reps flat ({trend_str}). Consider: deload week, rep range change, or exercise variation."
+                f"Same-load total reps have been flat across three comparable sessions "
+                f"({trend}) at {current_weight}kg. Keep the load and set structure; check "
+                "setup, rest and recovery before changing the exercise or adding volume."
+            )
+        elif reps_trending_up:
+            signal = "KEEP_PROGRESSING"
+            suggestion = (
+                f"Progress is moving up at {current_weight}kg. Keep the load and add only "
+                f"the reps you can perform cleanly within {min_reps}-{max_reps}."
             )
         else:
             signal = "KEEP_PROGRESSING"
-            if reps_trending_up:
-                suggestion = (
-                    f"Good progress at {current_weight}kg — total reps increasing. "
-                    f"Keep building toward {MAX_REPS}/{MAX_REPS-1}/{MAX_REPS-2} before increasing weight."
-                )
-            else:
-                suggestion = (
-                    f"Continue at {current_weight}kg. Push for more reps each session "
-                    f"(current: {'/'.join(str(r) for r in latest['reps_per_set'])})."
-                )
+            suggestion = (
+                f"Keep {current_weight}kg and try to add a total rep when performance allows "
+                f"(latest: {'/'.join(str(reps) for reps in latest_reps)}; range {min_reps}-{max_reps})."
+            )
 
         analysis[ex_key] = {
             "exercise_name": ex_name,
             "signal": signal,
             "suggestion": suggestion,
+            "rep_range": f"{min_reps}-{max_reps}",
             "current_weight_kg": current_weight,
             "sessions_at_weight": sessions_at_weight,
-            "latest_reps": latest["reps_per_set"],
+            "latest_reps": latest_reps,
             "total_reps_latest": latest["total_reps"],
             "total_reps_trend": total_reps_at_weight[:3],
-            "first_set_reps": first_set_reps,
-            "last_set_reps": last_set_reps,
+            "first_set_reps": latest_reps[0],
+            "last_set_reps": latest_reps[-1],
             "sessions_count": len(sessions_data),
             "suggested_weight_kg": suggested_next_weight if signal == "INCREASE_WEIGHT" else None,
         }
 
     return analysis
+
+
+def _is_warmup_set(set_data: dict) -> bool:
+    """Return whether the Hevy template explicitly marks a set as a warm-up."""
+    return str(set_data.get("type", "")).lower() in {"warmup", "warm-up", "warm_up"}
+
+
+def _build_deterministic_set_targets(
+    template_exercises: list[dict],
+    progression: dict,
+    model_targets: list[dict],
+) -> list[dict]:
+    """Build safe target sets from history; Gemini supplies only concise reasoning."""
+    model_by_name = {
+        str(target.get("name", "")).strip().lower(): target
+        for target in model_targets
+        if isinstance(target, dict)
+    }
+    deterministic_targets = []
+
+    for template_exercise in template_exercises:
+        exercise_name = template_exercise.get("title", "").strip()
+        exercise_key = exercise_name.lower()
+        data = progression.get(exercise_key, {})
+        min_reps, max_reps = _get_rep_range(
+            exercise_name,
+            template_exercise.get("muscle_group", ""),
+        )
+        template_sets = template_exercise.get("sets", [])
+        if not template_sets:
+            historical_sets = data.get("latest_reps", [])
+            template_sets = [{} for _ in historical_sets]
+
+        work_set_indices = [
+            index for index, set_data in enumerate(template_sets)
+            if not _is_warmup_set(set_data)
+        ]
+        historical_reps = data.get("latest_reps", [])
+        target_reps = []
+        for index, set_index in enumerate(work_set_indices):
+            template_reps = template_sets[set_index].get("reps")
+            source_reps = historical_reps[index] if index < len(historical_reps) else template_reps
+            source_reps = source_reps if isinstance(source_reps, int) and source_reps > 0 else min_reps
+            # Existing history below a newly introduced range is progressed gradually;
+            # never turn an 8/7 result into an arbitrary 10/10 jump. New exercises,
+            # however, start at the range minimum.
+            if historical_reps:
+                target_reps.append(min(max_reps, source_reps))
+            else:
+                target_reps.append(max(min_reps, min(max_reps, source_reps)))
+
+        signal = data.get("signal", "FIRST_SESSION")
+        if signal == "INCREASE_WEIGHT":
+            target_reps = [min_reps] * len(work_set_indices)
+        elif signal == "KEEP_PROGRESSING" and target_reps:
+            # Progress one total repetition without imposing a particular set-to-set
+            # decline. Prefer the earliest set that is still below the range ceiling.
+            for index, reps in enumerate(target_reps):
+                if reps < max_reps:
+                    target_reps[index] += 1
+                    break
+
+        working_weight = data.get("suggested_weight_kg") if signal == "INCREASE_WEIGHT" else data.get("current_weight_kg")
+        model_target = model_by_name.get(exercise_key, {})
+        model_reasoning = model_target.get("reasoning") if isinstance(model_target.get("reasoning"), str) else ""
+        set_targets = []
+        work_index = 0
+        for index, template_set in enumerate(template_sets):
+            if _is_warmup_set(template_set):
+                weight = template_set.get("weight_kg", 0)
+                reps = template_set.get("reps") or 0
+                note = "Aufwärmsatz"
+            else:
+                weight = working_weight
+                if weight is None:
+                    weight = template_set.get("weight_kg", 0)
+                reps = target_reps[work_index] if work_index < len(target_reps) else min_reps
+                note = "Arbeitssatz"
+                work_index += 1
+            set_targets.append({
+                "set_number": index + 1,
+                "weight_kg": weight,
+                "reps": reps,
+                "note": note,
+            })
+
+        deterministic_targets.append({
+            "name": exercise_name,
+            "progression_status": signal,
+            "set_targets": set_targets,
+            "reasoning": model_reasoning or data.get("suggestion", ""),
+        })
+
+    return deterministic_targets
 
 
 def _build_workout_tips_prompt(profile: Optional[dict], lang: str = "de") -> str:
@@ -951,55 +1040,48 @@ Use their history to make smart decisions, but the output must only contain TARG
 
 === COACHING RULES (Evidence-Based Hypertrophy Programming) ===
 
-0. **Coaching Memory / Continuity**: If "YOUR PREVIOUS COACHING" data is provided, reference your past targets:
-   - Did the user follow your target? Praise if yes, gently note if not.
-   - Adjust your NEW targets based on whether they followed the old ones.
-   - This creates a continuous coaching relationship.
+0. **Coaching Memory / Continuity**: If "YOUR PREVIOUS COACHING" data is provided, use it only to understand whether past targets were followed. The current template and the pre-computed progression analysis remain authoritative.
 
-1. **Rep drop-off across sets is NORMAL and EXPECTED**:
-   - A pattern like 12/11/10 or 10/9/8 across working sets is IDEAL and shows proper effort (1-3 RIR per set).
-   - NEVER suggest the same rep count for every working set (e.g. 12/12/12). This would mean early sets are too easy (4+ RIR), wasting stimulus.
-   - Each working set should be within 1-3 RIR (Reps in Reserve). Expect a 1-3 rep drop from first to last working set.
-   - For set targets, set the FIRST working set at the top of the range and let subsequent sets naturally decrease by 1-2 reps.
+1. **Exercise-aware rep ranges**: Each exercise's pre-computed analysis contains its approved rep range.
+   - Heavy free-weight compounds normally use 6-10, machine/cable multi-joint movements 8-15, and isolation movements 10-20. Use the range supplied for that specific exercise.
+   - Same reps in multiple working sets are VALID. Never force a rep drop between sets.
+   - A natural rep drop is allowed, but only prescribe it when the history supports it. Do not deliberately make later targets worse.
 
-2. **Double Progression Model** (primary progression method):
-   - Each exercise works within a REP RANGE (default: 8-12 for hypertrophy).
-   - Phase 1 — Build reps: Keep weight constant. Each session, aim to get more total reps across all working sets.
-   - Phase 2 — Increase weight: When the FIRST working set hits the TOP of the rep range AND ALL working sets meet the MINIMUM → increase weight.
-   - Phase 3 — Reset reps: After weight increase, reps drop toward the bottom of the range. This is expected and normal.
-   - Then repeat from Phase 1.
-   - Example: 60kg → 10/9/8 → 11/10/9 → 12/11/10 → INCREASE → 62.5kg → 9/8/7 → 10/9/8 → ...
+2. **Double progression**:
+   - Keep the load constant while building repetitions within the supplied range.
+   - Increase load ONLY when the pre-computed signal is INCREASE_WEIGHT AND it gives a specific verified next load.
+   - A load increase is earned only after ALL comparable working sets have reached the top of that exercise's range.
+   - After a verified load increase, set targets may return to the lower end of the range. Do not invent a weight increment.
+   - Preserve the supplied template's number and order of sets. Never add a set just because a user has stalled.
 
-3. **PROGRESSION ANALYSIS**: You will receive a "=== PROGRESSION ANALYSIS ===" section with pre-computed signals for each exercise.
-   - INCREASE_WEIGHT: All criteria met. Suggest the next weight step. Expect reps to drop.
-   - KEEP_PROGRESSING: Weight is right, reps are still building. Push for +1 rep on 1-2 sets.
-   - STAGNATED: No rep improvement for 3+ sessions at same weight. Suggest: deload, rep scheme change, or exercise variation.
-   - REGRESSED: Performance dropped. Keep same weight, don't push harder. Could be fatigue or bad day.
-   - FIRST_SESSION: No history — start conservative with moderate weight.
-   - FOLLOW the signal. It is computed from the user's actual data.
+3. **PROGRESSION ANALYSIS**: You will receive a "=== PROGRESSION ANALYSIS ===" section with deterministic signals. FOLLOW them exactly.
+   - INCREASE_WEIGHT: use the exact supplied verified next load; choose targets near the lower end of the exercise range.
+   - KEEP_PROGRESSING: retain the current load and target an attainable rep improvement only when it remains inside the range.
+   - STAGNATED: retain the load and working-set structure. State that setup, rest, or recovery should be checked; do not automatically prescribe a deload, exercise swap, or extra volume.
+   - REGRESSED: retain the load and give conservative targets to match the prior performance; do not force a heavier target.
+   - FIRST_SESSION: preserve the template's set structure and start conservatively inside the supplied range.
 
-4. **Weight increase amounts**:
-   - Compound movements (Bench Press, Squat, Deadlift, Rows, OHP, Leg Press): +2.5kg
-   - Isolation movements (Curls, Extensions, Lateral Raises, Flyes): +1.25–2.5kg
-   - Cable/Machine exercises: use the smallest available increment or next step from note
-   - If the analysis suggests a specific next weight, USE that weight.
+4. **Verified loads only**:
+   - The pre-computed analysis is the only authority for a new load.
+   - If no verified next load is supplied, retain the current load; NEVER calculate a generic +2.5kg or +1.25kg increase.
+   - If an exercise note contains an explicit available-weight list, use only values from that list. Never interpolate a value that was not listed.
 
-5. **Exercise notes are HARD CONSTRAINTS**: The user may have added notes (📝) to exercises. These are NON-NEGOTIABLE constraints that OVERRIDE normal progression logic.
-   - If a note lists available weights (e.g. "only 5 12 19 26 33 40 47 57 67 77 87"), you MUST ONLY suggest weights from that exact list. NEVER suggest intermediate values like 57.5 or 62 — only the exact numbers listed.
-   - If a note specifies equipment limitations, tempo, or technique cues, follow them precisely.
-   - When choosing the next weight from a list, pick the next available step up (or same weight for more reps) — do NOT interpolate between listed values.
+5. **Exercise notes are HARD CONSTRAINTS**: Notes marked 📝 override all normal logic. Follow stated equipment limitations and technique restrictions precisely.
 
-6. **Nutrition-aware programming**:
-   - Deficit (cutting): Conservative targets. Maintain strength, don't push weight increases unless reps significantly exceed the range. Accept slower progression.
-   - Surplus (bulking): Push progressive overload aggressively. Weight increases can happen after just 1-2 sessions at top reps.
-   - Maintenance: Standard double progression timing.
+6. **Warm-ups and working sets**:
+   - Produce targets for exactly the sets in the planned template, in its order.
+   - Only mark a set as "Aufwärmsatz" when the planned template explicitly marks it as a warm-up. Do not invent warm-up sets.
+   - Explicit warm-ups must be easy and must not be used to judge progression. Every unmarked planned set is a working-set target.
 
-7. **No form tips, no exercise descriptions**. The user knows how to perform exercises. Only give programming targets.
+7. **Nutrition context is informational, not a load trigger**:
+   - A single logged day, surplus, deficit, or missed calorie target must NOT directly change weights, reps, set count, or progression status.
+   - Mention nutrition briefly and factually, with its absolute date if available. Do not claim it caused performance changes or prescribe aggressive overload from one day of data.
 
-8. **Per-set targets format**: For each exercise, give a target for EVERY set.
-   - Each set has: weight (kg), reps (TARGET for that specific set — remember set 1 > set 2 > set 3), and an optional short note.
-   - Notes like "Aufwärmsatz", "Arbeitssatz", "Topset", "Letzter Satz — alles geben!" are good.
-   - Warmup sets (if any) should have lower weight and are NOT counted as working sets.
+8. **No form tips or exercise descriptions**. The user knows the exercises; provide only concise programming targets.
+
+9. **Per-set targets format**: For each exercise, give a target for EVERY planned set.
+   - Each set has weight (kg), reps (an integer inside that exercise's supplied range), and an optional short note.
+   - Use "Arbeitssatz" or "Topset" only when useful. Do not use motivational failure cues such as "alles geben".
 
 You MUST respond with valid JSON matching this exact schema:
 {{
@@ -1096,12 +1178,14 @@ async def generate_workout_tips(
             for s in ex.get("sets", []):
                 weight = s.get("weight_kg")
                 reps = s.get("reps")
+                set_type = s.get("type", "normal")
+                type_label = f" [{set_type}]" if set_type not in ("normal", "working", "") else ""
                 if weight is not None and reps is not None:
-                    sets_summary.append(f"{weight}kg×{reps}")
+                    sets_summary.append(f"{weight}kg×{reps}{type_label}")
                 elif reps is not None:
-                    sets_summary.append(f"{reps} reps")
+                    sets_summary.append(f"{reps} reps{type_label}")
                 elif s.get("duration_seconds"):
-                    sets_summary.append(f"{s['duration_seconds']}s")
+                    sets_summary.append(f"{s['duration_seconds']}s{type_label}")
             sets_str = ", ".join(sets_summary) if sets_summary else "no set data"
             muscle = f" [{ex.get('muscle_group')}]" if ex.get("muscle_group") else ""
             note_str = f"  📝 Note: {ex['notes']}" if ex.get("notes") else ""
@@ -1165,6 +1249,8 @@ async def generate_workout_tips(
             parts.append(f"📊 {ex_name}: **{signal}**")
             if data.get("current_weight_kg"):
                 parts.append(f"   Current weight: {data['current_weight_kg']}kg | Sessions at this weight: {data.get('sessions_at_weight', '?')}")
+            if data.get("rep_range"):
+                parts.append(f"   Approved rep range: {data['rep_range']}")
             if data.get("latest_reps"):
                 reps_str = "/".join(str(r) for r in data["latest_reps"])
                 parts.append(f"   Latest reps per set: {reps_str} (total: {data.get('total_reps_latest', '?')})")
@@ -1209,6 +1295,15 @@ async def generate_workout_tips(
             parsed["exercise_targets"] = []
         if "new_exercises_to_try" not in parsed:
             parsed["new_exercises_to_try"] = []
+
+        # Targets are calculated server-side from the template and deterministic
+        # progression data. Gemini may explain the targets, but it cannot invent
+        # exercises, set counts, weights, or rep prescriptions.
+        parsed["exercise_targets"] = _build_deterministic_set_targets(
+            full_template_exercises,
+            progression,
+            parsed["exercise_targets"],
+        )
 
         return parsed
 
@@ -1762,3 +1857,186 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
     except Exception as exc:
         logger.error("Gemini nutrition analysis error: %s", exc)
         return {"analysis": "Analyse konnte nicht generiert werden."}
+
+
+async def generate_forge_exercise_draft(instructions: str, language: str = "de") -> dict:
+    """Generate a transient custom-exercise draft; callers must explicitly save it."""
+    fallback = {
+        "name": "Neue Übung" if language == "de" else "New exercise",
+        "icon": "Dumbbell",
+        "equipment": "other",
+        "primary_muscle_group": "Other",
+        "secondary_muscle_groups": [],
+        "machine_profiles": [],
+    }
+    system_prompt = """You create ONE concise custom exercise draft for a private training app.
+Return JSON only with: name, icon, equipment, primary_muscle_group, secondary_muscle_groups, machine_profiles.
+Equipment MUST be exactly one of: none, barbell, dumbbell, kettlebell, machine, other.
+icon is a relevant Lucide icon name such as Dumbbell, Cable, CircleDot, Activity, or Weight.
+primary_muscle_group and secondary_muscle_groups use plain muscle-group names. secondary_muscle_groups is an array of at most 4 values.
+machine_profiles is an array of {name, model, notes}; use it only for machine equipment and only where the user specifies or reasonably needs a machine brand/profile.
+Do not claim the draft has been saved and do not include instructions outside the JSON.""" + _language_instruction(language)
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=f"Create an exercise draft from this request:\n{instructions}",
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.25,
+                response_mime_type="application/json",
+            ),
+        )
+        raw_content = response.text or ""
+        draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
+        if not isinstance(draft, dict) or not isinstance(draft.get("name"), str):
+            return fallback
+        draft["equipment"] = draft.get("equipment") if draft.get("equipment") in {
+            "none", "barbell", "dumbbell", "kettlebell", "machine", "other"
+        } else "other"
+        draft["icon"] = str(draft.get("icon") or "Dumbbell")[:64]
+        draft["primary_muscle_group"] = str(draft.get("primary_muscle_group") or "Other")[:64]
+        draft["secondary_muscle_groups"] = [str(value)[:64] for value in draft.get("secondary_muscle_groups", [])[:4]]
+        draft["machine_profiles"] = draft.get("machine_profiles", []) if draft["equipment"] == "machine" else []
+        return draft
+    except Exception as exc:
+        logger.error("Gemini exercise draft generation failed: %s", exc)
+        return fallback
+
+
+async def generate_forge_plan_draft(
+    instructions: str,
+    exercises: list[dict],
+    language: str = "de",
+    goal: str = "",
+) -> dict:
+    """Generate a transient plan draft constrained to the caller's selected exercises."""
+    allowed_ids = {str(exercise["id"]) for exercise in exercises}
+    fallback = {
+        "name": "Neuer Trainingsplan" if language == "de" else "New training plan",
+        "description": "",
+        "exercises": [
+            {
+                "exercise_id": str(exercise["id"]),
+                "machine_profile_id": None,
+                "notes": "",
+                "sets": [{"set_type": "working", "current_weight_kg": None, "current_reps": 10, "coach_suggested_weight_kg": None, "coach_suggested_reps": 10, "note": ""} for _ in range(3)],
+            }
+            for exercise in exercises
+        ],
+    }
+    catalog = json.dumps(exercises, ensure_ascii=False)
+    system_prompt = """You create a DRAFT workout plan for a private training app. The user must explicitly save it later.
+Return JSON only with: name, description, exercises.
+Each exercises item MUST contain exercise_id, machine_profile_id (or null), notes, sets.
+You may use ONLY exercise IDs and machine profile IDs supplied in the catalog. Never invent an ID.
+Each set must contain set_type (warmup or working), current_weight_kg (number or null), current_reps (integer or null), coach_suggested_weight_kg (number or null), coach_suggested_reps (integer or null), and note.
+Use conservative, hypertrophy-oriented set suggestions. Do not fabricate a user-specific load when history is absent: use null for weight and provide only sensible reps.
+Do not claim the draft was saved.""" + _language_instruction(language)
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=(f"User goal: {goal or 'not provided'}\nRequest: {instructions}\n"
+                      f"Allowed exercise catalog: {catalog}"),
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.25,
+                response_mime_type="application/json",
+            ),
+        )
+        raw_content = response.text or ""
+        draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
+        if not isinstance(draft, dict) or not isinstance(draft.get("exercises"), list):
+            return fallback
+        valid_exercises = []
+        profiles_by_exercise = {
+            str(exercise["id"]): {str(profile["id"]) for profile in exercise.get("machine_profiles", [])}
+            for exercise in exercises
+        }
+        for item in draft["exercises"][:30]:
+            if not isinstance(item, dict) or str(item.get("exercise_id")) not in allowed_ids:
+                continue
+            exercise_id = str(item["exercise_id"])
+            profile_id = item.get("machine_profile_id")
+            if profile_id is not None and str(profile_id) not in profiles_by_exercise[exercise_id]:
+                profile_id = None
+            sets = []
+            for set_data in item.get("sets", [])[:12]:
+                if not isinstance(set_data, dict):
+                    continue
+                reps = set_data.get("coach_suggested_reps")
+                if not isinstance(reps, int) or not 1 <= reps <= 200:
+                    reps = 10
+                sets.append({
+                    "set_type": "warmup" if set_data.get("set_type") == "warmup" else "working",
+                    "current_weight_kg": set_data.get("current_weight_kg") if isinstance(set_data.get("current_weight_kg"), (int, float)) else None,
+                    "current_reps": set_data.get("current_reps") if isinstance(set_data.get("current_reps"), int) else None,
+                    "coach_suggested_weight_kg": set_data.get("coach_suggested_weight_kg") if isinstance(set_data.get("coach_suggested_weight_kg"), (int, float)) else None,
+                    "coach_suggested_reps": reps,
+                    "note": str(set_data.get("note") or "")[:300],
+                })
+            valid_exercises.append({
+                "exercise_id": exercise_id,
+                "machine_profile_id": str(profile_id) if profile_id else None,
+                "notes": str(item.get("notes") or "")[:500],
+                "sets": sets or fallback["exercises"][0]["sets"],
+            })
+        if not valid_exercises:
+            return fallback
+        return {
+            "name": str(draft.get("name") or fallback["name"])[:255],
+            "description": str(draft.get("description") or "")[:500],
+            "exercises": valid_exercises,
+        }
+    except Exception as exc:
+        logger.error("Gemini plan draft generation failed: %s", exc)
+        return fallback
+
+
+async def generate_forge_session_chat(
+    message: str,
+    session: dict,
+    exercise_catalog: list[dict],
+    history: list[dict],
+    language: str = "de",
+) -> dict:
+    """Return session-scoped coaching text and one optional, user-confirmed action."""
+    fallback = {
+        "message": "Ich kann dir helfen, aber ändere die Session erst, wenn du einen konkreten Vorschlag bestätigst.",
+        "action": None,
+    }
+    system_prompt = """You are Forge, a direct in-session lifting coach. You know only the active workout session,
+its logged/planned sets, and the user's own exercise catalog. Return JSON only with {message, action}.
+message must be short, specific, and in the requested language. Never claim an action already happened.
+action is either null or one confirmed-by-user proposal with {type, title, payload}.
+Only these action types are allowed:
+- adjust_set: payload {session_set_id, target_weight_kg, target_reps}
+- add_set: payload {session_exercise_id, target_weight_kg, target_reps, note}
+- add_exercise: payload {exercise_id, target_reps, notes}
+Use IDs that appear exactly in the supplied session or catalog. Give at most one action. Suggest an action only when it is clearly useful; otherwise return null. Do not prescribe unsafe, extreme, or invented loads.""" + _language_instruction(language)
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        contents = json.dumps({
+            "user_message": message,
+            "active_session": session,
+            "exercise_catalog": exercise_catalog,
+            "recent_chat": history[-12:],
+        }, ensure_ascii=False)
+        response = await client.aio.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.3,
+                response_mime_type="application/json",
+            ),
+        )
+        raw_content = response.text or ""
+        parsed = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("message"), str):
+            return fallback
+        return {"message": parsed["message"][:4000], "action": parsed.get("action")}
+    except Exception as exc:
+        logger.error("Gemini session chat failed: %s", exc)
+        return fallback
