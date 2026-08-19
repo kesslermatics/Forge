@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import dynamicIconImports from 'lucide-react/dynamicIconImports';
 import {
   Bot, CirclePlus, Dumbbell, Loader2,
   Pencil, Plus, Save, Sparkles, Trash2, Wrench,
@@ -28,6 +29,20 @@ const EQUIPMENT: Array<{ value: ForgeEquipment; label: string }> = [
   { value: 'dumbbell', label: 'Kurzhantel' }, { value: 'kettlebell', label: 'Kettlebell' },
   { value: 'machine', label: 'Maschine' }, { value: 'other', label: 'Sonstiges' },
 ];
+
+const ALL_LUCIDE_ICON_NAMES = Array.from(new Set(Object.keys(dynamicIconImports).map((slug) => slug.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('')))).sort();
+
+function lucideSlug(iconName: string) {
+  return iconName.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/([A-Z])([A-Z][a-z])/g, '$1-$2').toLowerCase();
+}
+
+function ForgeExerciseIcon({ name, size = 17 }: { name: string; size?: number }) {
+  const Icon = useMemo(() => {
+    const loader = dynamicIconImports[lucideSlug(name) as keyof typeof dynamicIconImports];
+    return loader ? lazy(loader) : Dumbbell;
+  }, [name]);
+  return <Suspense fallback={<Dumbbell size={size} />}><Icon size={size} /></Suspense>;
+}
 
 const emptyExercise = (): ForgeExerciseInput => ({
   name: '', icon: 'Dumbbell', equipment: 'other', primary_muscle_group: 'Other',
@@ -284,7 +299,7 @@ export default function ForgePlanPage() {
     if (!exercisePrompt.trim()) { setError('Beschreibe die Übung, die Forge anlegen soll.'); return; }
     setGenerating(true); setError(null); setNotice(null);
     try {
-      const result = await generateForgeExerciseDraft(exercisePrompt);
+      const result = await generateForgeExerciseDraft(exercisePrompt, ALL_LUCIDE_ICON_NAMES);
       setExerciseDraft(result.draft); setEditingExerciseId(null); setExerciseEditor(true);
       setNotice('KI-Entwurf erstellt – prüfe ihn und speichere ihn bewusst.');
     } catch (caught: unknown) {
@@ -419,7 +434,7 @@ function PlanEditor({ draft, exercises, saving, onChange, onToggleExercise, onUp
 
 function ExerciseEditor({ draft, saving, onChange, onToggleSecondary, onUpdateProfile, onCancel, onSave }: { draft: ForgeExerciseInput; saving: boolean; onChange: (draft: ForgeExerciseInput) => void; onToggleSecondary: (muscle: string) => void; onUpdateProfile: (index: number, key: keyof ForgeMachineProfileInput, value: string) => void; onCancel: () => void; onSave: () => void }) {
   return <div className="card-forge p-4 space-y-4"><div className="flex justify-between"><h2 className="font-semibold" style={{ color: TEXT }}>Übung bearbeiten</h2><button onClick={onCancel} className="text-[12px] cursor-pointer" style={{ color: DIM }}>Abbrechen</button></div>
-    <div className="grid gap-2" style={{ gridTemplateColumns: '1fr 82px' }}><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} placeholder="Übungsname" className="input-forge min-w-0" /><input value={draft.icon} onChange={(event) => onChange({ ...draft, icon: event.target.value })} placeholder="Icon" className="input-forge min-w-0" /></div>
+    <div className="grid gap-2" style={{ gridTemplateColumns: '1fr 82px' }}><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} placeholder="Übungsname" className="input-forge min-w-0" /><div className="relative"><input value={draft.icon} onChange={(event) => onChange({ ...draft, icon: event.target.value })} placeholder="Icon" list="forge-lucide-icons" className="input-forge min-w-0 w-full !pr-8" /><span className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: SAND }}><ForgeExerciseIcon name={draft.icon} size={15} /></span></div></div><datalist id="forge-lucide-icons">{ALL_LUCIDE_ICON_NAMES.map((icon) => <option key={icon} value={icon} />)}</datalist>
     <select value={draft.primary_muscle_group} onChange={(event) => onChange({ ...draft, primary_muscle_group: event.target.value })} className="input-forge w-full"><option value="">Primäre Muskelgruppe</option>{MUSCLE_GROUPS.map((group) => <option key={group}>{group}</option>)}</select>
     <div><p className="text-[11px] mb-2" style={{ color: DIM }}>Equipment</p><div className="flex flex-wrap gap-1.5">{EQUIPMENT.map((item) => <button key={item.value} onClick={() => onChange({ ...draft, equipment: item.value, machine_profiles: item.value === 'machine' ? draft.machine_profiles : [] })} className="tap rounded-full px-2.5 py-1.5 text-[10px] cursor-pointer" style={{ color: draft.equipment === item.value ? SAND : DIM, border: `1px solid ${draft.equipment === item.value ? SAND : BORDER}` }}>{item.label}</button>)}</div></div>
     <div><p className="text-[11px] mb-2" style={{ color: DIM }}>Sekundäre Muskeln</p><div className="flex flex-wrap gap-1.5">{MUSCLE_GROUPS.filter((group) => group !== draft.primary_muscle_group).map((group) => <button key={group} onClick={() => onToggleSecondary(group)} className="tap rounded-full px-2.5 py-1.5 text-[10px] cursor-pointer" style={{ color: draft.secondary_muscle_groups.includes(group) ? SAND : DIM, background: draft.secondary_muscle_groups.includes(group) ? 'rgba(232,197,138,0.12)' : 'transparent', border: `1px solid ${BORDER}` }}>{group}</button>)}</div></div>
@@ -429,7 +444,7 @@ function ExerciseEditor({ draft, saving, onChange, onToggleSecondary, onUpdatePr
 }
 
 function ExerciseCard({ exercise, onEdit, onDelete }: { exercise: ForgeExercise; onEdit: () => void; onDelete: () => void }) {
-  return <div className="card-forge p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(232,197,138,0.11)', color: SAND }}><Dumbbell size={17} /></div><div className="min-w-0 flex-1"><h3 className="text-[13px] font-medium truncate" style={{ color: TEXT }}>{exercise.name}</h3><p className="text-[11px] truncate mt-0.5" style={{ color: DIM }}>{equipmentLabel(exercise.equipment)} · {exercise.primary_muscle_group}{exercise.secondary_muscle_groups.length ? ` + ${exercise.secondary_muscle_groups.join(', ')}` : ''}</p>{exercise.machine_profiles.length > 0 && <p className="text-[10px] mt-1" style={{ color: SAND }}>{exercise.machine_profiles.map((profile) => profile.name).join(' · ')}</p>}</div><button onClick={onEdit} className="tap cursor-pointer" style={{ color: SAND }}><Pencil size={15} /></button><button onClick={onDelete} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={15} /></button></div>;
+  return <div className="card-forge p-4 flex items-center gap-3"><div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(232,197,138,0.11)', color: SAND }}><ForgeExerciseIcon name={exercise.icon} size={17} /></div><div className="min-w-0 flex-1"><h3 className="text-[13px] font-medium truncate" style={{ color: TEXT }}>{exercise.name}</h3><p className="text-[11px] truncate mt-0.5" style={{ color: DIM }}>{equipmentLabel(exercise.equipment)} · {exercise.primary_muscle_group}{exercise.secondary_muscle_groups.length ? ` + ${exercise.secondary_muscle_groups.join(', ')}` : ''}</p>{exercise.machine_profiles.length > 0 && <p className="text-[10px] mt-1" style={{ color: SAND }}>{exercise.machine_profiles.map((profile) => profile.name).join(' · ')}</p>}</div><button onClick={onEdit} className="tap cursor-pointer" style={{ color: SAND }}><Pencil size={15} /></button><button onClick={onDelete} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={15} /></button></div>;
 }
 
 function EmptyState({ icon, title, copy, action, onClick }: { icon: React.ReactNode; title: string; copy: string; action: string; onClick: () => void }) {

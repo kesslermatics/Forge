@@ -684,9 +684,9 @@ export const updateForgeExercise = (id: string, data: ForgeExerciseInput) =>
   apiRequest<ForgeExercise>(`/api/forge/exercises/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteForgeExercise = (id: string) =>
   apiRequest<void>(`/api/forge/exercises/${id}`, { method: 'DELETE' });
-export const generateForgeExerciseDraft = (instructions: string) =>
+export const generateForgeExerciseDraft = (instructions: string, allowed_icons: string[]) =>
   apiRequest<{ draft: ForgeExerciseInput }>('/api/forge/drafts/exercise', {
-    method: 'POST', body: JSON.stringify({ instructions }),
+    method: 'POST', body: JSON.stringify({ instructions, allowed_icons }),
   });
 
 export const getForgePlans = () => apiRequest<ForgePlan[]>('/api/forge/plans');

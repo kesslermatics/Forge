@@ -268,6 +268,9 @@ class ForgePlanResponse(BaseModel):
 
 class ForgeExerciseDraftRequest(BaseModel):
     instructions: str = Field(..., min_length=3, max_length=2000)
+    # Supplied by the web client from Lucide's installed dynamic icon catalogue.
+    # This lets the model choose a real renderable icon without hardcoding a stale list.
+    allowed_icons: list[str] = Field(default_factory=list, max_length=2500)
 
 
 class ForgePlanDraftRequest(BaseModel):

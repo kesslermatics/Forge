@@ -16,6 +16,31 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Canonical Forge exercise tokens. These values are persisted and must stay in
+# sync with the exercise editor; labels are translated in the UI, never here.
+FORGE_MUSCLE_GROUPS = (
+    "Chest", "Back", "Lats", "Traps", "Shoulders", "Biceps", "Triceps",
+    "Quadriceps", "Hamstrings", "Glutes", "Calves", "Abs", "Forearms", "Full Body", "Other",
+)
+FORGE_ICON_NAMES = (
+    "Dumbbell", "Cable", "Weight", "Activity", "Accessibility", "Armchair", "ArrowDownUp",
+    "Bike", "Bone", "CircleDot", "CircleGauge", "CircleDashed", "Flame", "Footprints",
+    "HeartPulse", "Move", "PersonStanding", "RotateCcw", "Timer", "Trophy", "Target",
+    "Waves", "Wrench", "Zap", "CirclePlay", "Gauge", "Medal", "Mountain", "Repeat2",
+    "Shield", "Sparkles", "StretchHorizontal", "Swords", "TrendingUp", "Triangle",
+)
+FORGE_MUSCLE_ALIASES = {
+    "brust": "Chest", "chest": "Chest", "rücken": "Back", "ruecken": "Back", "back": "Back",
+    "lat": "Lats", "lats": "Lats", "latissimus": "Lats", "trapez": "Traps", "traps": "Traps",
+    "schultern": "Shoulders", "shoulders": "Shoulders", "delt": "Shoulders", "delts": "Shoulders",
+    "bizeps": "Biceps", "biceps": "Biceps", "trizeps": "Triceps", "triceps": "Triceps",
+    "quadrizeps": "Quadriceps", "quadriceps": "Quadriceps", "quads": "Quadriceps",
+    "beinbeuger": "Hamstrings", "hamstrings": "Hamstrings", "hintere oberschenkel": "Hamstrings",
+    "gesäß": "Glutes", "gesaess": "Glutes", "glutes": "Glutes", "waden": "Calves", "calves": "Calves",
+    "bauch": "Abs", "abs": "Abs", "unterarme": "Forearms", "forearms": "Forearms",
+    "ganzer körper": "Full Body", "full body": "Full Body", "other": "Other", "sonstiges": "Other",
+}
+
 # Default fallback when AI fails
 FALLBACK_BRIEFING = {
     "nutrition_review": {
@@ -58,8 +83,8 @@ def _language_instruction(lang: str) -> str:
     if lang == "de":
         return (
             "\n\n=== LANGUAGE ===\n"
-            "You MUST write ALL text values in **German (Deutsch)**. "
-            "Every string field in the JSON must be in German. "
+            "You MUST write human-readable text in **German (Deutsch)**. "
+            "Do NOT translate explicitly supplied enum tokens, IDs, icon names, or other machine-readable values. "
             "Use natural, conversational German — not stiff/formal. "
             "Technical terms (exercise names) stay in English."
         )
@@ -1859,8 +1884,20 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
         return {"analysis": "Analyse konnte nicht generiert werden."}
 
 
-async def generate_forge_exercise_draft(instructions: str, language: str = "de") -> dict:
-    """Generate a transient custom-exercise draft; callers must explicitly save it."""
+def _canonical_forge_muscle(value: object, fallback: str = "Other") -> str:
+    normalized = str(value or "").strip().casefold()
+    if normalized in FORGE_MUSCLE_ALIASES:
+        return FORGE_MUSCLE_ALIASES[normalized]
+    return next((muscle for muscle in FORGE_MUSCLE_GROUPS if muscle.casefold() == normalized), fallback)
+
+
+def _canonical_forge_icon(value: object, allowed_icons: tuple[str, ...] = FORGE_ICON_NAMES) -> str:
+    normalized = str(value or "").strip().casefold()
+    return next((icon for icon in allowed_icons if icon.casefold() == normalized), "Dumbbell")
+
+
+async def generate_forge_exercise_draft(instructions: str, language: str = "de", allowed_icons: Optional[list[str]] = None) -> dict:
+    """Generate a transient custom-exercise draft using only editor-supported tokens."""
     fallback = {
         "name": "Neue Übung" if language == "de" else "New exercise",
         "icon": "Dumbbell",
@@ -1869,12 +1906,20 @@ async def generate_forge_exercise_draft(instructions: str, language: str = "de")
         "secondary_muscle_groups": [],
         "machine_profiles": [],
     }
-    system_prompt = """You create ONE concise custom exercise draft for a private training app.
+    allowed_icon_names = tuple(
+        dict.fromkeys(icon.strip() for icon in (allowed_icons or FORGE_ICON_NAMES) if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", icon.strip()))
+    ) or FORGE_ICON_NAMES
+    # Cap the context sent to Gemini; the client catalogue currently fits below this limit.
+    allowed_icon_names = allowed_icon_names[:2500]
+    muscle_tokens = ", ".join(FORGE_MUSCLE_GROUPS)
+    icon_tokens = ", ".join(allowed_icon_names)
+    system_prompt = f"""You create ONE concise custom exercise draft for a private training app.
 Return JSON only with: name, icon, equipment, primary_muscle_group, secondary_muscle_groups, machine_profiles.
 Equipment MUST be exactly one of: none, barbell, dumbbell, kettlebell, machine, other.
-icon is a relevant Lucide icon name such as Dumbbell, Cable, CircleDot, Activity, or Weight.
-primary_muscle_group and secondary_muscle_groups use plain muscle-group names. secondary_muscle_groups is an array of at most 4 values.
-machine_profiles is an array of {name, model, notes}; use it only for machine equipment and only where the user specifies or reasonably needs a machine brand/profile.
+primary_muscle_group MUST be exactly one of: {muscle_tokens}.
+secondary_muscle_groups MUST be an array of at most 4 distinct values from the same list, excluding primary_muscle_group.
+icon MUST be exactly one of these Lucide icon names: {icon_tokens}. Pick the best visual match for the movement.
+machine_profiles is an array of {{name, model, notes}}; use it only for machine equipment and only where the user specifies or reasonably needs a machine brand/profile.
 Do not claim the draft has been saved and do not include instructions outside the JSON.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
@@ -1891,13 +1936,27 @@ Do not claim the draft has been saved and do not include instructions outside th
         draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
         if not isinstance(draft, dict) or not isinstance(draft.get("name"), str):
             return fallback
-        draft["equipment"] = draft.get("equipment") if draft.get("equipment") in {
-            "none", "barbell", "dumbbell", "kettlebell", "machine", "other"
-        } else "other"
-        draft["icon"] = str(draft.get("icon") or "Dumbbell")[:64]
-        draft["primary_muscle_group"] = str(draft.get("primary_muscle_group") or "Other")[:64]
-        draft["secondary_muscle_groups"] = [str(value)[:64] for value in draft.get("secondary_muscle_groups", [])[:4]]
-        draft["machine_profiles"] = draft.get("machine_profiles", []) if draft["equipment"] == "machine" else []
+        equipment = draft.get("equipment")
+        draft["equipment"] = equipment if equipment in {"none", "barbell", "dumbbell", "kettlebell", "machine", "other"} else "other"
+        draft["icon"] = _canonical_forge_icon(draft.get("icon"), allowed_icon_names)
+        primary = _canonical_forge_muscle(draft.get("primary_muscle_group"))
+        secondary = []
+        for value in draft.get("secondary_muscle_groups", []) if isinstance(draft.get("secondary_muscle_groups"), list) else []:
+            muscle = _canonical_forge_muscle(value)
+            if muscle not in {primary, "Other"} and muscle not in secondary:
+                secondary.append(muscle)
+        draft["name"] = draft["name"].strip()[:255]
+        draft["primary_muscle_group"] = primary
+        draft["secondary_muscle_groups"] = secondary[:4]
+        profiles = draft.get("machine_profiles", [])
+        draft["machine_profiles"] = [
+            {
+                "name": str(profile.get("name") or "Maschine")[:100],
+                "model": str(profile.get("model") or "")[:100] or None,
+                "notes": str(profile.get("notes") or "")[:500] or None,
+            }
+            for profile in profiles[:20] if isinstance(profile, dict)
+        ] if draft["equipment"] == "machine" and isinstance(profiles, list) else []
         return draft
     except Exception as exc:
         logger.error("Gemini exercise draft generation failed: %s", exc)

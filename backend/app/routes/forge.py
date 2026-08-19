@@ -309,7 +309,11 @@ async def create_exercise_draft(
     data: ForgeExerciseDraftRequest,
     current_user: User = Depends(get_current_user),
 ):
-    draft = await generate_forge_exercise_draft(data.instructions, current_user.language or "de")
+    draft = await generate_forge_exercise_draft(
+        data.instructions,
+        current_user.language or "de",
+        data.allowed_icons,
+    )
     return {"draft": draft}
 
 
