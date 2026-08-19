@@ -177,7 +177,9 @@ async def workout_review_job():
     finally:
         db.close()
 
-    """Start daily Forge-native briefing generation."""
+
+def start_scheduler():
+    """Start daily Forge-native briefing generation and hourly workout reviews."""
     scheduler.add_job(
         daily_briefing_job,
         trigger=CronTrigger(hour=4, minute=0),
