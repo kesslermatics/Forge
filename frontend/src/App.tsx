@@ -10,6 +10,7 @@ import SettingsPage from './components/SettingsPage';
 import ForgePlanPage from './components/ForgePlanPage';
 import ForgeSessionPage from './components/ForgeSessionPage';
 import ForgeExerciseHistoryPage from './components/ForgeExerciseHistoryPage';
+import ForgeProgressPhotosPage from './components/ForgeProgressPhotosPage';
 import PreviewShowcase from './preview/PreviewShowcase';
 
 function App() {
@@ -29,6 +30,7 @@ function App() {
           <Route path="/nutrition" element={<NutritionPage />} />
           <Route path="/achievements" element={<AchievementsTab />} />
           <Route path="/forge" element={<ForgePlanPage />} />
+          <Route path="/forge/progress" element={<ForgeProgressPhotosPage />} />
           <Route path="/forge/session/:sessionId" element={<ForgeSessionPage />} />
           <Route path="/forge/exercises/:exerciseId/history" element={<ForgeExerciseHistoryPage />} />
           <Route path="/setup" element={<SetupPage />} />

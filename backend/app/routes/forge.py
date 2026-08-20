@@ -1,8 +1,10 @@
 """Native Forge exercise library, plans, and explicit-save AI drafts."""
-from datetime import datetime, timezone
-from uuid import UUID
+from datetime import date, datetime, timezone
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,7 @@ from app.models import (
     ForgeMachineProfile,
     ForgePlanExercise,
     ForgePlanSet,
+    ForgeProgressPhoto,
     ForgeProgramRoutine,
     ForgeSessionExercise,
     ForgeSessionMessage,
@@ -21,6 +24,7 @@ from app.models import (
     ForgeTrainingProgram,
     ForgeWorkoutSession,
     User,
+    WeightEntry,
 )
 from app.schemas import (
     ForgeDraftResponse,
@@ -31,6 +35,9 @@ from app.schemas import (
     ForgePlanDraftRequest,
     ForgePlanInput,
     ForgePlanResponse,
+    ForgeProgressPhotoListResponse,
+    ForgeProgressPhotoResponse,
+    ForgeProgressPhotoUpdate,
     ForgeProgramInput,
     ForgeProgramResponse,
     ForgeSessionChatRequest,
@@ -42,6 +49,15 @@ from app.schemas import (
     ForgeStartSessionRequest,
     ForgeTodayResponse,
     ForgeApplySessionActionRequest,
+)
+from app.services.progress_photo_storage import (
+    PhotoStorageUnavailable,
+    delete_progress_photo as delete_progress_photo_file,
+    prepare_progress_photo,
+    read_progress_photo,
+    storage_root,
+    storage_unavailable_error,
+    write_progress_photo,
 )
 from app.services.ai_service import (
     _build_deterministic_set_targets,
@@ -56,6 +72,61 @@ router = APIRouter(prefix="/api/forge", tags=["Forge"])
 
 def _not_found(detail: str = "Not found") -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+
+
+def _validate_progress_photo_date(taken_on: date) -> None:
+    if taken_on > date.today():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A progress photo cannot be dated in the future.")
+
+
+def _owned_progress_photo(db: Session, user_id: UUID, photo_id: UUID) -> ForgeProgressPhoto:
+    photo = db.query(ForgeProgressPhoto).filter(
+        ForgeProgressPhoto.id == photo_id,
+        ForgeProgressPhoto.user_id == user_id,
+    ).first()
+    if photo is None:
+        raise _not_found("Progress photo not found")
+    return photo
+
+
+def _progress_photo_context(db: Session, user: User, taken_on: date) -> dict:
+    """Read-only account data for a journal card; never sent to AI services."""
+    weight_entry = db.query(WeightEntry).filter(
+        WeightEntry.user_id == user.id,
+        WeightEntry.date == taken_on,
+    ).first()
+    sessions = db.query(ForgeWorkoutSession).filter(
+        ForgeWorkoutSession.user_id == user.id,
+        ForgeWorkoutSession.status == "completed",
+        func.date(ForgeWorkoutSession.completed_at) == taken_on,
+    ).order_by(ForgeWorkoutSession.completed_at).all()
+    return {
+        "weight_kg": weight_entry.weight_kg if weight_entry else None,
+        "current_goal": user.current_goal,
+        "target_weight_kg": user.target_weight,
+        "workout_names": [session.name for session in sessions],
+    }
+
+
+def _serialize_progress_photo(db: Session, user: User, photo: ForgeProgressPhoto) -> dict:
+    return {
+        "id": photo.id,
+        "taken_on": photo.taken_on,
+        "view": photo.view,
+        "note": photo.note,
+        "byte_size": photo.byte_size,
+        "width": photo.width,
+        "height": photo.height,
+        "created_at": photo.created_at,
+        "updated_at": photo.updated_at,
+        "context": _progress_photo_context(db, user, photo.taken_on),
+    }
+
+
+def _validate_note(note: str | None) -> str | None:
+    if note is not None and len(note) > 500:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Notes must be 500 characters or fewer.")
+    return note.strip() if note and note.strip() else None
 
 
 def _serialize_profile(profile: ForgeMachineProfile | None) -> dict | None:
@@ -801,6 +872,151 @@ async def list_completed_sessions(
         ForgeWorkoutSession.status == "completed",
     ).order_by(ForgeWorkoutSession.completed_at.desc()).offset(offset).limit(limit).all()
     return [_serialize_session_summary(session) for session in sessions]
+
+
+@router.get("/progress-photos", response_model=ForgeProgressPhotoListResponse)
+async def list_progress_photos(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List only the caller's private progress-photo metadata and read-only context."""
+    if not 1 <= limit <= 100 or offset < 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Limit must be 1–100 and offset cannot be negative.")
+    query = db.query(ForgeProgressPhoto).filter(ForgeProgressPhoto.user_id == current_user.id)
+    photos = query.order_by(ForgeProgressPhoto.taken_on.desc(), ForgeProgressPhoto.created_at.desc()).offset(offset).limit(limit).all()
+    return {"items": [_serialize_progress_photo(db, current_user, photo) for photo in photos], "total": query.count()}
+
+
+@router.post("/progress-photos", response_model=ForgeProgressPhotoResponse, status_code=status.HTTP_201_CREATED)
+async def create_progress_photo(
+    image: UploadFile = File(...),
+    taken_on: date = Form(...),
+    view: str = Form("front"),
+    note: str | None = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a private snapshot after server-side validation and metadata stripping."""
+    _validate_progress_photo_date(taken_on)
+    if view not in {"front", "side", "back", "other"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="View must be front, side, back, or other.")
+    try:
+        storage_root()
+    except PhotoStorageUnavailable as error:
+        raise storage_unavailable_error(error)
+    normalized, width, height, digest = prepare_progress_photo(await image.read())
+    photo = ForgeProgressPhoto(
+        id=uuid4(),
+        user_id=current_user.id,
+        taken_on=taken_on,
+        view=view,
+        note=_validate_note(note),
+        storage_key="",
+        content_type="image/webp",
+        byte_size=len(normalized),
+        width=width,
+        height=height,
+        sha256=digest,
+    )
+    photo.storage_key = f"{current_user.id}/{photo.id}.webp"
+    try:
+        write_progress_photo(photo.storage_key, normalized)
+        db.add(photo)
+        db.commit()
+        db.refresh(photo)
+    except Exception:
+        db.rollback()
+        delete_progress_photo_file(photo.storage_key)
+        raise
+    return _serialize_progress_photo(db, current_user, photo)
+
+
+@router.get("/progress-photos/{photo_id}/image")
+async def get_progress_photo_image(
+    photo_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Serve a photo only after JWT authentication and owner lookup; never publish a URL."""
+    photo = _owned_progress_photo(db, current_user.id, photo_id)
+    try:
+        photo_path = read_progress_photo(photo.storage_key)
+    except PhotoStorageUnavailable as error:
+        raise storage_unavailable_error(error)
+    except FileNotFoundError:
+        raise _not_found("Progress photo image not found")
+    return FileResponse(
+        photo_path,
+        media_type=photo.content_type,
+        headers={"Cache-Control": "private, no-store, max-age=0", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.patch("/progress-photos/{photo_id}", response_model=ForgeProgressPhotoResponse)
+async def update_progress_photo(
+    photo_id: UUID,
+    data: ForgeProgressPhotoUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    photo = _owned_progress_photo(db, current_user.id, photo_id)
+    updates = data.model_dump(exclude_unset=True)
+    if "taken_on" in updates and updates["taken_on"] is not None:
+        _validate_progress_photo_date(updates["taken_on"])
+    if "note" in updates:
+        updates["note"] = _validate_note(updates["note"])
+    for key, value in updates.items():
+        setattr(photo, key, value)
+    db.commit()
+    db.refresh(photo)
+    return _serialize_progress_photo(db, current_user, photo)
+
+
+@router.put("/progress-photos/{photo_id}/image", response_model=ForgeProgressPhotoResponse)
+async def replace_progress_photo_image(
+    photo_id: UUID,
+    image: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    photo = _owned_progress_photo(db, current_user.id, photo_id)
+    try:
+        storage_root()
+    except PhotoStorageUnavailable as error:
+        raise storage_unavailable_error(error)
+    normalized, width, height, digest = prepare_progress_photo(await image.read())
+    try:
+        write_progress_photo(photo.storage_key, normalized)
+        photo.content_type = "image/webp"
+        photo.byte_size = len(normalized)
+        photo.width = width
+        photo.height = height
+        photo.sha256 = digest
+        db.commit()
+        db.refresh(photo)
+    except Exception:
+        db.rollback()
+        raise
+    return _serialize_progress_photo(db, current_user, photo)
+
+
+@router.delete("/progress-photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_progress_photo(
+    photo_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    photo = _owned_progress_photo(db, current_user.id, photo_id)
+    storage_key = photo.storage_key
+    db.delete(photo)
+    db.commit()
+    try:
+        delete_progress_photo_file(storage_key)
+    except PhotoStorageUnavailable:
+        # The record is gone; an unavailable backend volume cannot make it publicly reachable.
+        pass
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -26,6 +26,10 @@ class Settings(BaseSettings):
 
     # Google Gemini
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
+    # Private Forge progress-photo storage. In production this must be a mounted persistent volume.
+    # Keep empty by default so uploads never silently use ephemeral container storage.
+    photo_storage_dir: str = os.getenv("PHOTO_STORAGE_DIR", "")
     
     class Config:
         env_file = ".env"

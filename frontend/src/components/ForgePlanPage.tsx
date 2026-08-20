@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import dynamicIconImports from 'lucide-react/dynamicIconImports';
 import { useNavigate } from 'react-router-dom';
 import {
-  Bot, CirclePlus, Dumbbell, Loader2,
+  Bot, Camera, CirclePlus, Dumbbell, Loader2,
   Pencil, Plus, Save, Sparkles, Trash2, TrendingUp, Wrench, Clock3,
 } from 'lucide-react';
 import {
@@ -358,13 +358,14 @@ export default function ForgePlanPage() {
         <p className="text-[13px] mt-1" style={{ color: DIM }}>Deine Übungen, deine Maschinen, dein Plan.</p>
       </header>
 
-      <div className="grid grid-cols-3 rounded-2xl p-1" style={{ background: 'rgba(255,247,235,0.055)', border: `1px solid ${BORDER}` }}>
+      <div className="grid grid-cols-4 rounded-2xl p-1" style={{ background: 'rgba(255,247,235,0.055)', border: `1px solid ${BORDER}` }}>
         {([['plan', 'Plan'], ['exercises', 'Übungen'], ['history', 'Verlauf']] as const).map(([value, label]) => (
-          <button key={value} onClick={() => setTab(value)} className="tap rounded-xl py-2.5 text-[13px] font-medium cursor-pointer"
+          <button key={value} onClick={() => setTab(value)} className="tap rounded-xl py-2.5 text-[11px] font-medium cursor-pointer"
             style={{ background: tab === value ? 'rgba(232,197,138,0.16)' : 'transparent', color: tab === value ? SAND : DIM }}>
             {label}
           </button>
         ))}
+        <button onClick={() => navigate('/forge/progress')} className="tap rounded-xl py-2.5 text-[11px] font-medium cursor-pointer flex items-center justify-center gap-1" style={{ color: DIM }}><Camera size={13} />Progress</button>
       </div>
 
       {(error || notice) && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ background: error ? 'rgba(248,113,113,0.1)' : 'rgba(232,197,138,0.1)', color: error ? '#fca5a5' : SAND }}>{error || notice}</div>}

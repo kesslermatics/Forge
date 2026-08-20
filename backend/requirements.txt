@@ -20,6 +20,10 @@ pydantic-settings>=2.1.0
 # HTTP Client
 httpx>=0.26.0
 
+# Private progress-photo uploads and server-side metadata stripping/conversion
+python-multipart==0.0.20
+Pillow==11.1.0
+
 # AI / Google Gemini
 google-genai>=1.0.0
 

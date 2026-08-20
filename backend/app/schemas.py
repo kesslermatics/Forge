@@ -432,3 +432,39 @@ class ForgeApplySessionActionRequest(BaseModel):
 class ForgeSessionExerciseUpdate(BaseModel):
     machine_profile_id: Optional[UUID] = None
     notes: Optional[str] = Field(None, max_length=500)
+
+
+# ============ Private Forge Progress Photos ============
+
+ForgeProgressPhotoView = Literal["front", "side", "back", "other"]
+
+
+class ForgeProgressPhotoUpdate(BaseModel):
+    taken_on: Optional[date] = None
+    view: Optional[ForgeProgressPhotoView] = None
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class ForgeProgressPhotoContextResponse(BaseModel):
+    weight_kg: Optional[float] = None
+    current_goal: Optional[str] = None
+    target_weight_kg: Optional[float] = None
+    workout_names: list[str] = Field(default_factory=list)
+
+
+class ForgeProgressPhotoResponse(BaseModel):
+    id: UUID
+    taken_on: date
+    view: ForgeProgressPhotoView
+    note: Optional[str] = None
+    byte_size: int
+    width: int
+    height: int
+    created_at: Any
+    updated_at: Optional[Any] = None
+    context: ForgeProgressPhotoContextResponse
+
+
+class ForgeProgressPhotoListResponse(BaseModel):
+    items: list[ForgeProgressPhotoResponse]
+    total: int

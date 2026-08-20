@@ -1,0 +1,18 @@
+{
+  "name": "Forge Training Coach",
+  "short_name": "Forge",
+  "description": "Dein persönlicher Trainingscoach.",
+  "start_url": "/?source=installed-app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#16130f",
+  "theme_color": "#16130f",
+  "icons": [
+    {
+      "src": "/favicon.svg?v=forge-1",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

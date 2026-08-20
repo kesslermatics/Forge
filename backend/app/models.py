@@ -2,7 +2,7 @@
 SQLAlchemy database models.
 """
 import uuid
-from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint
+from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -36,6 +36,7 @@ class User(Base):
     forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
     forge_programs = relationship("ForgeTrainingProgram", back_populates="user", cascade="all, delete-orphan")
     forge_sessions = relationship("ForgeWorkoutSession", back_populates="user", cascade="all, delete-orphan")
+    forge_progress_photos = relationship("ForgeProgressPhoto", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
@@ -362,3 +363,28 @@ class ForgeSessionMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     session = relationship("ForgeWorkoutSession", back_populates="messages")
+
+
+class ForgeProgressPhoto(Base):
+    """Private, user-owned figure snapshot metadata; image bytes stay in backend-only storage."""
+
+    __tablename__ = "forge_progress_photos"
+    __table_args__ = (
+        Index("ix_forge_progress_photos_user_taken_created", "user_id", "taken_on", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    taken_on = Column(Date, nullable=False)
+    view = Column(String(16), nullable=False, server_default="front")
+    note = Column(String(500), nullable=True)
+    storage_key = Column(String(512), nullable=False)
+    content_type = Column(String(100), nullable=False, server_default="image/webp")
+    byte_size = Column(Integer, nullable=False)
+    width = Column(Integer, nullable=False)
+    height = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="forge_progress_photos")

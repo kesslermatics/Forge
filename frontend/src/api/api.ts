@@ -15,25 +15,31 @@ export const isAuthenticated = (): boolean => getToken() !== null;
 
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
-
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  };
-
-  if (token) {
-    (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+  const headers = new Headers(options.headers);
+  if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
+  if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
-
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }));
     throw new Error(err.detail || `Error ${res.status}`);
   }
-
   if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+async function apiBlob(endpoint: string): Promise<Blob> {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(`${API_URL}${endpoint}`, { headers, cache: 'no-store' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(err.detail || `Error ${res.status}`);
+  }
+  return res.blob();
 }
 
 /* ── Auth endpoints ─────────────────────────────────────── */
@@ -887,3 +893,44 @@ export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId:
 
 export const refreshForgePlanCoachTargets = (planId: string) =>
   apiRequest<ForgePlan>(`/api/forge/plans/${planId}/coach-targets`, { method: 'POST' });
+
+
+/* ── Private Forge progress photos ───────────────────── */
+
+export type ForgeProgressPhotoView = 'front' | 'side' | 'back' | 'other';
+
+export interface ForgeProgressPhotoContext {
+  weight_kg: number | null;
+  current_goal: string | null;
+  target_weight_kg: number | null;
+  workout_names: string[];
+}
+
+export interface ForgeProgressPhoto {
+  id: string;
+  taken_on: string;
+  view: ForgeProgressPhotoView;
+  note: string | null;
+  byte_size: number;
+  width: number;
+  height: number;
+  created_at: string;
+  updated_at: string | null;
+  context: ForgeProgressPhotoContext;
+}
+
+export interface ForgeProgressPhotoList {
+  items: ForgeProgressPhoto[];
+  total: number;
+}
+
+export const listForgeProgressPhotos = (limit = 50, offset = 0) =>
+  apiRequest<ForgeProgressPhotoList>(`/api/forge/progress-photos?limit=${limit}&offset=${offset}`);
+export const createForgeProgressPhoto = (form: FormData) =>
+  apiRequest<ForgeProgressPhoto>('/api/forge/progress-photos', { method: 'POST', body: form });
+export const updateForgeProgressPhoto = (id: string, data: { taken_on?: string; view?: ForgeProgressPhotoView; note?: string | null }) =>
+  apiRequest<ForgeProgressPhoto>(`/api/forge/progress-photos/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const deleteForgeProgressPhoto = (id: string) =>
+  apiRequest<void>(`/api/forge/progress-photos/${id}`, { method: 'DELETE' });
+export const fetchForgeProgressPhotoImage = (id: string) =>
+  apiBlob(`/api/forge/progress-photos/${id}/image`);
