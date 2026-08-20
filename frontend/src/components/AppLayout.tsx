@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import { getMe, logoutUser, isAuthenticated } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { Loader2, Home, UtensilsCrossed, Trophy, Settings, Dumbbell } from 'lucide-react';
+import { Loader2, Home, UtensilsCrossed, Trophy, Camera, Dumbbell, UserRound } from 'lucide-react';
 import { LanguageContext } from '../i18n';
 import type { Lang } from '../i18n';
 import ForgeIcon from './ForgeIcon';
@@ -52,13 +52,12 @@ export default function AppLayout() {
                             <span className="text-[17px] font-bold tracking-tight" style={{ color: SAND }}>Forge</span>
                         </div>
                         <button
-                            onClick={() => { logoutUser(); navigate('/login'); }}
-                            className="text-[12px] tracking-wide cursor-pointer transition-colors"
-                            style={{ color: 'rgba(232,197,138,0.4)' }}
-                            onMouseEnter={e => (e.currentTarget.style.color = 'rgba(232,197,138,0.8)')}
-                            onMouseLeave={e => (e.currentTarget.style.color = 'rgba(232,197,138,0.4)')}
+                            onClick={() => navigate('/settings')}
+                            className="tap w-9 h-9 rounded-full flex items-center justify-center cursor-pointer"
+                            style={{ color: SAND, background: 'rgba(232,197,138,0.10)', border: '1px solid rgba(232,197,138,0.18)' }}
+                            aria-label="Profil und Einstellungen öffnen"
                         >
-                            Abmelden
+                            <UserRound size={18} />
                         </button>
                     </div>
                 </header>
@@ -76,7 +75,7 @@ export default function AppLayout() {
                         <Tab to="/forge" icon={<Dumbbell size={22} />} label="Plan" />
                         <Tab to="/nutrition" icon={<UtensilsCrossed size={22} />} label="Ernährung" />
                         <Tab to="/achievements" icon={<Trophy size={22} />} label="Erfolge" />
-                        <Tab to="/settings" icon={<Settings size={22} />} label="Einstellungen" />
+                        <Tab to="/forge/progress" icon={<Camera size={22} />} label="Progress" />
                     </div>
                 </nav>
             </div>

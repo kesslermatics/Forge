@@ -68,8 +68,9 @@ export interface UserInfo {
   username: string;
   has_yazio: boolean;
   current_goal: string | null;
-  target_weight: number | null;
+    target_weight: number | null;
   first_name: string | null;
+  height_cm: number | null;
   language: 'de' | 'en';
   training_plan: string[] | null;
 }
@@ -94,6 +95,12 @@ export const updateLanguage = (language: 'de' | 'en') =>
   apiRequest<{ message: string; language: string }>('/user/language', {
     method: 'POST',
     body: JSON.stringify({ language }),
+  });
+
+export const updateUserProfile = (data: { first_name?: string | null; height_cm?: number | null }) =>
+  apiRequest<{ message: string; first_name: string | null; height_cm: number | null }>('/user/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
   });
 
 /* ── Briefing endpoints ─────────────────────────────────── */

@@ -59,8 +59,8 @@ const translations = {
     'setup.backToHevy': { de: '← Zurück zu Hevy', en: '← Back to Hevy' },
 
     /* ── Settings Page ────────────────────────────────── */
-    'settings.title': { de: 'Einstellungen', en: 'Settings' },
-    'settings.subtitle': { de: 'Verwalte deine verbundenen Accounts und Zugangsdaten', en: 'Manage your connected accounts and credentials' },
+    'settings.title': { de: 'Profil & Einstellungen', en: 'Profile & settings' },
+    'settings.subtitle': { de: 'Deine Daten, Ziele und verbundenen Dienste an einem Ort', en: 'Your profile, goals, and connected services in one place' },
     'settings.account': { de: 'Account', en: 'Account' },
     'settings.username': { de: 'Benutzername', en: 'Username' },
     'settings.userId': { de: 'Benutzer-ID', en: 'User ID' },

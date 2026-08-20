@@ -11,6 +11,7 @@ from app.schemas import (
     GoalUpdate, GoalResponse,
     LanguageUpdate, LanguageResponse,
     TrainingPlanUpdate, TrainingPlanResponse,
+    ProfileUpdate, ProfileResponse,
 )
 from app.dependencies import get_current_user
 from app.encryption import encrypt_value
@@ -31,6 +32,7 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         current_goal=current_user.current_goal,
         target_weight=current_user.target_weight,
         first_name=current_user.first_name,
+        height_cm=current_user.height_cm,
         language=current_user.language or "de",
         training_plan=current_user.training_plan,
     )
@@ -90,6 +92,27 @@ async def update_goal(
         message="Goal updated successfully",
         current_goal=current_user.current_goal,
         target_weight=current_user.target_weight,
+    )
+
+
+@router.patch("/profile", response_model=ProfileResponse)
+async def update_profile(
+    data: ProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update user-managed profile fields without touching credentials or daily weight history."""
+    updates = data.model_dump(exclude_unset=True)
+    if "first_name" in updates:
+        current_user.first_name = updates["first_name"].strip() if updates["first_name"] and updates["first_name"].strip() else None
+    if "height_cm" in updates:
+        current_user.height_cm = updates["height_cm"]
+    db.commit()
+    db.refresh(current_user)
+    return ProfileResponse(
+        message="Profile updated successfully",
+        first_name=current_user.first_name,
+        height_cm=current_user.height_cm,
     )
 
 

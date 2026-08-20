@@ -23,6 +23,7 @@ class User(Base):
     current_goal = Column(String(100), nullable=True)        # e.g. "Lean Bulk", "Cut", "Maintain"
     target_weight = Column(Float, nullable=True)             # in kg
     first_name = Column(String(100), nullable=True)          # From Yazio profile
+    height_cm = Column(Float, nullable=True)                 # User-managed profile data
     language = Column(String(5), nullable=False, server_default="de")  # "de" or "en"
     training_plan = Column(JSON, nullable=True)                          # List of workout names in current plan
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -29,6 +29,7 @@ class UserResponse(BaseModel):
     current_goal: Optional[str] = None
     target_weight: Optional[float] = None
     first_name: Optional[str] = None
+    height_cm: Optional[float] = None
     language: str = "de"
     training_plan: Optional[list[str]] = None
     
@@ -99,6 +100,20 @@ class GoalResponse(BaseModel):
     message: str
     current_goal: Optional[str] = None
     target_weight: Optional[float] = None
+
+
+# ============ Profile Schemas ============
+
+class ProfileUpdate(BaseModel):
+    """User-managed identity and body data, excluding credentials and daily weight."""
+    first_name: Optional[str] = Field(None, max_length=100)
+    height_cm: Optional[float] = Field(None, ge=80, le=280)
+
+
+class ProfileResponse(BaseModel):
+    message: str
+    first_name: Optional[str] = None
+    height_cm: Optional[float] = None
 
 
 # ============ Language Schemas ============
