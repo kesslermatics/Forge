@@ -15,7 +15,7 @@
         Header always set Expires "0"
     </FilesMatch>
 
-    <FilesMatch "\.(js|mjs|css|svg|png|jpg|jpeg|gif|webp|ico|woff2?)$">
+    <FilesMatch "\.(js|mjs|css|svg|png|jpg|jpeg|gif|webp|ico|woff2?)$"> 
         Header always set Cache-Control "public, max-age=31536000, immutable"
     </FilesMatch>
 </IfModule>
