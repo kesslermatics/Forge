@@ -5,7 +5,6 @@ from datetime import date, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 
@@ -209,15 +208,6 @@ def start_scheduler():
         trigger=CronTrigger(hour=3, minute=0, timezone="Europe/Berlin"),
         id="daily_monthly_challenge_checkin",
         name="Generate monthly challenge check-ins for all users",
-        replace_existing=True,
-    )
-    # A deploy or restart immediately creates the current month's frozen goals and
-    # one idempotent check-in; the 03:00 job subsequently owns the daily cadence.
-    scheduler.add_job(
-        monthly_challenge_checkin_job,
-        trigger=DateTrigger(run_date=datetime.now()),
-        id="startup_monthly_challenge_checkin",
-        name="Initialize current monthly challenges after startup",
         replace_existing=True,
     )
     scheduler.add_job(

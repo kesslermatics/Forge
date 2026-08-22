@@ -243,7 +243,7 @@ def _finalize_progress(challenge: MonthlyChallenge, current: float, percent: flo
         challenge.completion_stats = {"current_value": current, "target_value": challenge.target_value, "progress_percent": 100.0}
     if challenge.status == "completed":
         percent = 100.0
-    return {"id": challenge.id, "slot": challenge.slot, "category": challenge.category, "metric": challenge.metric, "title": challenge.title, "description": challenge.description, "icon": challenge.icon, "unit": challenge.unit, "baseline_value": challenge.baseline_value, "current_value": round(current, 2), "target_value": challenge.target_value, "progress_percent": round(percent, 1), "status": challenge.status, "completed_at": challenge.completed_at, "completion_stats": challenge.completion_stats}
+    return {"id": str(challenge.id), "slot": challenge.slot, "category": challenge.category, "metric": challenge.metric, "title": challenge.title, "description": challenge.description, "icon": challenge.icon, "unit": challenge.unit, "baseline_value": challenge.baseline_value, "current_value": round(current, 2), "target_value": challenge.target_value, "progress_percent": round(percent, 1), "status": challenge.status, "completed_at": challenge.completed_at.isoformat() if challenge.completed_at else None, "completion_stats": challenge.completion_stats}
 
 
 def serialize_cycle(db: Session, user: User, cycle: MonthlyChallengeCycle) -> dict[str, Any]:

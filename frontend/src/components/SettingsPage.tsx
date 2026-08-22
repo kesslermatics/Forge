@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { saveGoal, saveYazioCredentials, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
+import { createMonthlyChallengeCheckin, saveGoal, saveYazioCredentials, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, Ruler, Target, UserRound, Loader2 } from 'lucide-react';
+import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, Ruler, Target, UserRound, Loader2, Sparkles } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
 
@@ -24,6 +24,8 @@ export default function SettingsPage() {
     const [targetWeight, setTargetWeight] = useState('');
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileMsg, setProfileMsg] = useState<Feedback>(null);
+    const [creatingCheckin, setCreatingCheckin] = useState(false);
+    const [checkinMsg, setCheckinMsg] = useState<Feedback>(null);
     const [yazioEmail, setYazioEmail] = useState('');
     const [yazioPassword, setYazioPassword] = useState('');
     const [showYazioPw, setShowYazioPw] = useState(false);
@@ -63,6 +65,16 @@ export default function SettingsPage() {
         } finally { setSavingProfile(false); }
     };
 
+    const handleCreateCheckin = async () => {
+        setCheckinMsg(null); setCreatingCheckin(true);
+        try {
+            await createMonthlyChallengeCheckin();
+            setCheckinMsg({ type: 'success', text: 'Monats-Challenges und der heutige Daily Check-in sind bereit.' });
+        } catch (caught: unknown) {
+            setCheckinMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Daily Check-in konnte nicht erstellt werden.' });
+        } finally { setCreatingCheckin(false); }
+    };
+
     const handleSaveYazio = async (event: React.FormEvent) => {
         event.preventDefault(); setYazioMsg(null); setSavingYazio(true);
         try { await saveYazioCredentials(yazioEmail, yazioPassword); setYazioMsg({ type: 'success', text: t('settings.yazioUpdated') }); await refreshUser(); setYazioEmail(''); setYazioPassword(''); }
@@ -92,6 +104,12 @@ export default function SettingsPage() {
                 <FeedMsg msg={profileMsg} />
                 <button type="submit" disabled={savingProfile} className="btn-forge w-full text-[14px]">{savingProfile ? <><Loader2 size={15} className="animate-spin" />Speichert…</> : <><Target size={15} />Profil speichern</>}</button>
             </form>
+        </Card>
+
+        <Card icon={<Sparkles size={15} style={{ color: SAND }} />} title="Monats-Challenges">
+            <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Erstelle jetzt deine fünf Ziele für den aktuellen Monat und den heutigen Daily Check-in. Der Button betrifft nur deinen Account und ist pro Tag sicher wiederholbar.</p>
+            <FeedMsg msg={checkinMsg} />
+            <button type="button" onClick={() => void handleCreateCheckin()} disabled={creatingCheckin} className="btn-forge w-full text-[14px]">{creatingCheckin ? <><Loader2 size={15} className="animate-spin" />Erstellt…</> : <><Sparkles size={15} />Monat jetzt auswerten</>}</button>
         </Card>
 
         <Card icon={<Shield size={15} style={{ color: SAND }} />} title={t('settings.account')}><div className="grid grid-cols-2 gap-4 text-[13px]"><div><p style={{ color: TEXT_DIM }}>{t('settings.username')}</p><p className="mt-0.5 font-medium" style={{ color: '#f2ece0' }}>{user?.username}</p></div><div><p style={{ color: TEXT_DIM }}>Account</p><p className="mt-0.5 font-mono text-[11px] truncate" style={{ color: '#f2ece0' }}>{user?.id}</p></div></div></Card>
