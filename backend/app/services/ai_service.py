@@ -2103,3 +2103,84 @@ Use IDs that appear exactly in the supplied session or catalog. Give at most one
     except Exception as exc:
         logger.error("Gemini session chat failed: %s", exc)
         return fallback
+
+
+async def select_monthly_challenge_categories(
+    candidates: list[dict],
+    user_context: dict,
+    language: str = "de",
+) -> list[str]:
+    """Let Gemini choose up to three safe, already validated challenge categories.
+
+    Numeric targets and all source data are calculated server-side. The model can
+    only return category IDs supplied in ``candidates``; a deterministic fallback
+    preserves functionality when Gemini is unavailable.
+    """
+    fallback = [candidate["category"] for candidate in candidates[:3]]
+    if not candidates or not settings.gemini_api_key:
+        return fallback
+    payload = {
+        "user_context": user_context,
+        "candidates": [
+            {"category": item["category"], "title": item["title"], "description": item["description"]}
+            for item in candidates
+        ],
+    }
+    prompt = (
+        "Choose up to three complementary monthly fitness challenge categories from the provided candidates. "
+        "Consider the user's goal and data availability, but do not invent a category, metric, target, or health claim. "
+        "Always prefer consistency when it is available. Return JSON only: {\"categories\": [\"...\"]}.\n\n"
+        + json.dumps(payload, ensure_ascii=False)
+        + _language_instruction(language)
+    )
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=300),
+        )
+        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.text or "").strip()))
+        allowed = {candidate["category"] for candidate in candidates}
+        selected = [category for category in parsed.get("categories", []) if category in allowed]
+        return list(dict.fromkeys(selected))[:3] or fallback
+    except Exception as exc:
+        logger.warning("Monthly challenge selection fallback: %s", exc)
+        return fallback
+
+
+async def generate_monthly_challenge_checkin(
+    challenges: list[dict],
+    current_goal: str | None,
+    nutrition: dict,
+    language: str = "de",
+) -> dict:
+    """Generate wording only; all displayed progress stays deterministic and server-owned."""
+    fallback = {
+        "headline": "Dein Monatsfokus",
+        "message": "Dein Fortschritt wird direkt aus deinen Forge-Daten aktualisiert. Bleib bei der nächsten konkreten Einheit.",
+        "next_step": "Öffne deinen Trainingsplan und logge deine nächste Forge-Session vollständig.",
+    }
+    if not settings.gemini_api_key:
+        return fallback
+    prompt = (
+        "You are a concise, supportive fitness coach. Write a short daily check-in from the factual challenge data below. "
+        "Never change, reinterpret, promise, or invent numeric progress. Do not give medical advice. "
+        "If nutrition is unavailable, state that neutrally and focus on available training facts. "
+        "Return JSON only with headline (max 45 chars), message (max 240 chars), and next_step (max 140 chars).\n\n"
+        + json.dumps({"current_goal": current_goal, "challenges": challenges, "nutrition": nutrition}, ensure_ascii=False)
+        + _language_instruction(language)
+    )
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.5, max_output_tokens=500),
+        )
+        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.text or "").strip()))
+        if all(isinstance(parsed.get(key), str) and parsed[key].strip() for key in ("headline", "message", "next_step")):
+            return {key: parsed[key].strip() for key in ("headline", "message", "next_step")}
+    except Exception as exc:
+        logger.warning("Monthly challenge check-in fallback: %s", exc)
+    return fallback

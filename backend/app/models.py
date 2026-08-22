@@ -38,9 +38,80 @@ class User(Base):
     forge_programs = relationship("ForgeTrainingProgram", back_populates="user", cascade="all, delete-orphan")
     forge_sessions = relationship("ForgeWorkoutSession", back_populates="user", cascade="all, delete-orphan")
     forge_progress_photos = relationship("ForgeProgressPhoto", back_populates="user", cascade="all, delete-orphan")
-    
+    monthly_challenge_cycles = relationship("MonthlyChallengeCycle", back_populates="user", cascade="all, delete-orphan")
+    monthly_challenge_checkins = relationship("MonthlyChallengeCheckin", back_populates="user", cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
+
+
+class MonthlyChallengeCycle(Base):
+    """Frozen monthly challenge selection and durable completion summary for one account."""
+
+    __tablename__ = "monthly_challenge_cycles"
+    __table_args__ = (UniqueConstraint("user_id", "month_start", name="uq_monthly_challenge_cycle_user_month"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    month_start = Column(Date, nullable=False, index=True)
+    generated_at = Column(DateTime(timezone=True), server_default=func.now())
+    total_challenges = Column(Integer, nullable=False, server_default="0")
+    completed_challenges = Column(Integer, nullable=False, server_default="0")
+    completion_percent = Column(Float, nullable=False, server_default="0")
+    finalized_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="monthly_challenge_cycles")
+    challenges = relationship("MonthlyChallenge", back_populates="cycle", cascade="all, delete-orphan", order_by="MonthlyChallenge.slot")
+    checkins = relationship("MonthlyChallengeCheckin", back_populates="cycle", cascade="all, delete-orphan", order_by="MonthlyChallengeCheckin.date")
+
+
+class MonthlyChallenge(Base):
+    """One measurable card in a monthly challenge cycle; target selection remains immutable."""
+
+    __tablename__ = "monthly_challenges"
+    __table_args__ = (
+        UniqueConstraint("cycle_id", "slot", name="uq_monthly_challenge_slot"),
+        UniqueConstraint("cycle_id", "category", name="uq_monthly_challenge_category"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cycle_id = Column(UUID(as_uuid=True), ForeignKey("monthly_challenge_cycles.id", ondelete="CASCADE"), nullable=False, index=True)
+    slot = Column(Integer, nullable=False)
+    category = Column(String(32), nullable=False)
+    metric = Column(String(80), nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(String(500), nullable=False)
+    icon = Column(String(64), nullable=False)
+    unit = Column(String(32), nullable=False)
+    baseline_value = Column(Float, nullable=False, server_default="0")
+    target_value = Column(Float, nullable=False)
+    rules = Column(JSON, nullable=False, default=dict)
+    status = Column(String(16), nullable=False, server_default="active")
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    completion_stats = Column(JSON, nullable=True)
+    final_stats = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    cycle = relationship("MonthlyChallengeCycle", back_populates="challenges")
+
+
+class MonthlyChallengeCheckin(Base):
+    """Idempotent daily metrics and short AI wording for one monthly challenge cycle."""
+
+    __tablename__ = "monthly_challenge_checkins"
+    __table_args__ = (UniqueConstraint("cycle_id", "date", name="uq_monthly_challenge_checkin_cycle_date"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cycle_id = Column(UUID(as_uuid=True), ForeignKey("monthly_challenge_cycles.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    metrics_snapshot = Column(JSON, nullable=False, default=dict)
+    progress_snapshot = Column(JSON, nullable=False, default=dict)
+    checkin_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    cycle = relationship("MonthlyChallengeCycle", back_populates="checkins")
+    user = relationship("User", back_populates="monthly_challenge_checkins")
 
 
 class MorningBriefing(Base):

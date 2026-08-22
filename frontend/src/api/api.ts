@@ -941,3 +941,49 @@ export const deleteForgeProgressPhoto = (id: string) =>
   apiRequest<void>(`/api/forge/progress-photos/${id}`, { method: 'DELETE' });
 export const fetchForgeProgressPhotoImage = (id: string) =>
   apiBlob(`/api/forge/progress-photos/${id}/image`);
+
+
+/* ── Monthly Forge challenges ──────────────────────────── */
+
+export type MonthlyChallengeCategory = 'consistency' | 'strength' | 'weight' | 'nutrition' | 'quality';
+
+export interface MonthlyChallenge {
+  id: string;
+  slot: number;
+  category: MonthlyChallengeCategory;
+  metric: string;
+  title: string;
+  description: string;
+  icon: string;
+  unit: string;
+  baseline_value: number;
+  current_value: number;
+  target_value: number;
+  progress_percent: number;
+  status: 'active' | 'completed';
+  completed_at: string | null;
+  completion_stats: Record<string, unknown> | null;
+}
+
+export interface MonthlyChallengeCheckin {
+  headline: string;
+  message: string;
+  next_step: string;
+}
+
+export interface MonthlyChallengeCycle {
+  id: string;
+  month_start: string;
+  total_challenges: number;
+  completed_challenges: number;
+  completion_percent: number;
+  challenges: MonthlyChallenge[];
+  latest_checkin: MonthlyChallengeCheckin | null;
+  latest_checkin_date: string | null;
+}
+
+export const getCurrentMonthlyChallenges = () =>
+  apiRequest<MonthlyChallengeCycle>('/api/challenges/monthly/current');
+
+export const createMonthlyChallengeCheckin = () =>
+  apiRequest<{ date: string; checkin: MonthlyChallengeCheckin }>('/api/challenges/monthly/check-in', { method: 'POST' });

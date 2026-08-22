@@ -483,3 +483,39 @@ class ForgeProgressPhotoResponse(BaseModel):
 class ForgeProgressPhotoListResponse(BaseModel):
     items: list[ForgeProgressPhotoResponse]
     total: int
+
+
+# ============ Monthly Forge Challenges ============
+
+class MonthlyChallengeResponse(BaseModel):
+    id: UUID
+    slot: int
+    category: Literal["consistency", "strength", "weight", "nutrition", "quality"]
+    metric: str
+    title: str
+    description: str
+    icon: str
+    unit: str
+    baseline_value: float
+    current_value: float
+    target_value: float
+    progress_percent: float
+    status: Literal["active", "completed"]
+    completed_at: Optional[Any] = None
+    completion_stats: Optional[dict] = None
+
+
+class MonthlyChallengeCycleResponse(BaseModel):
+    id: UUID
+    month_start: date
+    total_challenges: int
+    completed_challenges: int
+    completion_percent: float
+    challenges: list[MonthlyChallengeResponse]
+    latest_checkin: Optional[dict] = None
+    latest_checkin_date: Optional[date] = None
+
+
+class MonthlyChallengeCheckinResponse(BaseModel):
+    date: date
+    checkin: dict

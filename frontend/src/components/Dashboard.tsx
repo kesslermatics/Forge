@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useLanguage } from '../i18n';
+import MonthlyChallengesCard from './MonthlyChallengesCard';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -237,6 +238,8 @@ export default function Dashboard() {
                 </section>
             )}
             {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}
+
+            <MonthlyChallengesCard />
 
             {/* ── Loading ── */}
             {loading && (
