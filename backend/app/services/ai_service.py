@@ -2163,12 +2163,28 @@ async def generate_monthly_challenge_checkin(
     }
     if not settings.gemini_api_key:
         return fallback
+    # The model only needs the factual display values, never database IDs or timestamps.
+    # Keeping this projection narrow also makes prompt serialization robust for UUID-backed rows.
+    challenge_facts = [
+        {
+            key: challenge.get(key)
+            for key in (
+                "category", "title", "description", "unit", "baseline_value",
+                "current_value", "target_value", "progress_percent", "status",
+            )
+        }
+        for challenge in challenges
+    ]
     prompt = (
         "You are a concise, supportive fitness coach. Write a short daily check-in from the factual challenge data below. "
         "Never change, reinterpret, promise, or invent numeric progress. Do not give medical advice. "
         "If nutrition is unavailable, state that neutrally and focus on available training facts. "
         "Return JSON only with headline (max 45 chars), message (max 240 chars), and next_step (max 140 chars).\n\n"
-        + json.dumps({"current_goal": current_goal, "challenges": challenges, "nutrition": nutrition}, ensure_ascii=False)
+        + json.dumps(
+            {"current_goal": current_goal, "challenges": challenge_facts, "nutrition": nutrition},
+            ensure_ascii=False,
+            default=str,
+        )
         + _language_instruction(language)
     )
     try:
