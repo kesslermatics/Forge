@@ -978,6 +978,8 @@ export interface MonthlyChallengeCycle {
   completed_challenges: number;
   completion_percent: number;
   challenges: MonthlyChallenge[];
+  today_checkin: MonthlyChallengeCheckin | null;
+  today_checkin_date: string | null;
   latest_checkin: MonthlyChallengeCheckin | null;
   latest_checkin_date: string | null;
 }

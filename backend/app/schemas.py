@@ -512,6 +512,8 @@ class MonthlyChallengeCycleResponse(BaseModel):
     completed_challenges: int
     completion_percent: float
     challenges: list[MonthlyChallengeResponse]
+    today_checkin: Optional[dict] = None
+    today_checkin_date: Optional[date] = None
     latest_checkin: Optional[dict] = None
     latest_checkin_date: Optional[date] = None
 
