@@ -42,14 +42,6 @@ const formatDuration = (startedAt: string, completedAt: string | null) => {
   return hours ? `${hours} Std. ${minutes} Min.` : `${minutes} Min.`;
 };
 
-const guidanceStatusLabel = (status: string) => ({
-  INCREASE_WEIGHT: 'Gewicht erhöhen',
-  KEEP_PROGRESSING: 'Wiederholungen aufbauen',
-  STAGNATED: 'Leistung absichern',
-  REGRESSED: 'Leistung stabilisieren',
-  FIRST_SESSION: 'Kontrollierter Start',
-}[status] ?? 'Trainingsziel');
-
 export default function ForgeSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
@@ -68,6 +60,7 @@ export default function ForgeSessionPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [actualDrafts, setActualDrafts] = useState<Record<string, string>>({});
   const [checkedSetId, setCheckedSetId] = useState<string | null>(null);
+  const [openSetMenuId, setOpenSetMenuId] = useState<string | null>(null);
   const [celebratingCompletion, setCelebratingCompletion] = useState(false);
   const [sessionActionConfirm, setSessionActionConfirm] = useState<'complete' | 'discard' | null>(null);
   const sessionRef = useRef<ForgeSession | null>(null);
@@ -172,6 +165,14 @@ export default function ForgeSessionPage() {
     })));
   };
 
+  const placeSet = async (set: ForgeSessionSet, setType: ForgeSessionSetInput['set_type'], position: number) => {
+    if (!session) return;
+    await flushSetAutosave(set.id);
+    const liveSet = sessionRef.current?.exercises.flatMap((exercise) => exercise.sets).find((item) => item.id === set.id) ?? set;
+    setOpenSetMenuId(null);
+    await mutate(() => updateForgeSessionSet(session.id, liveSet.id, { ...toInput(liveSet, { set_type: setType }), position }));
+  };
+
   const addSet = () => {
     if (!session || !activeExercise) return;
     const last = activeExercise.sets[activeExercise.sets.length - 1];
@@ -266,29 +267,38 @@ export default function ForgeSessionPage() {
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
         <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{activeLibraryExercise?.machine_profiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active'} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Maschine wählen</option>{activeLibraryExercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.primary_muscle_group}{activeExercise.machine_profile_name ? ` · ${activeExercise.machine_profile_name}` : ''}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
-        {(activeExercise.coach_guidance || activeCoachDecision) && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
+        {activeCoachDecision && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p>{activeExercise.coach_guidance && <span className="rounded-full px-2 py-0.5 text-[9px] font-medium" style={{ color: SAND, background: 'rgba(232,197,138,0.14)' }}>{guidanceStatusLabel(activeExercise.coach_guidance.progression_status)}</span>}</div>
-              {activeExercise.coach_guidance && <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.76)' }}>{activeExercise.coach_guidance.rationale}</p>}
-              {activeCoachDecision && <div className="mt-3 border-t pt-3" style={{ borderColor: `${SAND}22` }}>
-                <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]" style={{ color: SAND }}><Sparkles size={12} />KI-Entscheidung für heute</p>
-                <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
-                <p className="mt-2 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: TEXT }}>Start:</span> {activeCoachDecision.first_set_focus} <span className="mx-1">·</span> {activeCoachDecision.effort_hint}</p>
-              </div>}
-              <p className="mt-3 text-[10px]" style={{ color: DIM }}>Heutiges Ziel: {activeTargetSummary || 'Siehe Satz-Ziele unten'}{activeExercise.coach_guidance ? ` · Arbeitsbereich ${activeExercise.coach_guidance.rep_range} Wdh.` : ''}</p>
+              <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p>
+              <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
+              <p className="mt-2 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: TEXT }}>Start:</span> {activeCoachDecision.first_set_focus} <span className="mx-1">·</span> {activeCoachDecision.effort_hint}</p>
+              <p className="mt-3 text-[10px]" style={{ color: DIM }}>Heutiges Ziel: {activeTargetSummary || 'Siehe Satz-Ziele unten'}</p>
             </div>
           </div>
         </aside>}
         <div className="border-y" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
           <div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', color: DIM }}><span>Satz</span><span className="text-center">Ziel</span><span className="text-center">Heute</span><span /></div>
-          {activeExercise.sets.map((set, index) => <div key={set.id} className={`grid items-center gap-2 px-4 py-3 ${set.completed ? 'forge-set-done' : ''} ${checkedSetId === set.id ? 'forge-set-check' : ''}`} style={{ gridTemplateColumns: '36px 1fr 1fr 32px', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}>
-            <span className="text-[11px]" style={{ color: DIM }}>{set.set_type === 'warmup' ? 'W' : index + 1}</span>
-            <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps)}</span>
-            <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : 'kg'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
-            {session.status === 'active' ? <button onClick={() => void toggleSet(set)} disabled={saving} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-50" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
-          </div>)}
+          {activeExercise.sets.map((set, index) => {
+            const withoutSet = activeExercise.sets.filter((item) => item.id !== set.id);
+            const warmupTargetPosition = withoutSet.filter((item) => item.set_type === 'warmup').length;
+            const workingCount = activeExercise.sets.filter((item) => item.set_type === 'working').length + (set.set_type === 'warmup' ? 1 : 0);
+            const workingNumber = set.set_type === 'working' ? activeExercise.sets.filter((item) => item.set_type === 'working').findIndex((item) => item.id === set.id) + 1 : 0;
+            const menuOpen = openSetMenuId === set.id;
+            return <div key={set.id} className={`grid items-center gap-2 px-4 py-3 ${set.completed ? 'forge-set-done' : ''} ${checkedSetId === set.id ? 'forge-set-check' : ''}`} style={{ gridTemplateColumns: '36px 1fr 1fr 32px', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}>
+              <div className="relative"><button onClick={() => setOpenSetMenuId(menuOpen ? null : set.id)} disabled={session.status !== 'active' || saving} aria-expanded={menuOpen} aria-haspopup="menu" className="tap flex h-7 w-7 items-center justify-center rounded-lg text-[11px] font-medium cursor-pointer disabled:cursor-default disabled:opacity-70" style={{ color: set.set_type === 'warmup' ? '#16130f' : DIM, background: set.set_type === 'warmup' ? SAND : 'rgba(255,247,235,0.075)', border: `1px solid ${set.set_type === 'warmup' ? SAND : 'rgba(255,247,235,0.08)'}` }}>{set.set_type === 'warmup' ? 'W' : workingNumber}</button>
+                {menuOpen && <div role="menu" className="absolute left-0 top-8 z-20 w-34 overflow-hidden rounded-xl p-1 shadow-xl" style={{ background: '#282116', border: `1px solid ${SAND}44` }}>
+                  <button role="menuitem" onClick={() => void placeSet(set, 'warmup', warmupTargetPosition)} className="tap flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] cursor-pointer" style={{ color: TEXT, background: set.set_type === 'warmup' ? 'rgba(232,197,138,0.14)' : 'transparent' }}><span className="flex h-5 w-5 items-center justify-center rounded-md text-[9px] font-semibold" style={{ color: '#16130f', background: SAND }}>W</span>Aufwärmen</button>
+                  <div className="my-1 h-px" style={{ background: 'rgba(255,247,235,0.08)' }} />
+                  {Array.from({ length: workingCount }, (_, workIndex) => <button key={workIndex} role="menuitem" onClick={() => void placeSet(set, 'working', warmupTargetPosition + workIndex)} className="tap flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] cursor-pointer" style={{ color: TEXT, background: set.set_type === 'working' && workingNumber === workIndex + 1 ? 'rgba(232,197,138,0.14)' : 'transparent' }}><span className="flex h-5 w-5 items-center justify-center rounded-md text-[9px] font-semibold" style={{ color: SAND, border: `1px solid ${SAND}66` }}>{workIndex + 1}</span>{workIndex + 1}. Arbeitssatz</button>)}
+                </div>}
+              </div>
+              <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps)}</span>
+              <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : 'kg'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
+              {session.status === 'active' ? <button onClick={() => void toggleSet(set)} disabled={saving} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-50" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
+            </div>;
+          })}
         </div>
         {session.status === 'active' && <div className="p-3 flex gap-3"><button onClick={addSet} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={14} />Satz</button>{activeExercise.sets.length > 1 && <button onClick={() => void mutate(() => deleteForgeSessionSet(session.id, activeExercise.sets[activeExercise.sets.length - 1].id))} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: DIM }}><Trash2 size={13} />Letzten löschen</button>}</div>}
       </section>

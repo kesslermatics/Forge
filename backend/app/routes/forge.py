@@ -46,6 +46,7 @@ from app.schemas import (
     ForgeSessionResponse,
     ForgeSessionSummaryResponse,
     ForgeSessionSetInput,
+    ForgeSessionSetUpdate,
     ForgeStartSessionRequest,
     ForgeTodayResponse,
     ForgeApplySessionActionRequest,
@@ -1212,7 +1213,7 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
 
 
 @router.patch("/sessions/{session_id}/sets/{set_id}", response_model=ForgeSessionResponse)
-async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionSetInput, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionSetUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
@@ -1222,8 +1223,27 @@ async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionS
     ).first()
     if set_data is None:
         raise _not_found("Set not found")
-    for key, value in data.model_dump().items():
+
+    updates = data.model_dump(exclude={"position"})
+    requested_position = data.position
+    for key, value in updates.items():
         setattr(set_data, key, value)
+
+    if requested_position is not None:
+        siblings = db.query(ForgeSessionSet).filter(
+            ForgeSessionSet.session_exercise_id == set_data.session_exercise_id,
+        ).order_by(ForgeSessionSet.position).all()
+        if requested_position >= len(siblings):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Set position is outside this exercise.")
+        reordered = [item for item in siblings if item.id != set_data.id]
+        reordered.insert(requested_position, set_data)
+        # The unique constraint is immediate in PostgreSQL. Move every row to a
+        # unique temporary position first, then apply the final ordered positions.
+        for temporary_position, item in enumerate(reordered, start=1):
+            item.position = -temporary_position
+        db.flush()
+        for position, item in enumerate(reordered):
+            item.position = position
     db.commit()
     db.refresh(session)
     return _serialize_session(session)

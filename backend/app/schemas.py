@@ -362,6 +362,11 @@ class ForgeSessionSetInput(BaseModel):
     note: Optional[str] = Field(None, max_length=300)
 
 
+class ForgeSessionSetUpdate(ForgeSessionSetInput):
+    """Live-set update with an optional, session-local position change."""
+    position: Optional[int] = Field(None, ge=0, le=19)
+
+
 class ForgeSessionSetResponse(ForgeSessionSetInput):
     id: UUID
     position: int

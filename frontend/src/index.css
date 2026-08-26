@@ -240,7 +240,7 @@ body {
   50% { transform: translateY(-2px); box-shadow: 0 0 0 9px rgba(232,197,138,0); }
 }
 @keyframes forge-loader-sweep {
-  0% { transform: translateX(-100%); }
+  0% { transform: translateX(-50%); }
   100% { transform: translateX(320%); }
 }
 @keyframes forge-loader-step {

@@ -813,6 +813,8 @@ export interface ForgeSessionSetInput {
   note?: string | null;
 }
 
+export type ForgeSessionSetUpdateInput = ForgeSessionSetInput & { position?: number };
+
 export interface ForgeSessionCoachGuidance {
   progression_status: 'INCREASE_WEIGHT' | 'KEEP_PROGRESSING' | 'STAGNATED' | 'REGRESSED' | 'FIRST_SESSION';
   rep_range: string;
@@ -919,7 +921,7 @@ export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?:
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises`, { method: 'POST', body: JSON.stringify(data) });
 export const generateForgeSessionExerciseAdditionCoaching = (sessionId: string, sessionExerciseId: string) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}/addition-coaching`, { method: 'POST' });
-export const updateForgeSessionSet = (sessionId: string, setId: string, data: ForgeSessionSetInput) =>
+export const updateForgeSessionSet = (sessionId: string, setId: string, data: ForgeSessionSetUpdateInput) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/sets/${setId}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const addForgeSessionSet = (sessionId: string, sessionExerciseId: string, data: ForgeSessionSetInput) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}/sets`, { method: 'POST', body: JSON.stringify(data) });
