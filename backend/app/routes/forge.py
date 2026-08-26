@@ -1,5 +1,6 @@
 """Native Forge exercise library, plans, and explicit-save AI drafts."""
 from datetime import date, datetime, timezone
+from math import isfinite
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.encryption import decrypt_value
 from app.models import (
     ForgeExercise,
     ForgeMachineProfile,
@@ -68,6 +70,7 @@ from app.services.ai_service import (
     generate_forge_session_chat,
     generate_forge_session_start_coaching,
 )
+from app.services.yazio_service import fetch_yazio_summary
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
 
@@ -581,8 +584,55 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
     }
 
 
-def _session_coaching_context(db: Session, user: User, session: ForgeWorkoutSession, only_exercise_id: UUID | None = None) -> dict:
-    """Project only server-owned, relevant training facts for the text-only Gemini coach."""
+async def _forge_coaching_profile(user: User) -> dict:
+    """Prefer current Yazio data for the coaching model while retaining an offline fallback."""
+    profile = {
+        "goal": user.current_goal or "general fitness",
+        "goal_source": "settings",
+        "target_weight_kg": user.target_weight,
+        "current_weight_kg": None,
+        "start_weight_kg": None,
+        "weight_change_per_week_kg": None,
+        "nutrition": None,
+    }
+    if not user.yazio_email or not user.yazio_password:
+        return profile
+    try:
+        yazio_data = await fetch_yazio_summary(
+            decrypt_value(user.yazio_email),
+            decrypt_value(user.yazio_password),
+            target_date=date.today(),
+        )
+        yazio_profile = (yazio_data or {}).get("profile") or {}
+        yazio_goal = yazio_profile.get("goal")
+        if isinstance(yazio_goal, str) and yazio_goal.strip():
+            profile["goal"] = yazio_goal.strip()
+            profile["goal_source"] = "yazio"
+        for key in ("current_weight_kg", "start_weight_kg", "weight_change_per_week_kg"):
+            value = yazio_profile.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
+                profile[key] = float(value)
+        totals = (yazio_data or {}).get("totals") or {}
+        goals = (yazio_data or {}).get("goals") or {}
+        profile["nutrition"] = {
+            "date": (yazio_data or {}).get("date"),
+            "totals": {key: totals.get(key) for key in ("calories", "protein", "carbs", "fat")},
+            "goals": {key: goals.get(key) for key in ("calories", "protein", "carbs", "fat")},
+        }
+    except Exception:
+        # Coaching must still load when Yazio is temporarily unavailable.
+        pass
+    return profile
+
+
+def _session_coaching_context(
+    db: Session,
+    user: User,
+    session: ForgeWorkoutSession,
+    coaching_profile: dict,
+    only_exercise_id: UUID | None = None,
+) -> dict:
+    """Project only relevant, server-owned history and set constraints for the AI coach."""
     selected = [exercise for exercise in session.exercises if only_exercise_id is None or exercise.id == only_exercise_id]
     selected_keys = {
         _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
@@ -590,6 +640,7 @@ def _session_coaching_context(db: Session, user: User, session: ForgeWorkoutSess
     }
     selected_keys.discard(None)
     history = []
+    historical_weights: dict[str, set[float]] = {}
     for completed in _native_completed_sessions(db, user.id, session.name)[:6]:
         matching = [
             {
@@ -605,8 +656,42 @@ def _session_coaching_context(db: Session, user: User, session: ForgeWorkoutSess
         ]
         if matching:
             history.append({"completed_at": completed.get("start_time"), "exercises": matching})
+            for exercise in matching:
+                key = exercise.get("progression_key")
+                for set_data in exercise["working_sets"]:
+                    weight = set_data.get("weight_kg")
+                    if key and isinstance(weight, (int, float)) and not isinstance(weight, bool) and isfinite(weight) and weight >= 0:
+                        historical_weights.setdefault(key, set()).add(float(weight))
+
+    def _rep_bounds(exercise: ForgeSessionExercise) -> tuple[int, int]:
+        rep_range = str((exercise.coach_guidance or {}).get("rep_range") or "8-12").replace("–", "-")
+        lower, separator, upper = rep_range.partition("-")
+        if separator and lower.strip().isdigit() and upper.strip().isdigit():
+            minimum, maximum = int(lower), int(upper)
+            if 1 <= minimum <= maximum <= 200:
+                return minimum, maximum
+        return 8, 12
+
+    def _target_context(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
+        minimum, maximum = _rep_bounds(exercise)
+        progression_key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
+        baseline_weight = set_data.target_weight_kg
+        candidates = {float(baseline_weight)} if isinstance(baseline_weight, (int, float)) and isfinite(baseline_weight) and baseline_weight >= 0 else set()
+        for historical_weight in historical_weights.get(progression_key or "", set()):
+            if baseline_weight is None or historical_weight <= float(baseline_weight) + 0.001:
+                candidates.add(historical_weight)
+        return {
+            "session_set_id": str(set_data.id),
+            "type": set_data.set_type,
+            "weight_kg": set_data.target_weight_kg,
+            "reps": set_data.target_reps,
+            "min_reps": minimum,
+            "max_reps": maximum,
+            "allowed_weight_kg": sorted(candidates),
+        }
+
     return {
-        "profile": {"goal": user.current_goal or "general fitness"},
+        "profile": coaching_profile,
         "session": {
             "name": session.name,
             "exercises": [
@@ -618,20 +703,30 @@ def _session_coaching_context(db: Session, user: User, session: ForgeWorkoutSess
                     "machine_profile": exercise.machine_profile_name,
                     "notes": exercise.notes or "",
                     "deterministic_guidance": exercise.coach_guidance or {},
-                    "targets": [
-                        {
-                            "type": set_data.set_type,
-                            "weight_kg": set_data.target_weight_kg,
-                            "reps": set_data.target_reps,
-                        }
-                        for set_data in exercise.sets
-                    ],
+                    "targets": [_target_context(exercise, set_data) for set_data in exercise.sets],
                 }
                 for exercise in selected
             ],
         },
         "recent_matching_history": history,
     }
+
+
+def _apply_forge_set_proposals(session: ForgeWorkoutSession, coaching: dict) -> None:
+    """Persist only already-normalized working-set proposals from the coaching service."""
+    by_id = {str(set_data.id): set_data for exercise in session.exercises for set_data in exercise.sets}
+    for proposal in coaching.get("set_proposals", []):
+        if not isinstance(proposal, dict):
+            continue
+        set_data = by_id.get(str(proposal.get("session_set_id") or ""))
+        if set_data is None or set_data.set_type != "working":
+            continue
+        weight = proposal.get("target_weight_kg")
+        reps = proposal.get("target_reps")
+        if isinstance(weight, (int, float)) and not isinstance(weight, bool) and isfinite(weight) and 0 <= weight <= 1000:
+            set_data.target_weight_kg = float(weight)
+        if isinstance(reps, int) and not isinstance(reps, bool) and 1 <= reps <= 200:
+            set_data.target_reps = reps
 
 
 def _serialize_session_summary(session: ForgeWorkoutSession) -> dict:
@@ -915,8 +1010,12 @@ async def generate_session_start_coaching(session_id: UUID, current_user: User =
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")
     if session.start_coaching is None:
-        context = _session_coaching_context(db, current_user, session)
-        session.start_coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
+        coaching_profile = await _forge_coaching_profile(current_user)
+        context = _session_coaching_context(db, current_user, session, coaching_profile)
+        coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
+        _apply_forge_set_proposals(session, coaching)
+        coaching.pop("set_proposals", None)
+        session.start_coaching = coaching
         db.commit()
         db.refresh(session)
     return _serialize_session(session)
@@ -1166,8 +1265,12 @@ async def generate_session_exercise_addition_coaching(session_id: UUID, session_
     if exercise is None:
         raise _not_found("Session exercise not found")
     if exercise.addition_coaching is None:
-        context = _session_coaching_context(db, current_user, session, session_exercise_id)
+        coaching_profile = await _forge_coaching_profile(current_user)
+        context = _session_coaching_context(
+            db, current_user, session, coaching_profile, only_exercise_id=session_exercise_id,
+        )
         generated = await generate_forge_session_start_coaching(context, current_user.language or "de")
+        _apply_forge_set_proposals(session, generated)
         decision = next((item for item in generated.get("exercise_decisions", []) if item.get("session_exercise_id") == str(exercise.id)), None)
         if decision is None:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Exercise coaching could not be prepared safely.")

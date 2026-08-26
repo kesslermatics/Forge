@@ -249,7 +249,6 @@ export default function ForgeSessionPage() {
   const totalSets = session.exercises.flatMap((exercise) => exercise.sets).length;
   const activeLibraryExercise = library.find((exercise) => exercise.id === activeExercise?.source_exercise_id) ?? null;
   const duration = formatDuration(session.started_at, session.completed_at);
-  const activeTargetSummary = activeExercise?.sets.filter((set) => set.set_type === 'working').map((set) => displayLoad(set.target_weight_kg, set.target_reps)).join(' · ') ?? '';
 
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start justify-between gap-3">
@@ -273,8 +272,6 @@ export default function ForgeSessionPage() {
             <div className="min-w-0 flex-1">
               <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p>
               <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
-              <p className="mt-2 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: TEXT }}>Start:</span> {activeCoachDecision.first_set_focus} <span className="mx-1">·</span> {activeCoachDecision.effort_hint}</p>
-              <p className="mt-3 text-[10px]" style={{ color: DIM }}>Heutiges Ziel: {activeTargetSummary || 'Siehe Satz-Ziele unten'}</p>
             </div>
           </div>
         </aside>}

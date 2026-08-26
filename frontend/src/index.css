@@ -235,13 +235,8 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@keyframes forge-loader-breathe {
-  0%, 100% { transform: translateY(0); box-shadow: 0 0 0 0 rgba(232,197,138,0.20); }
-  50% { transform: translateY(-2px); box-shadow: 0 0 0 9px rgba(232,197,138,0); }
-}
-@keyframes forge-loader-sweep {
-  0% { transform: translateX(-50%); }
-  100% { transform: translateX(320%); }
+@keyframes forge-loader-spin {
+  to { transform: rotate(360deg); }
 }
 @keyframes forge-loader-step {
   0%, 100% { opacity: 0.34; }
@@ -257,16 +252,26 @@ body {
   text-align: center;
   animation: forge-coach-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.forge-loader-mark {
-  display: flex;
-  width: 3.25rem;
-  height: 3.25rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 1.1rem;
-  color: #16130f;
-  background: linear-gradient(135deg, #e8c58a, #d0ab72);
-  animation: forge-loader-breathe 2.4s ease-in-out infinite;
+.forge-loader-spinner {
+  position: relative;
+  display: grid;
+  width: 4rem;
+  height: 4rem;
+  place-items: center;
+}
+.forge-loader-spinner > span {
+  position: absolute;
+  inset: 0;
+  border: 3px solid rgba(232,197,138,0.16);
+  border-top-color: #e8c58a;
+  border-right-color: #d0ab72;
+  border-radius: 9999px;
+  animation: forge-loader-spin 0.9s linear infinite;
+}
+.forge-loader-spinner svg {
+  position: relative;
+  z-index: 1;
+  color: #e8c58a;
 }
 .forge-loader-tag {
   display: flex;
@@ -322,8 +327,7 @@ body {
 .forge-coach-brief, .forge-coach-detail { animation: forge-coach-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .forge-coach-spark { display: flex; width: 2rem; height: 2rem; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 9999px; color: #16130f; background: #e8c58a; }
 @media (prefers-reduced-motion: reduce) {
-  .forge-loader, .forge-loader-mark, .forge-loader-steps li, .forge-coach-brief, .forge-coach-detail { animation: none; }
-  .forge-loader-track > span { animation: none; width: 100%; }
+  .forge-loader, .forge-loader-spinner > span, .forge-loader-steps li, .forge-coach-brief, .forge-coach-detail { animation: none; }
 }
 
 @keyframes forge-confirm-in {

@@ -5,6 +5,7 @@ Uses gemini-3.6-flash for fast, cost-effective structured output.
 """
 import json
 import logging
+import math
 import re
 from datetime import date, timedelta
 from typing import Optional
@@ -2065,6 +2066,48 @@ def _forge_coaching_text(value: object, limit: int, fallback: str) -> str:
     return normalized[:limit] if normalized else fallback
 
 
+def _forge_finite_weight(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    return normalized if math.isfinite(normalized) and 0 <= normalized <= 1000 else None
+
+
+def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
+    """Build the server-owned baseline and constraints for every editable working set."""
+    defaults: dict[str, dict] = {}
+    for exercise in session_context.get("session", {}).get("exercises", []):
+        for target in exercise.get("targets", []):
+            if target.get("type") != "working" or not target.get("session_set_id"):
+                continue
+            min_reps = target.get("min_reps")
+            max_reps = target.get("max_reps")
+            baseline_reps = target.get("reps")
+            min_reps = min_reps if isinstance(min_reps, int) and not isinstance(min_reps, bool) else 1
+            max_reps = max_reps if isinstance(max_reps, int) and not isinstance(max_reps, bool) else 200
+            baseline_reps = baseline_reps if isinstance(baseline_reps, int) and not isinstance(baseline_reps, bool) else min_reps
+            min_reps = max(1, min(200, min_reps))
+            max_reps = max(min_reps, min(200, max_reps))
+            baseline_reps = max(min_reps, min(max_reps, baseline_reps))
+            baseline_weight = _forge_finite_weight(target.get("weight_kg"))
+            allowed_weights = []
+            for weight in target.get("allowed_weight_kg", []):
+                normalized = _forge_finite_weight(weight)
+                if normalized is not None and normalized not in allowed_weights:
+                    allowed_weights.append(normalized)
+            if baseline_weight is not None and baseline_weight not in allowed_weights:
+                allowed_weights.append(baseline_weight)
+            defaults[str(target["session_set_id"])] = {
+                "session_set_id": str(target["session_set_id"]),
+                "target_weight_kg": baseline_weight,
+                "target_reps": baseline_reps,
+                "allowed_weight_kg": sorted(allowed_weights),
+                "min_reps": min_reps,
+                "max_reps": max_reps,
+            }
+    return defaults
+
+
 def _forge_coaching_fallback(session_context: dict) -> dict:
     exercises = session_context.get("session", {}).get("exercises", [])
     decisions = []
@@ -2072,11 +2115,11 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
         guidance = exercise.get("deterministic_guidance") or {}
         status = guidance.get("progression_status", "FIRST_SESSION")
         recommendation = {
-            "INCREASE_WEIGHT": "Die bestätigten Satz-Ziele nutzen den nächsten verifizierten Lastschritt. Starte ruhig und bewerte die Technik vor weiteren Änderungen.",
-            "KEEP_PROGRESSING": "Bleib bei den Satz-Zielen und sammle kontrollierte Wiederholungen, statt heute mehrere Variablen zugleich zu verändern.",
-            "STAGNATED": "Halte Last und Satzstruktur stabil. Saubere Ausführung, Pausen und Erholung sind heute wichtiger als zusätzliches Volumen.",
-            "REGRESSED": "Stabilisiere die Leistung mit den vorhandenen Zielen. Kein erzwungenes Mehrgewicht, wenn die heutige Ausführung nicht passt.",
-        }.get(status, "Nutze diese Einheit als kontrollierte Ausgangsbasis und notiere die tatsächlich sauberen Wiederholungen.")
+            "INCREASE_WEIGHT": "Deine letzte Leistung und die bestätigte nächste Last sprechen für einen kontrollierten Lastsprung bei den heutigen Arbeitssätzen.",
+            "KEEP_PROGRESSING": "Deine letzte Leistung zeigt noch Raum für saubere Wiederholungen bei gleicher Last; deshalb bleibt die Progression heute kontrolliert.",
+            "STAGNATED": "Die letzten vergleichbaren Einheiten waren bei gleicher Last stabil. Heute zählt eine saubere, realistische Wiederholung statt ein erzwungener Sprung.",
+            "REGRESSED": "Die letzte vergleichbare Einheit war niedriger. Das heutige Ziel stabilisiert die Leistung, bevor wieder mehr Last oder Volumen sinnvoll wird.",
+        }.get(status, "Ohne vergleichbaren Verlauf bleibt das erste Ziel bewusst konservativ, damit du eine belastbare Ausgangsbasis aufbaust.")
         decisions.append({
             "session_exercise_id": exercise.get("session_exercise_id"),
             "recommendation": recommendation,
@@ -2085,14 +2128,15 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
         })
     return {
         "headline": "Dein Forge-Plan steht.",
-        "session_focus": "Die Satz-Ziele basieren auf deinem gespeicherten Plan und deiner echten Forge-Historie. Heute zählt eine saubere, nachvollziehbare Ausführung.",
+        "session_focus": "Die Satz-Ziele kombinieren deine echte Forge-Historie, das Yazio-Ziel und die Trainingsregeln für jede Übung.",
         "readiness_note": "Passe bei Schmerzen, ungewohnter Erschöpfung oder unsauberer Technik konservativ an und hole bei gesundheitlichen Fragen fachlichen Rat ein.",
         "exercise_decisions": decisions,
+        "set_proposals": list(_forge_set_proposal_defaults(session_context).values()),
     }
 
 
 def _validate_forge_session_coaching(candidate: object, session_context: dict) -> dict:
-    """Whitelist Gemini's text-only coaching to the session exercises supplied by the server."""
+    """Whitelist coaching text and numeric proposals against server-owned set constraints."""
     fallback = _forge_coaching_fallback(session_context)
     if not isinstance(candidate, dict):
         return fallback
@@ -2123,31 +2167,50 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
     for exercise_id, default in defaults.items():
         if exercise_id not in seen:
             decisions.append(default)
+
+    proposal_defaults = _forge_set_proposal_defaults(session_context)
+    proposals = {set_id: dict(default) for set_id, default in proposal_defaults.items()}
+    raw_proposals = candidate.get("set_proposals")
+    if isinstance(raw_proposals, list):
+        for item in raw_proposals:
+            if not isinstance(item, dict):
+                continue
+            set_id = str(item.get("session_set_id") or "")
+            default = proposal_defaults.get(set_id)
+            if default is None:
+                continue
+            proposed_weight = _forge_finite_weight(item.get("target_weight_kg"))
+            if proposed_weight is not None and any(abs(proposed_weight - allowed) < 0.001 for allowed in default["allowed_weight_kg"]):
+                proposals[set_id]["target_weight_kg"] = proposed_weight
+            proposed_reps = item.get("target_reps")
+            if isinstance(proposed_reps, int) and not isinstance(proposed_reps, bool) and default["min_reps"] <= proposed_reps <= default["max_reps"]:
+                proposals[set_id]["target_reps"] = proposed_reps
+
     return {
         "headline": _forge_coaching_text(candidate.get("headline"), 160, fallback["headline"]),
         "session_focus": _forge_coaching_text(candidate.get("session_focus"), 420, fallback["session_focus"]),
         "readiness_note": _forge_coaching_text(candidate.get("readiness_note"), 300, fallback["readiness_note"]),
         "exercise_decisions": decisions,
+        "set_proposals": list(proposals.values()),
     }
 
 
 async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
-    """Create a text-only coaching layer; deterministic server targets always remain authoritative."""
+    """Generate short analysis plus bounded numeric proposals for server-owned working sets."""
     fallback = _forge_coaching_fallback(session_context)
     if not settings.gemini_api_key:
         return fallback
     system_prompt = """You are Forge's evidence-informed resistance-training coach. Return JSON only with
-{headline, session_focus, readiness_note, exercise_decisions}. Every exercise_decisions item must use a
-session_exercise_id provided by the server and include recommendation, first_set_focus, and effort_hint.
+{headline, session_focus, readiness_note, exercise_decisions, set_proposals}. Every exercise_decisions item must use a
+session_exercise_id provided by the server and include recommendation, first_set_focus, and effort_hint. Every
+set_proposals item must use a working-set session_set_id supplied by the server and include target_weight_kg and target_reps.
 
-The supplied deterministic targets are authoritative: never invent, alter, or independently prescribe a numeric
-load, repetition target, set count, machine increment, diagnosis, or medical advice. Explain the server's actual
-progression signal in practical language instead. Treat the supplied repetition range as exercise- and goal-specific,
-not a universal law. Use progressive overload only when the history supports it; when results are flat, down, missing,
-or readiness is uncertain, favor controlled execution, recovery, and logging. Do not promise outcomes. Prefer a
-near-failure cue such as roughly 2–3 repetitions in reserve when appropriate, but never tell the athlete to push
-through pain or technical breakdown. Warm-up sets are preparation, not progression work. Keep every text field short,
-specific, and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
+Use the supplied Yazio profile, nutrition context, matching Forge history, exercise notes and progression rules to choose a
+specific target for every working set. The server gives each set its baseline, a permitted weight list and a repetition range.
+Choose only a listed weight and only a whole-number repetition target within the supplied range. Never add or remove sets,
+change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
+support progression, choose the conservative baseline. Explain the context and the reasoning for each exercise briefly in
+recommendation; this is the user-visible analysis. Keep text specific, short and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
@@ -2156,7 +2219,7 @@ specific, and encouraging. The athlete owns the final decision.""" + _language_i
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.25,
-                max_output_tokens=1800,
+                max_output_tokens=2400,
                 response_mime_type="application/json",
             ),
         )
