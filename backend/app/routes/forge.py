@@ -710,8 +710,10 @@ def _apply_program_input(db: Session, program: ForgeTrainingProgram, data: Forge
     ).all() if plan_ids else []
     if len({plan.id for plan in plans}) != len(set(plan_ids)):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more routines do not belong to you.")
-    if len(set(plan_ids)) != len(plan_ids):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A routine can only appear once in a program.")
+    # A rotation is an ordered sequence, so the same routine may repeat (A-B-A). A weekday
+    # plan addresses each routine once and keeps all of its days in that single entry.
+    if data.mode == "weekly" and len(set(plan_ids)) != len(plan_ids):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="In a weekly plan a routine can only appear once; assign all of its weekdays there.")
     for routine in data.routines:
         if any(day < 0 or day > 6 for day in routine.weekdays):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Weekdays must be between Monday (0) and Sunday (6).")
@@ -795,11 +797,13 @@ async def get_today_routine(current_user: User = Depends(get_current_user), db: 
         }
 
     routine = routines[program.rotation_cursor % len(routines)].plan
+    # A rotation may repeat a routine across slots; offer every distinct routine only once.
+    distinct_plans = list({item.plan.id: item.plan for item in routines}.values())
     return {
         "mode": "rotation",
         "program": _serialize_program(program),
         "routine": _serialize_plan(routine),
-        "options": [_serialize_plan(item.plan) for item in routines],
+        "options": [_serialize_plan(plan) for plan in distinct_plans],
         "message": "Nächste Routine in deiner Rotation.",
     }
 

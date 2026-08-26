@@ -231,67 +231,99 @@ body {
 }
 
 /* ── Forge AI session preparation ───────────────────── */
-@keyframes forge-orbit {
-  to { transform: rotate(360deg); }
-}
-@keyframes forge-orbit-reverse {
-  to { transform: rotate(-360deg); }
-}
-@keyframes forge-loader-core {
-  0%, 100% { transform: scale(0.96); box-shadow: 0 0 0 0 rgba(232,197,138,0.22); }
-  50% { transform: scale(1.04); box-shadow: 0 0 0 16px rgba(232,197,138,0); }
-}
 @keyframes forge-coach-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.forge-session-loader {
-  position: relative;
+@keyframes forge-loader-breathe {
+  0%, 100% { transform: translateY(0); box-shadow: 0 0 0 0 rgba(232,197,138,0.20); }
+  50% { transform: translateY(-2px); box-shadow: 0 0 0 9px rgba(232,197,138,0); }
+}
+@keyframes forge-loader-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+@keyframes forge-loader-step {
+  0%, 100% { opacity: 0.34; }
+  40%, 70% { opacity: 1; }
+}
+
+/* A single vertical rhythm keeps the mark, copy, and progress from overlapping. */
+.forge-loader {
   display: flex;
-  min-height: min(68dvh, 38rem);
+  flex-direction: column;
+  align-items: center;
+  padding: 2.75rem 1.5rem 2.5rem;
+  text-align: center;
+  animation: forge-coach-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.forge-loader-mark {
+  display: flex;
+  width: 3.25rem;
+  height: 3.25rem;
   align-items: center;
   justify-content: center;
+  border-radius: 1.1rem;
+  color: #16130f;
+  background: linear-gradient(135deg, #e8c58a, #d0ab72);
+  animation: forge-loader-breathe 2.4s ease-in-out infinite;
+}
+.forge-loader-tag {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 1.25rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #e8c58a;
+}
+.forge-loader-track {
+  position: relative;
+  width: min(13rem, 70%);
+  height: 3px;
+  margin-top: 1.75rem;
   overflow: hidden;
-  isolation: isolate;
-}
-.forge-loader-orbit {
-  position: absolute;
-  border: 1px solid rgba(232,197,138,0.20);
   border-radius: 9999px;
-  pointer-events: none;
+  background: rgba(255, 247, 235, 0.08);
 }
-.forge-loader-orbit::after {
+.forge-loader-track > span {
   position: absolute;
-  top: -3px;
-  left: 50%;
-  width: 6px;
-  height: 6px;
+  inset-block: 0;
+  width: 32%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, rgba(232,197,138,0), #e8c58a, rgba(232,197,138,0));
+  animation: forge-loader-sweep 1.6s ease-in-out infinite;
+}
+.forge-loader-steps {
+  display: grid;
+  gap: 0.55rem;
+  margin: 1.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: 0.6875rem;
+  color: rgba(242, 236, 226, 0.54);
+}
+.forge-loader-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: forge-loader-step 2.7s ease-in-out infinite both;
+}
+.forge-loader-steps li::before {
+  width: 0.3rem;
+  height: 0.3rem;
   border-radius: 9999px;
   background: #e8c58a;
-  box-shadow: 0 0 12px rgba(232,197,138,0.95);
   content: "";
 }
-.forge-loader-orbit-outer { width: 15rem; height: 15rem; animation: forge-orbit 4.8s linear infinite; }
-.forge-loader-orbit-inner { width: 10.5rem; height: 10.5rem; border-color: rgba(232,197,138,0.10); animation: forge-orbit-reverse 3.4s linear infinite; }
-.forge-loader-core {
-  position: absolute;
-  display: flex;
-  width: 4rem;
-  height: 4rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  color: #16130f;
-  background: #e8c58a;
-  animation: forge-loader-core 2s ease-in-out infinite;
-}
-.forge-loader-steps { display: grid; gap: 0.65rem; }
-.forge-loader-steps span { display: flex; align-items: center; gap: 0.55rem; }
-.forge-loader-steps span::before { width: 0.4rem; height: 0.4rem; border-radius: 9999px; background: #e8c58a; content: ""; }
-.forge-coach-brief, .forge-coach-detail { animation: forge-coach-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.forge-coach-brief, .forge-coach-detail { animation: forge-coach-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .forge-coach-spark { display: flex; width: 2rem; height: 2rem; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 9999px; color: #16130f; background: #e8c58a; }
 @media (prefers-reduced-motion: reduce) {
-  .forge-loader-orbit, .forge-loader-core, .forge-coach-brief, .forge-coach-detail { animation: none; }
+  .forge-loader, .forge-loader-mark, .forge-loader-steps li, .forge-coach-brief, .forge-coach-detail { animation: none; }
+  .forge-loader-track > span { animation: none; width: 100%; }
 }
 
 @keyframes forge-confirm-in {

@@ -75,10 +75,12 @@ export default function ForgeSessionPage() {
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const activeExercise = useMemo(() => session?.exercises[activeIndex] ?? null, [session, activeIndex]);
-  const activeStartDecision = useMemo(
-    () => session?.start_coaching?.exercise_decisions.find((decision) => decision.session_exercise_id === activeExercise?.id) ?? null,
-    [session, activeExercise],
-  );
+  // One coaching voice per exercise: a live addition has its own decision, otherwise the start briefing applies.
+  const activeCoachDecision = useMemo(() => {
+    if (!activeExercise) return null;
+    if (activeExercise.addition_coaching) return activeExercise.addition_coaching;
+    return session?.start_coaching?.exercise_decisions.find((decision) => decision.session_exercise_id === activeExercise.id) ?? null;
+  }, [session, activeExercise]);
   const setSessionSafe = (next: ForgeSession) => {
     sessionRef.current = next;
     setSession(next);
@@ -264,11 +266,21 @@ export default function ForgeSessionPage() {
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
         <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{activeLibraryExercise?.machine_profiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active'} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Maschine wählen</option>{activeLibraryExercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.primary_muscle_group}{activeExercise.machine_profile_name ? ` · ${activeExercise.machine_profile_name}` : ''}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
-        {activeExercise.coach_guidance && <aside className="mx-4 mb-4 rounded-2xl p-3.5" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
-          <div className="flex items-start gap-2"><BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p><span className="rounded-full px-2 py-0.5 text-[9px] font-medium" style={{ color: SAND, background: 'rgba(232,197,138,0.12)' }}>{guidanceStatusLabel(activeExercise.coach_guidance.progression_status)}</span></div><p className="text-[12px] leading-relaxed mt-2" style={{ color: 'rgba(242,236,226,0.76)' }}>{activeExercise.coach_guidance.rationale}</p><p className="text-[10px] mt-2" style={{ color: DIM }}>Heutiges Ziel: {activeTargetSummary || 'Siehe Satz-Ziele unten'} · Arbeitsbereich {activeExercise.coach_guidance.rep_range} Wdh.</p></div></div>
+        {(activeExercise.coach_guidance || activeCoachDecision) && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
+          <div className="flex items-start gap-2.5">
+            <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2"><p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p>{activeExercise.coach_guidance && <span className="rounded-full px-2 py-0.5 text-[9px] font-medium" style={{ color: SAND, background: 'rgba(232,197,138,0.14)' }}>{guidanceStatusLabel(activeExercise.coach_guidance.progression_status)}</span>}</div>
+              {activeExercise.coach_guidance && <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.76)' }}>{activeExercise.coach_guidance.rationale}</p>}
+              {activeCoachDecision && <div className="mt-3 border-t pt-3" style={{ borderColor: `${SAND}22` }}>
+                <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em]" style={{ color: SAND }}><Sparkles size={12} />KI-Entscheidung für heute</p>
+                <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
+                <p className="mt-2 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: TEXT }}>Start:</span> {activeCoachDecision.first_set_focus} <span className="mx-1">·</span> {activeCoachDecision.effort_hint}</p>
+              </div>}
+              <p className="mt-3 text-[10px]" style={{ color: DIM }}>Heutiges Ziel: {activeTargetSummary || 'Siehe Satz-Ziele unten'}{activeExercise.coach_guidance ? ` · Arbeitsbereich ${activeExercise.coach_guidance.rep_range} Wdh.` : ''}</p>
+            </div>
+          </div>
         </aside>}
-        {activeStartDecision && <aside className="mx-4 mb-4 rounded-2xl p-3.5 forge-coach-detail" style={{ background: 'rgba(255,247,235,0.035)', border: `1px solid ${SAND}24` }}><div className="flex items-start gap-2"><Sparkles className="mt-0.5 shrink-0" size={15} style={{ color: SAND }} /><div><p className="text-[11px] font-semibold" style={{ color: SAND }}>KI-Entscheidung für heute</p><p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeStartDecision.recommendation}</p><p className="mt-2 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: TEXT }}>Start:</span> {activeStartDecision.first_set_focus} <span className="mx-1">·</span> {activeStartDecision.effort_hint}</p></div></div></aside>}
-        {activeExercise.addition_coaching && <aside className="mx-4 mb-4 rounded-2xl p-3.5 forge-coach-detail" style={{ background: 'rgba(232,197,138,0.07)', border: `1px solid ${SAND}34` }}><div className="flex items-start gap-2"><Sparkles className="mt-0.5 shrink-0" size={15} style={{ color: SAND }} /><div><p className="text-[11px] font-semibold" style={{ color: SAND }}>Coaching zur hinzugefügten Übung</p><p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeExercise.addition_coaching.recommendation}</p><p className="mt-2 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: TEXT }}>Start:</span> {activeExercise.addition_coaching.first_set_focus} <span className="mx-1">·</span> {activeExercise.addition_coaching.effort_hint}</p></div></div></aside>}
         <div className="border-y" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
           <div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', color: DIM }}><span>Satz</span><span className="text-center">Ziel</span><span className="text-center">Heute</span><span /></div>
           {activeExercise.sets.map((set, index) => <div key={set.id} className={`grid items-center gap-2 px-4 py-3 ${set.completed ? 'forge-set-done' : ''} ${checkedSetId === set.id ? 'forge-set-check' : ''}`} style={{ gridTemplateColumns: '36px 1fr 1fr 32px', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}>

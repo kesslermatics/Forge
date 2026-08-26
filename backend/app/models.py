@@ -322,10 +322,14 @@ class ForgeTrainingProgram(Base):
 
 
 class ForgeProgramRoutine(Base):
-    """Links one routine template to a program and optionally its weekdays."""
+    """Links one routine template to a program slot and optionally its weekdays.
+
+    A rotation may deliberately repeat the same routine in several slots (for example
+    A-B-A), so identity is the ordered slot rather than the routine itself.
+    """
 
     __tablename__ = "forge_program_routines"
-    __table_args__ = (UniqueConstraint("program_id", "plan_id", name="uq_forge_program_routine_plan"),)
+    __table_args__ = (UniqueConstraint("program_id", "position", name="uq_forge_program_routine_position"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     program_id = Column(UUID(as_uuid=True), ForeignKey("forge_training_programs.id", ondelete="CASCADE"), nullable=False, index=True)
