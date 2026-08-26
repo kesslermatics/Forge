@@ -229,3 +229,76 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .forge-set-check, .forge-session-complete, .forge-completion-bloom { animation: none; }
 }
+
+/* ── Forge AI session preparation ───────────────────── */
+@keyframes forge-orbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes forge-orbit-reverse {
+  to { transform: rotate(-360deg); }
+}
+@keyframes forge-loader-core {
+  0%, 100% { transform: scale(0.96); box-shadow: 0 0 0 0 rgba(232,197,138,0.22); }
+  50% { transform: scale(1.04); box-shadow: 0 0 0 16px rgba(232,197,138,0); }
+}
+@keyframes forge-coach-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.forge-session-loader {
+  position: relative;
+  display: flex;
+  min-height: min(68dvh, 38rem);
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  isolation: isolate;
+}
+.forge-loader-orbit {
+  position: absolute;
+  border: 1px solid rgba(232,197,138,0.20);
+  border-radius: 9999px;
+  pointer-events: none;
+}
+.forge-loader-orbit::after {
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #e8c58a;
+  box-shadow: 0 0 12px rgba(232,197,138,0.95);
+  content: "";
+}
+.forge-loader-orbit-outer { width: 15rem; height: 15rem; animation: forge-orbit 4.8s linear infinite; }
+.forge-loader-orbit-inner { width: 10.5rem; height: 10.5rem; border-color: rgba(232,197,138,0.10); animation: forge-orbit-reverse 3.4s linear infinite; }
+.forge-loader-core {
+  position: absolute;
+  display: flex;
+  width: 4rem;
+  height: 4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: #16130f;
+  background: #e8c58a;
+  animation: forge-loader-core 2s ease-in-out infinite;
+}
+.forge-loader-steps { display: grid; gap: 0.65rem; }
+.forge-loader-steps span { display: flex; align-items: center; gap: 0.55rem; }
+.forge-loader-steps span::before { width: 0.4rem; height: 0.4rem; border-radius: 9999px; background: #e8c58a; content: ""; }
+.forge-coach-brief, .forge-coach-detail { animation: forge-coach-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.forge-coach-spark { display: flex; width: 2rem; height: 2rem; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 9999px; color: #16130f; background: #e8c58a; }
+@media (prefers-reduced-motion: reduce) {
+  .forge-loader-orbit, .forge-loader-core, .forge-coach-brief, .forge-coach-detail { animation: none; }
+}
+
+@keyframes forge-confirm-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.forge-confirm-dialog { animation: forge-confirm-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .forge-confirm-dialog { animation: none; }
+}

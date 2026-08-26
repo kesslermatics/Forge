@@ -16,6 +16,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
+import ConfirmDialog from './ConfirmDialog';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -102,6 +103,7 @@ export default function Dashboard() {
     const [activeForgeSession, setActiveForgeSession] = useState<ForgeSession | null>(null);
     const [forgeError, setForgeError] = useState<string | null>(null);
     const [startingSession, setStartingSession] = useState(false);
+    const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
     /* load briefing + secondary data */
     useEffect(() => {
@@ -182,14 +184,14 @@ export default function Dashboard() {
         try {
             const session = await startForgeSession(homeRoutine.id, forgeToday?.program?.id);
             setActiveForgeSession(session.status === 'active' ? session : null);
-            navigate(`/forge/session/${session.id}`);
+            navigate(`/forge/session/${session.id}?prepare=1`);
         } catch (caught: unknown) {
             setForgeError(caught instanceof Error ? caught.message : 'Session konnte nicht gestartet werden.');
         } finally { setStartingSession(false); }
     };
 
     const handleDiscardForgeSession = async () => {
-        if (!activeForgeSession || startingSession || !window.confirm('Aktive Session wirklich verwerfen? Bereits eingetragene Sätze gehen verloren.')) return;
+        if (!activeForgeSession || startingSession) return;
         setStartingSession(true); setForgeError(null);
         try {
             await deleteForgeSession(activeForgeSession.id);
@@ -228,7 +230,7 @@ export default function Dashboard() {
                 const totalSets = activeForgeSession.exercises.flatMap((exercise) => exercise.sets).length;
                 return <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}44` }}>
                     <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Aktive Session</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{activeForgeSession.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · sicher gespeichert</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
-                    <div className="grid grid-cols-2 gap-2 mt-4"><button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge flex items-center justify-center gap-2"><Dumbbell size={15} />Fortsetzen</button><button onClick={() => void handleDiscardForgeSession()} disabled={startingSession} className="tap rounded-xl text-[12px] font-medium cursor-pointer disabled:opacity-50" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Verwerfen</button></div>
+                    <div className="grid grid-cols-2 gap-2 mt-4"><button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge flex items-center justify-center gap-2"><Dumbbell size={15} />Fortsetzen</button><button onClick={() => setDiscardDialogOpen(true)} disabled={startingSession} className="tap rounded-xl text-[12px] font-medium cursor-pointer disabled:opacity-50" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Verwerfen</button></div>
                 </section>;
             })() : homeRoutine && (
                 <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}2c` }}>
@@ -238,6 +240,7 @@ export default function Dashboard() {
                 </section>
             )}
             {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}
+            <ConfirmDialog open={discardDialogOpen} busy={startingSession} destructive title="Aktive Session verwerfen?" description="Bereits eingetragene Sätze gehen verloren und können nicht wiederhergestellt werden." confirmLabel="Session verwerfen" onCancel={() => setDiscardDialogOpen(false)} onConfirm={() => { setDiscardDialogOpen(false); void handleDiscardForgeSession(); }} />
 
             <MonthlyChallengesCard />
 

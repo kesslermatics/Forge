@@ -14,12 +14,18 @@ import type {
   ForgeEquipment, ForgeExercise, ForgeExerciseInput, ForgeMachineProfileInput,
   ForgePlan, ForgePlanInput, ForgePlanSetInput, ForgeProgram, ForgeProgramInput, ForgeSessionSummary,
 } from '../api/api';
+import ConfirmDialog from './ConfirmDialog';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
 const DIM = 'rgba(242,236,226,0.48)';
 const BORDER = 'rgba(232,197,138,0.11)';
 const HISTORY_PAGE_SIZE = 50;
+
+type PendingDelete =
+  | { kind: 'plan'; value: ForgePlan }
+  | { kind: 'exercise'; value: ForgeExercise }
+  | { kind: 'session'; value: ForgeSessionSummary };
 
 const MUSCLE_GROUPS = [
   'Chest', 'Back', 'Lats', 'Traps', 'Shoulders', 'Biceps', 'Triceps',
@@ -29,7 +35,7 @@ const MUSCLE_GROUPS = [
 const EQUIPMENT: Array<{ value: ForgeEquipment; label: string }> = [
   { value: 'none', label: 'Ohne' }, { value: 'barbell', label: 'Langhantel' },
   { value: 'dumbbell', label: 'Kurzhantel' }, { value: 'kettlebell', label: 'Kettlebell' },
-  { value: 'machine', label: 'Maschine' }, { value: 'other', label: 'Sonstiges' },
+  { value: 'cable', label: 'Kabelzug' }, { value: 'machine', label: 'Maschine' }, { value: 'other', label: 'Sonstiges' },
 ];
 
 const ALL_LUCIDE_ICON_NAMES = Array.from(new Set(Object.keys(dynamicIconImports).map((slug) => slug.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('')))).sort();
@@ -100,6 +106,7 @@ export default function ForgePlanPage() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
   const [planEditor, setPlanEditor] = useState(false);
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
@@ -236,7 +243,6 @@ export default function ForgePlanPage() {
   };
 
   const removePlan = async (plan: ForgePlan) => {
-    if (!window.confirm(`„${plan.name}“ wirklich löschen?`)) return;
     setSaving(true); setError(null);
     try {
       await deleteForgePlan(plan.id);
@@ -314,7 +320,6 @@ export default function ForgePlanPage() {
   };
 
   const removeExercise = async (exercise: ForgeExercise) => {
-    if (!window.confirm(`„${exercise.name}“ wirklich löschen?`)) return;
     setSaving(true); setError(null);
     try {
       await deleteForgeExercise(exercise.id);
@@ -337,7 +342,6 @@ export default function ForgePlanPage() {
   };
 
   const removeSession = async (session: ForgeSessionSummary) => {
-    if (!window.confirm(`„${session.name}“ aus deinem Verlauf löschen? Das entfernt die Session auch aus Trainingshistorie und Forge-Vorschlägen.`)) return;
     setSaving(true); setError(null); setNotice(null);
     try {
       await deleteForgeSession(session.id);
@@ -389,7 +393,7 @@ export default function ForgePlanPage() {
             draft={planDraft} exercises={exercises} saving={saving}
             onChange={setPlanDraft} onToggleExercise={togglePlanExercise} onUpdateSet={updateDraftSet}
             onCancel={() => { setPlanEditor(false); setEditingPlanId(null); setPlanDraft(null); }} onSave={() => void savePlan()}
-          /> : selectedPlan ? <PlanView plan={selectedPlan} saving={saving} onEdit={() => startPlan(selectedPlan)} onRefresh={() => void refreshCoachTargets(selectedPlan)} onDelete={() => void removePlan(selectedPlan)} /> : (
+          /> : selectedPlan ? <PlanView plan={selectedPlan} saving={saving} onEdit={() => startPlan(selectedPlan)} onRefresh={() => void refreshCoachTargets(selectedPlan)} onDelete={() => setPendingDelete({ kind: 'plan', value: selectedPlan })} /> : (
             <EmptyState icon={<Dumbbell size={22} />} title="Noch kein Plan" copy="Lege zuerst eigene Übungen an und erstelle dann einen Plan – manuell oder mit Forge." action="Plan erstellen" onClick={() => startPlan()} />
           )}
         </section>
@@ -405,11 +409,12 @@ export default function ForgePlanPage() {
             onCancel={() => { setExerciseEditor(false); setEditingExerciseId(null); }} onSave={() => void saveExercise()}
           /> : <>
             <button onClick={() => startExercise()} className="btn-forge w-full flex items-center justify-center gap-2"><CirclePlus size={16} />Eigene Übung</button>
-            {exercises.length ? <div className="space-y-2">{exercises.map((exercise) => <ExerciseCard key={exercise.id} exercise={exercise} onHistory={() => navigate(`/forge/exercises/${exercise.id}/history`)} onEdit={() => startExercise(exercise)} onDelete={() => void removeExercise(exercise)} />)}</div>
+            {exercises.length ? <div className="space-y-2">{exercises.map((exercise) => <ExerciseCard key={exercise.id} exercise={exercise} onHistory={() => navigate(`/forge/exercises/${exercise.id}/history`)} onEdit={() => startExercise(exercise)} onDelete={() => setPendingDelete({ kind: 'exercise', value: exercise })} />)}</div>
               : <EmptyState icon={<Wrench size={22} />} title="Deine Übungsbibliothek ist leer" copy="Erstelle eigene Bewegungen und hinterlege für Maschinen getrennte Profile." action="Übung anlegen" onClick={() => startExercise()} />}
           </>}
         </section>
-      ) : <WorkoutHistory sessions={history} saving={saving} hasMore={hasMoreHistory} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory()} onOpen={(session) => navigate(`/forge/session/${session.id}`)} onDelete={(session) => void removeSession(session)} />}
+      ) : <WorkoutHistory sessions={history} saving={saving} hasMore={hasMoreHistory} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory()} onOpen={(session) => navigate(`/forge/session/${session.id}`)} onDelete={(session) => setPendingDelete({ kind: 'session', value: session })} />}
+      <ConfirmDialog open={pendingDelete !== null} busy={saving} destructive title={pendingDelete?.kind === 'plan' ? 'Trainingsplan löschen?' : pendingDelete?.kind === 'exercise' ? 'Übung löschen?' : 'Workout aus Verlauf löschen?'} description={pendingDelete?.kind === 'plan' ? `„${pendingDelete.value.name}“ wird dauerhaft entfernt.` : pendingDelete?.kind === 'exercise' ? `„${pendingDelete.value.name}“ wird dauerhaft entfernt. Übungen in bestehenden Plänen können nicht gelöscht werden.` : pendingDelete ? `„${pendingDelete.value.name}“ wird aus deiner Historie entfernt. Forge aktualisiert danach die davon abhängigen Vorschläge.` : ''} confirmLabel={pendingDelete?.kind === 'plan' ? 'Plan löschen' : pendingDelete?.kind === 'exercise' ? 'Übung löschen' : 'Workout löschen'} onCancel={() => setPendingDelete(null)} onConfirm={() => { const target = pendingDelete; setPendingDelete(null); if (!target) return; if (target.kind === 'plan') void removePlan(target.value); if (target.kind === 'exercise') void removeExercise(target.value); if (target.kind === 'session') void removeSession(target.value); }} />
     </div>
   );
 }

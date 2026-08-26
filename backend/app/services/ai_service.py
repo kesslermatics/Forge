@@ -1919,7 +1919,7 @@ async def generate_forge_exercise_draft(instructions: str, language: str = "de",
     icon_tokens = ", ".join(allowed_icon_names)
     system_prompt = f"""You create ONE concise custom exercise draft for a private training app.
 Return JSON only with: name, icon, equipment, primary_muscle_group, secondary_muscle_groups, machine_profiles.
-Equipment MUST be exactly one of: none, barbell, dumbbell, kettlebell, machine, other.
+Equipment MUST be exactly one of: none, barbell, dumbbell, kettlebell, cable, machine, other.
 primary_muscle_group MUST be exactly one of: {muscle_tokens}.
 secondary_muscle_groups MUST be an array of at most 4 distinct values from the same list, excluding primary_muscle_group.
 icon MUST be exactly one of these Lucide icon names: {icon_tokens}. Pick the best visual match for the movement.
@@ -1941,7 +1941,7 @@ Do not claim the draft has been saved and do not include instructions outside th
         if not isinstance(draft, dict) or not isinstance(draft.get("name"), str):
             return fallback
         equipment = draft.get("equipment")
-        draft["equipment"] = equipment if equipment in {"none", "barbell", "dumbbell", "kettlebell", "machine", "other"} else "other"
+        draft["equipment"] = equipment if equipment in {"none", "barbell", "dumbbell", "kettlebell", "cable", "machine", "other"} else "other"
         draft["icon"] = _canonical_forge_icon(draft.get("icon"), allowed_icon_names)
         primary = _canonical_forge_muscle(draft.get("primary_muscle_group"))
         secondary = []
@@ -2054,6 +2054,117 @@ Do not claim the draft was saved.""" + _language_instruction(language)
         }
     except Exception as exc:
         logger.error("Gemini plan draft generation failed: %s", exc)
+        return fallback
+
+
+def _forge_coaching_text(value: object, limit: int, fallback: str) -> str:
+    """Constrain provider text before it becomes part of a persisted workout snapshot."""
+    if not isinstance(value, str):
+        return fallback
+    normalized = " ".join(value.split())
+    return normalized[:limit] if normalized else fallback
+
+
+def _forge_coaching_fallback(session_context: dict) -> dict:
+    exercises = session_context.get("session", {}).get("exercises", [])
+    decisions = []
+    for exercise in exercises:
+        guidance = exercise.get("deterministic_guidance") or {}
+        status = guidance.get("progression_status", "FIRST_SESSION")
+        recommendation = {
+            "INCREASE_WEIGHT": "Die bestätigten Satz-Ziele nutzen den nächsten verifizierten Lastschritt. Starte ruhig und bewerte die Technik vor weiteren Änderungen.",
+            "KEEP_PROGRESSING": "Bleib bei den Satz-Zielen und sammle kontrollierte Wiederholungen, statt heute mehrere Variablen zugleich zu verändern.",
+            "STAGNATED": "Halte Last und Satzstruktur stabil. Saubere Ausführung, Pausen und Erholung sind heute wichtiger als zusätzliches Volumen.",
+            "REGRESSED": "Stabilisiere die Leistung mit den vorhandenen Zielen. Kein erzwungenes Mehrgewicht, wenn die heutige Ausführung nicht passt.",
+        }.get(status, "Nutze diese Einheit als kontrollierte Ausgangsbasis und notiere die tatsächlich sauberen Wiederholungen.")
+        decisions.append({
+            "session_exercise_id": exercise.get("session_exercise_id"),
+            "recommendation": recommendation,
+            "first_set_focus": "Ersten Arbeitssatz bewusst kontrollieren und Technik prüfen.",
+            "effort_hint": "Beende den Satz mit ungefähr 2–3 Wiederholungen im Tank, sofern die Technik sauber bleibt.",
+        })
+    return {
+        "headline": "Dein Forge-Plan steht.",
+        "session_focus": "Die Satz-Ziele basieren auf deinem gespeicherten Plan und deiner echten Forge-Historie. Heute zählt eine saubere, nachvollziehbare Ausführung.",
+        "readiness_note": "Passe bei Schmerzen, ungewohnter Erschöpfung oder unsauberer Technik konservativ an und hole bei gesundheitlichen Fragen fachlichen Rat ein.",
+        "exercise_decisions": decisions,
+    }
+
+
+def _validate_forge_session_coaching(candidate: object, session_context: dict) -> dict:
+    """Whitelist Gemini's text-only coaching to the session exercises supplied by the server."""
+    fallback = _forge_coaching_fallback(session_context)
+    if not isinstance(candidate, dict):
+        return fallback
+    allowed_ids = {
+        str(exercise.get("session_exercise_id"))
+        for exercise in session_context.get("session", {}).get("exercises", [])
+        if exercise.get("session_exercise_id")
+    }
+    defaults = {item["session_exercise_id"]: item for item in fallback["exercise_decisions"]}
+    decisions: list[dict] = []
+    seen: set[str] = set()
+    raw_decisions = candidate.get("exercise_decisions")
+    if isinstance(raw_decisions, list):
+        for item in raw_decisions:
+            if not isinstance(item, dict):
+                continue
+            exercise_id = str(item.get("session_exercise_id") or "")
+            if exercise_id not in allowed_ids or exercise_id in seen:
+                continue
+            default = defaults[exercise_id]
+            decisions.append({
+                "session_exercise_id": exercise_id,
+                "recommendation": _forge_coaching_text(item.get("recommendation"), 360, default["recommendation"]),
+                "first_set_focus": _forge_coaching_text(item.get("first_set_focus"), 220, default["first_set_focus"]),
+                "effort_hint": _forge_coaching_text(item.get("effort_hint"), 220, default["effort_hint"]),
+            })
+            seen.add(exercise_id)
+    for exercise_id, default in defaults.items():
+        if exercise_id not in seen:
+            decisions.append(default)
+    return {
+        "headline": _forge_coaching_text(candidate.get("headline"), 160, fallback["headline"]),
+        "session_focus": _forge_coaching_text(candidate.get("session_focus"), 420, fallback["session_focus"]),
+        "readiness_note": _forge_coaching_text(candidate.get("readiness_note"), 300, fallback["readiness_note"]),
+        "exercise_decisions": decisions,
+    }
+
+
+async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
+    """Create a text-only coaching layer; deterministic server targets always remain authoritative."""
+    fallback = _forge_coaching_fallback(session_context)
+    if not settings.gemini_api_key:
+        return fallback
+    system_prompt = """You are Forge's evidence-informed resistance-training coach. Return JSON only with
+{headline, session_focus, readiness_note, exercise_decisions}. Every exercise_decisions item must use a
+session_exercise_id provided by the server and include recommendation, first_set_focus, and effort_hint.
+
+The supplied deterministic targets are authoritative: never invent, alter, or independently prescribe a numeric
+load, repetition target, set count, machine increment, diagnosis, or medical advice. Explain the server's actual
+progression signal in practical language instead. Treat the supplied repetition range as exercise- and goal-specific,
+not a universal law. Use progressive overload only when the history supports it; when results are flat, down, missing,
+or readiness is uncertain, favor controlled execution, recovery, and logging. Do not promise outcomes. Prefer a
+near-failure cue such as roughly 2–3 repetitions in reserve when appropriate, but never tell the athlete to push
+through pain or technical breakdown. Warm-up sets are preparation, not progression work. Keep every text field short,
+specific, and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=json.dumps(session_context, ensure_ascii=False),
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.25,
+                max_output_tokens=1800,
+                response_mime_type="application/json",
+            ),
+        )
+        raw = (response.text or "").strip()
+        parsed = json.loads(re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw))
+        return _validate_forge_session_coaching(parsed, session_context)
+    except Exception as exc:
+        logger.warning("Forge session start coaching fallback: %s", exc)
         return fallback
 
 

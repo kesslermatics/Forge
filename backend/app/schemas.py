@@ -173,7 +173,7 @@ class BriefingResponse(BaseModel):
 
 # ============ Native Forge Training Planning ============
 
-ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "machine", "other"]
+ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "cable", "machine", "other"]
 
 
 class ForgeMachineProfileInput(BaseModel):
@@ -373,6 +373,26 @@ class ForgeSessionCoachGuidanceResponse(BaseModel):
     rationale: str
 
 
+class ForgeSessionCoachExerciseDecisionResponse(BaseModel):
+    session_exercise_id: UUID
+    recommendation: str = Field(..., max_length=360)
+    first_set_focus: str = Field(..., max_length=220)
+    effort_hint: str = Field(..., max_length=220)
+
+
+class ForgeSessionStartCoachingResponse(BaseModel):
+    headline: str = Field(..., max_length=160)
+    session_focus: str = Field(..., max_length=420)
+    readiness_note: str = Field(..., max_length=300)
+    exercise_decisions: list[ForgeSessionCoachExerciseDecisionResponse] = Field(default_factory=list, max_length=30)
+
+
+class ForgeSessionAdditionCoachingResponse(BaseModel):
+    recommendation: str = Field(..., max_length=360)
+    first_set_focus: str = Field(..., max_length=220)
+    effort_hint: str = Field(..., max_length=220)
+
+
 class ForgeSessionExerciseInput(BaseModel):
     exercise_id: Optional[UUID] = None
     name: Optional[str] = Field(None, max_length=255)
@@ -393,6 +413,7 @@ class ForgeSessionExerciseResponse(BaseModel):
     machine_profile_name: Optional[str] = None
     notes: Optional[str] = None
     coach_guidance: Optional[ForgeSessionCoachGuidanceResponse] = None
+    addition_coaching: Optional[ForgeSessionAdditionCoachingResponse] = None
     position: int
     sets: list[ForgeSessionSetResponse]
 
@@ -414,6 +435,7 @@ class ForgeSessionResponse(BaseModel):
     status: Literal["active", "completed"]
     started_at: Any
     completed_at: Optional[Any] = None
+    start_coaching: Optional[ForgeSessionStartCoachingResponse] = None
     exercises: list[ForgeSessionExerciseResponse]
     messages: list[ForgeSessionMessageResponse] = Field(default_factory=list)
 

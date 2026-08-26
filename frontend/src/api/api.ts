@@ -13,6 +13,21 @@ export const isAuthenticated = (): boolean => getToken() !== null;
 
 /* ── Generic request ────────────────────────────────────── */
 
+function apiErrorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== 'object') return fallback;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => item && typeof item === 'object' && typeof (item as { msg?: unknown }).msg === 'string'
+        ? (item as { msg: string }).msg
+        : null)
+      .filter((message): message is string => Boolean(message));
+    if (messages.length) return messages.join(' · ');
+  }
+  return fallback;
+}
+
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
@@ -23,8 +38,8 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
 
   const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || `Error ${res.status}`);
+    const payload: unknown = await res.json().catch(() => null);
+    throw new Error(apiErrorMessage(payload, `Error ${res.status}`));
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -36,8 +51,8 @@ async function apiBlob(endpoint: string): Promise<Blob> {
   if (token) headers.set('Authorization', `Bearer ${token}`);
   const res = await fetch(`${API_URL}${endpoint}`, { headers, cache: 'no-store' });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || `Error ${res.status}`);
+    const payload: unknown = await res.json().catch(() => null);
+    throw new Error(apiErrorMessage(payload, `Error ${res.status}`));
   }
   return res.blob();
 }
@@ -593,7 +608,7 @@ export const getNutritionAnalysis = () =>
 
 /* ── Native Forge planning ─────────────────────────────── */
 
-export type ForgeEquipment = 'none' | 'barbell' | 'dumbbell' | 'kettlebell' | 'machine' | 'other';
+export type ForgeEquipment = 'none' | 'barbell' | 'dumbbell' | 'kettlebell' | 'cable' | 'machine' | 'other';
 export type ForgeSetType = 'warmup' | 'working';
 
 export interface ForgeMachineProfile {
@@ -804,6 +819,26 @@ export interface ForgeSessionCoachGuidance {
   rationale: string;
 }
 
+export interface ForgeSessionCoachDecision {
+  session_exercise_id: string;
+  recommendation: string;
+  first_set_focus: string;
+  effort_hint: string;
+}
+
+export interface ForgeSessionStartCoaching {
+  headline: string;
+  session_focus: string;
+  readiness_note: string;
+  exercise_decisions: ForgeSessionCoachDecision[];
+}
+
+export interface ForgeSessionAdditionCoaching {
+  recommendation: string;
+  first_set_focus: string;
+  effort_hint: string;
+}
+
 export interface ForgeSessionExercise {
   id: string;
   source_exercise_id: string | null;
@@ -816,6 +851,7 @@ export interface ForgeSessionExercise {
   machine_profile_name: string | null;
   notes: string | null;
   coach_guidance: ForgeSessionCoachGuidance | null;
+  addition_coaching: ForgeSessionAdditionCoaching | null;
   position: number;
   sets: ForgeSessionSet[];
 }
@@ -843,6 +879,7 @@ export interface ForgeSession {
   status: 'active' | 'completed';
   started_at: string;
   completed_at: string | null;
+  start_coaching: ForgeSessionStartCoaching | null;
   exercises: ForgeSessionExercise[];
   messages: ForgeSessionMessage[];
 }
@@ -874,10 +911,14 @@ export const getActiveForgeSession = () => apiRequest<ForgeSession | null>('/api
 export const listForgeSessions = (limit = 50, offset = 0) =>
   apiRequest<ForgeSessionSummary[]>(`/api/forge/sessions?limit=${limit}&offset=${offset}`);
 export const getForgeSession = (id: string) => apiRequest<ForgeSession>(`/api/forge/sessions/${id}`);
+export const generateForgeSessionStartCoaching = (id: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${id}/start-coaching`, { method: 'POST' });
 export const deleteForgeSession = (id: string) =>
   apiRequest<void>(`/api/forge/sessions/${id}`, { method: 'DELETE' });
 export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_id?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises`, { method: 'POST', body: JSON.stringify(data) });
+export const generateForgeSessionExerciseAdditionCoaching = (sessionId: string, sessionExerciseId: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}/addition-coaching`, { method: 'POST' });
 export const updateForgeSessionSet = (sessionId: string, setId: string, data: ForgeSessionSetInput) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/sets/${setId}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const addForgeSessionSet = (sessionId: string, sessionExerciseId: string, data: ForgeSessionSetInput) =>

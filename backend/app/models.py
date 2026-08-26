@@ -351,6 +351,8 @@ class ForgeWorkoutSession(Base):
     status = Column(String(16), nullable=False, server_default="active")
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    # One immutable, server-validated Gemini briefing for this session snapshot.
+    start_coaching = Column(JSON, nullable=True)
 
     user = relationship("User", back_populates="forge_sessions")
     program = relationship("ForgeTrainingProgram", back_populates="sessions")
@@ -387,6 +389,8 @@ class ForgeSessionExercise(Base):
     machine_profile_name = Column(String(100), nullable=True)
     notes = Column(String(500), nullable=True)
     coach_guidance = Column(JSON, nullable=True)
+    # Coaching generated after this exercise was deliberately added live.
+    addition_coaching = Column(JSON, nullable=True)
     position = Column(Integer, nullable=False)
 
     session = relationship("ForgeWorkoutSession", back_populates="exercises")

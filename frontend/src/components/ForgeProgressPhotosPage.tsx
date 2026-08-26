@@ -7,6 +7,7 @@ import {
   listForgeProgressPhotos, updateForgeProgressPhoto,
 } from '../api/api';
 import type { ForgeProgressPhoto, ForgeProgressPhotoView } from '../api/api';
+import ConfirmDialog from './ConfirmDialog';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
@@ -65,6 +66,7 @@ export default function ForgeProgressPhotosPage() {
   const [editing, setEditing] = useState<ForgeProgressPhoto | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareSplit, setCompareSplit] = useState(50);
+  const [photoToDelete, setPhotoToDelete] = useState<ForgeProgressPhoto | null>(null);
 
   const comparison = useMemo(() => compareIds.map((id) => photos.find((photo) => photo.id === id)).filter((photo): photo is ForgeProgressPhoto => Boolean(photo)), [compareIds, photos]);
 
@@ -156,7 +158,6 @@ export default function ForgeProgressPhotosPage() {
   };
 
   const removePhoto = async (photo: ForgeProgressPhoto) => {
-    if (!window.confirm(`Snapshot vom ${formatDate(photo.taken_on)} wirklich löschen? Das Bild kann nicht wiederhergestellt werden.`)) return;
     setSaving(true); setError(null); setNotice(null);
     try {
       await deleteForgeProgressPhoto(photo.id);
@@ -190,7 +191,8 @@ export default function ForgeProgressPhotosPage() {
     {comparison.length === 2 && <Comparison photos={comparison} urls={imageUrls} split={compareSplit} onSplit={setCompareSplit} onClose={() => setCompareIds([])} />}
 
     <section className="space-y-3"><div className="flex items-end justify-between"><div><h2 className="text-[18px] font-semibold" style={{ color: TEXT }}>Dein Verlauf</h2><p className="text-[11px] mt-1" style={{ color: DIM }}>{total} {total === 1 ? 'Snapshot' : 'Snapshots'} · wähle zwei zum Vergleichen</p></div>{compareIds.length > 0 && <button onClick={() => setCompareIds([])} className="tap text-[11px] cursor-pointer" style={{ color: SAND }}>Auswahl löschen</button>}</div>
-      {loading ? <div className="py-10 flex justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div> : photos.length ? <div className="grid grid-cols-2 gap-3">{photos.map((photo) => <PhotoCard key={photo.id} photo={photo} imageUrl={imageUrls[photo.id]} selected={compareIds.includes(photo.id)} saving={saving} onCompare={() => toggleComparison(photo.id)} onEdit={() => beginEdit(photo)} onDelete={() => void removePhoto(photo)} />)}</div> : <div className="card-forge p-7 text-center"><ImagePlus size={23} className="mx-auto" style={{ color: SAND }} /><h2 className="text-[15px] font-semibold mt-3" style={{ color: TEXT }}>Dein erster Fortschritts-Snapshot</h2><p className="text-[12px] leading-relaxed mt-1.5" style={{ color: DIM }}>Mach ein Foto unter ähnlichem Licht und aus derselben Perspektive. Forge ergänzt es mit Datum, Gewicht und deinem Ziel, wenn diese Daten vorhanden sind.</p></div>}</section>
+      {loading ? <div className="py-10 flex justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div> : photos.length ? <div className="grid grid-cols-2 gap-3">{photos.map((photo) => <PhotoCard key={photo.id} photo={photo} imageUrl={imageUrls[photo.id]} selected={compareIds.includes(photo.id)} saving={saving} onCompare={() => toggleComparison(photo.id)} onEdit={() => beginEdit(photo)} onDelete={() => setPhotoToDelete(photo)} />)}</div> : <div className="card-forge p-7 text-center"><ImagePlus size={23} className="mx-auto" style={{ color: SAND }} /><h2 className="text-[15px] font-semibold mt-3" style={{ color: TEXT }}>Dein erster Fortschritts-Snapshot</h2><p className="text-[12px] leading-relaxed mt-1.5" style={{ color: DIM }}>Mach ein Foto unter ähnlichem Licht und aus derselben Perspektive. Forge ergänzt es mit Datum, Gewicht und deinem Ziel, wenn diese Daten vorhanden sind.</p></div>}</section>
+    <ConfirmDialog open={photoToDelete !== null} busy={saving} destructive title="Snapshot löschen?" description={photoToDelete ? `Der Snapshot vom ${formatDate(photoToDelete.taken_on)} und das zugehörige Bild werden dauerhaft gelöscht und können nicht wiederhergestellt werden.` : ''} confirmLabel="Snapshot löschen" onCancel={() => setPhotoToDelete(null)} onConfirm={() => { const photo = photoToDelete; setPhotoToDelete(null); if (photo) void removePhoto(photo); }} />
   </div>;
 }
 
