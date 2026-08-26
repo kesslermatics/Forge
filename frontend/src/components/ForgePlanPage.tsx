@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import dynamicIconImports from 'lucide-react/dynamicIconImports';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -58,9 +58,19 @@ const emptyExercise = (): ForgeExerciseInput => ({
 });
 
 const defaultSets = (): ForgePlanSetInput[] => Array.from({ length: 3 }, () => ({
-  set_type: 'working', current_weight_kg: null, current_reps: 10,
+  set_type: 'working', previous_weight_kg: null, previous_reps: null,
+  current_weight_kg: null, current_reps: 10,
   coach_suggested_weight_kg: null, coach_suggested_reps: null, note: '',
 }));
+
+const formatDecimalInput = (value: number | null | undefined) => value == null ? '' : String(value).replace('.', ',');
+
+const parseDecimalInput = (value: string): number | null => {
+  const normalized = value.trim().replace(',', '.');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
 
 const toPlanInput = (plan: ForgePlan): ForgePlanInput => ({
   name: plan.name,
@@ -85,7 +95,7 @@ const toPlanInput = (plan: ForgePlan): ForgePlanInput => ({
 
 const formatSet = (weight: number | null, reps: number | null) => {
   if (weight == null && reps == null) return '—';
-  return `${weight != null && weight > 0 ? `${weight} kg` : 'BW'}${reps != null ? ` × ${reps}` : ''}`;
+  return `${weight != null && weight > 0 ? `${formatDecimalInput(weight)} kg` : 'BW'}${reps != null ? ` × ${reps}` : ''}`;
 };
 
 export default function ForgePlanPage() {
@@ -199,6 +209,29 @@ export default function ForgePlanPage() {
       if (!draft) return draft;
       const next = structuredClone(draft);
       next.exercises[exerciseIndex].sets[setIndex] = { ...next.exercises[exerciseIndex].sets[setIndex], [key]: value };
+      return next;
+    });
+  };
+
+  const moveDraftExercise = (exerciseIndex: number, offset: number) => {
+    setPlanDraft((draft) => {
+      if (!draft) return draft;
+      const target = exerciseIndex + offset;
+      if (target < 0 || target >= draft.exercises.length) return draft;
+      const next = structuredClone(draft);
+      [next.exercises[exerciseIndex], next.exercises[target]] = [next.exercises[target], next.exercises[exerciseIndex]];
+      return next;
+    });
+  };
+
+  const moveDraftSet = (exerciseIndex: number, setIndex: number, offset: number) => {
+    setPlanDraft((draft) => {
+      if (!draft) return draft;
+      const sets = draft.exercises[exerciseIndex]?.sets;
+      const target = setIndex + offset;
+      if (!sets || target < 0 || target >= sets.length) return draft;
+      const next = structuredClone(draft);
+      [next.exercises[exerciseIndex].sets[setIndex], next.exercises[exerciseIndex].sets[target]] = [next.exercises[exerciseIndex].sets[target], next.exercises[exerciseIndex].sets[setIndex]];
       return next;
     });
   };
@@ -386,6 +419,7 @@ export default function ForgePlanPage() {
           {planEditor && planDraft ? <PlanEditor
             draft={planDraft} exercises={exercises} saving={saving}
             onChange={setPlanDraft} onToggleExercise={togglePlanExercise} onUpdateSet={updateDraftSet}
+            onMoveExercise={moveDraftExercise} onMoveSet={moveDraftSet}
             onCancel={() => { setPlanEditor(false); setEditingPlanId(null); setPlanDraft(null); }} onSave={() => void savePlan()}
           /> : selectedPlan ? <PlanView plan={selectedPlan} saving={saving} onEdit={() => startPlan(selectedPlan)} onRefresh={() => void refreshCoachTargets(selectedPlan)} onDelete={() => setPendingDelete({ kind: 'plan', value: selectedPlan })} /> : (
             <EmptyState icon={<Dumbbell size={22} />} title="Noch kein Plan" copy="Lege zuerst eigene Übungen an und erstelle dann einen Plan – manuell oder mit Forge." action="Plan erstellen" onClick={() => startPlan()} />
@@ -469,19 +503,82 @@ function SetRows({ sets }: { sets: ForgePlan['exercises'][number]['sets'] }) {
   </div>;
 }
 
-function PlanEditor({ draft, exercises, saving, onChange, onToggleExercise, onUpdateSet, onCancel, onSave }: { draft: ForgePlanInput; exercises: ForgeExercise[]; saving: boolean; onChange: (draft: ForgePlanInput) => void; onToggleExercise: (exercise: ForgeExercise) => void; onUpdateSet: (exerciseIndex: number, setIndex: number, key: keyof ForgePlanSetInput, value: number | string | null) => void; onCancel: () => void; onSave: () => void }) {
+function PlanWeightInput({ value, onChange }: { value: number | null | undefined; onChange: (value: number | null) => void }) {
+  const [rawValue, setRawValue] = useState(() => formatDecimalInput(value));
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (!focused.current) setRawValue(formatDecimalInput(value));
+  }, [value]);
+
+  const commit = (valueToCommit: string) => {
+    const parsed = parseDecimalInput(valueToCommit);
+    onChange(parsed);
+    setRawValue(formatDecimalInput(parsed));
+  };
+
+  return <input
+    type="text"
+    value={rawValue}
+    inputMode="decimal"
+    pattern="[0-9]*[,.]?[0-9]*"
+    onFocus={() => { focused.current = true; }}
+    onChange={(event) => {
+      const next = event.target.value;
+      setRawValue(next);
+      if (next.trim() === '') { onChange(null); return; }
+      const parsed = parseDecimalInput(next);
+      if (parsed != null) onChange(parsed);
+    }}
+    onBlur={() => { focused.current = false; commit(rawValue); }}
+    placeholder="kg"
+    aria-label="Geplantes Gewicht in Kilogramm"
+    className="input-forge min-w-0 !px-2.5 !py-2 text-center text-[11px]"
+  />;
+}
+
+function PlanEditor({ draft, exercises, saving, onChange, onToggleExercise, onUpdateSet, onMoveExercise, onMoveSet, onCancel, onSave }: { draft: ForgePlanInput; exercises: ForgeExercise[]; saving: boolean; onChange: (draft: ForgePlanInput) => void; onToggleExercise: (exercise: ForgeExercise) => void; onUpdateSet: (exerciseIndex: number, setIndex: number, key: keyof ForgePlanSetInput, value: number | string | null) => void; onMoveExercise: (exerciseIndex: number, offset: number) => void; onMoveSet: (exerciseIndex: number, setIndex: number, offset: number) => void; onCancel: () => void; onSave: () => void }) {
+  const addSet = (exerciseIndex: number, setType: ForgePlanSetInput['set_type']) => {
+    const next = structuredClone(draft);
+    next.exercises[exerciseIndex].sets.push({
+      set_type: setType, previous_weight_kg: null, previous_reps: null,
+      current_weight_kg: null, current_reps: setType === 'warmup' ? null : 10,
+      coach_suggested_weight_kg: null, coach_suggested_reps: null, note: '',
+    });
+    onChange(next);
+  };
+
+  const removeSet = (exerciseIndex: number, setIndex: number) => {
+    const next = structuredClone(draft);
+    next.exercises[exerciseIndex].sets.splice(setIndex, 1);
+    onChange(next);
+  };
+
   return <div className="card-forge p-4 space-y-4">
-    <div className="flex items-center justify-between"><h2 className="font-semibold" style={{ color: TEXT }}>Plan bearbeiten</h2><button onClick={onCancel} className="text-[12px] cursor-pointer" style={{ color: DIM }}>Abbrechen</button></div>
-    <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} placeholder="z. B. Pull A" className="input-forge w-full" />
-    <input value={draft.description ?? ''} onChange={(event) => onChange({ ...draft, description: event.target.value })} placeholder="Optionaler Fokus" className="input-forge w-full" />
+    <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold" style={{ color: TEXT }}>Plan bearbeiten</h2><p className="text-[11px] mt-1" style={{ color: DIM }}>Ordne Übungen und Sätze, lege Warm-ups an und prüfe deine letzte Forge-Leistung.</p></div><button onClick={onCancel} className="shrink-0 text-[12px] cursor-pointer" style={{ color: DIM }}>Abbrechen</button></div>
+    <div className="grid gap-2 sm:grid-cols-[1.1fr_0.9fr]"><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} placeholder="z. B. Pull A" className="input-forge min-w-0" /><input value={draft.description ?? ''} onChange={(event) => onChange({ ...draft, description: event.target.value })} placeholder="Optionaler Fokus" className="input-forge min-w-0" /></div>
     <div><p className="text-[11px] mb-2" style={{ color: DIM }}>Übungen auswählen</p><div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">{exercises.map((exercise) => { const active = draft.exercises.some((entry) => entry.exercise_id === exercise.id); return <button key={exercise.id} onClick={() => onToggleExercise(exercise)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: active ? SAND : DIM, background: active ? 'rgba(232,197,138,0.13)' : 'rgba(255,247,235,0.04)', border: `1px solid ${active ? SAND : BORDER}` }}>{active ? '✓ ' : ''}{exercise.name}</button>; })}</div></div>
-    {draft.exercises.map((entry, exerciseIndex) => {
-      const exercise = exercises.find((item) => item.id === entry.exercise_id); if (!exercise) return null; return <div key={entry.exercise_id} className="rounded-2xl p-3 space-y-3" style={{ background: 'rgba(255,247,235,0.035)', border: `1px solid ${BORDER}` }}>
-        <div className="flex items-center justify-between"><p className="text-[13px] font-medium" style={{ color: TEXT }}>{exercise.name}</p>{exercise.machine_profiles.length > 0 && <select value={entry.machine_profile_id ?? ''} onChange={(event) => { const next = structuredClone(draft); next.exercises[exerciseIndex].machine_profile_id = event.target.value || null; onChange(next); }} className="bg-transparent text-[10px] outline-none" style={{ color: SAND }}><option value="">Profil</option>{exercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>}</div>
-        {entry.sets.map((set, setIndex) => <div key={setIndex} className="grid gap-2" style={{ gridTemplateColumns: '38px 1fr 1fr 28px' }}><span className="self-center text-[10px]" style={{ color: DIM }}>S{setIndex + 1}</span><input value={set.current_weight_kg ?? ''} inputMode="decimal" onChange={(event) => onUpdateSet(exerciseIndex, setIndex, 'current_weight_kg', event.target.value === '' ? null : Number(event.target.value))} placeholder="kg" className="input-forge min-w-0 !px-2 !py-2 text-[11px]" /><input value={set.current_reps ?? ''} inputMode="numeric" onChange={(event) => onUpdateSet(exerciseIndex, setIndex, 'current_reps', event.target.value === '' ? null : Number(event.target.value))} placeholder="Wdh." className="input-forge min-w-0 !px-2 !py-2 text-[11px]" /><button onClick={() => { const next = structuredClone(draft); next.exercises[exerciseIndex].sets.splice(setIndex, 1); onChange(next); }} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={14} /></button></div>)}
-        <button onClick={() => { const next = structuredClone(draft); next.exercises[exerciseIndex].sets.push({ set_type: 'working', current_weight_kg: null, current_reps: 10, coach_suggested_weight_kg: null, coach_suggested_reps: null, note: '' }); onChange(next); }} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={13} />Satz</button>
-      </div>;
-    })}
+    <div className="space-y-3">{draft.exercises.map((entry, exerciseIndex) => {
+      const exercise = exercises.find((item) => item.id === entry.exercise_id);
+      if (!exercise) return null;
+      return <section key={entry.exercise_id} className="overflow-hidden rounded-2xl" style={{ background: 'rgba(255,247,235,0.035)', border: `1px solid ${BORDER}` }}>
+        <div className="flex items-center gap-2 px-3 py-3 border-b" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold" style={{ color: '#16130f', background: SAND }}>{exerciseIndex + 1}</span>
+          <div className="min-w-0 flex-1"><p className="truncate text-[13px] font-medium" style={{ color: TEXT }}>{exercise.name}</p>{exercise.machine_profiles.length > 0 && <select aria-label={`${exercise.name}: Maschinenprofil`} value={entry.machine_profile_id ?? ''} onChange={(event) => { const next = structuredClone(draft); next.exercises[exerciseIndex].machine_profile_id = event.target.value || null; onChange(next); }} className="mt-0.5 max-w-full bg-transparent text-[10px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Kein Maschinenprofil</option>{exercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>}</div>
+          <div className="flex shrink-0 items-center gap-0.5"><button onClick={() => onMoveExercise(exerciseIndex, -1)} disabled={exerciseIndex === 0} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${exercise.name} nach vorne`} style={{ color: SAND }}><ChevronUp size={15} /></button><button onClick={() => onMoveExercise(exerciseIndex, 1)} disabled={exerciseIndex === draft.exercises.length - 1} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${exercise.name} nach hinten`} style={{ color: SAND }}><ChevronDown size={15} /></button></div>
+        </div>
+        <div className="p-2 space-y-2">{entry.sets.map((set, setIndex) => {
+          const workingNumber = entry.sets.slice(0, setIndex + 1).filter((item) => item.set_type === 'working').length;
+          const label = set.set_type === 'warmup' ? 'Warm-up' : `${workingNumber}. Arbeitssatz`;
+          return <div key={setIndex} className="rounded-xl p-2.5" style={{ background: set.set_type === 'warmup' ? 'rgba(232,197,138,0.075)' : 'rgba(255,247,235,0.025)' }}>
+            <div className="flex items-center gap-2"><select aria-label={`${label}: Satztyp`} value={set.set_type} onChange={(event) => onUpdateSet(exerciseIndex, setIndex, 'set_type', event.target.value as ForgePlanSetInput['set_type'])} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium outline-none cursor-pointer" style={{ color: set.set_type === 'warmup' ? SAND : TEXT }}><option value="warmup">Warm-up</option><option value="working">Arbeitssatz</option></select><div className="flex shrink-0 items-center gap-0.5"><button onClick={() => onMoveSet(exerciseIndex, setIndex, -1)} disabled={setIndex === 0} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${label} nach vorne`} style={{ color: SAND }}><ChevronUp size={14} /></button><button onClick={() => onMoveSet(exerciseIndex, setIndex, 1)} disabled={setIndex === entry.sets.length - 1} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${label} nach hinten`} style={{ color: SAND }}><ChevronDown size={14} /></button><button onClick={() => removeSet(exerciseIndex, setIndex)} className="tap ml-1 p-1 cursor-pointer" aria-label={`${label} löschen`} style={{ color: DIM }}><Trash2 size={14} /></button></div></div>
+            <p className="mt-1.5 text-[10px]" style={{ color: DIM }}>Letztes Forge-Training: <span className="tabular-nums" style={{ color: set.previous_weight_kg != null || set.previous_reps != null ? TEXT : DIM }}>{formatSet(set.previous_weight_kg ?? null, set.previous_reps ?? null)}</span></p>
+            <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: '1fr 1fr' }}><PlanWeightInput value={set.current_weight_kg} onChange={(value) => onUpdateSet(exerciseIndex, setIndex, 'current_weight_kg', value)} /><input type="number" min="0" step="1" value={set.current_reps ?? ''} inputMode="numeric" onChange={(event) => { const value = event.target.value === '' ? null : Number(event.target.value); if (value == null || (Number.isFinite(value) && value >= 0)) onUpdateSet(exerciseIndex, setIndex, 'current_reps', value); }} placeholder="Wdh." aria-label={`${label}: geplante Wiederholungen`} className="input-forge min-w-0 !px-2.5 !py-2 text-center text-[11px]" /></div>
+          </div>;
+        })}</div>
+        <div className="flex gap-3 border-t px-3 py-2.5" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><button onClick={() => addSet(exerciseIndex, 'warmup')} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: DIM }}><Plus size={13} />Warm-up</button><button onClick={() => addSet(exerciseIndex, 'working')} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={13} />Arbeitssatz</button></div>
+      </section>;
+    })}</div>
     <button onClick={onSave} disabled={saving} className="btn-forge w-full flex justify-center items-center gap-2">{saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}Plan speichern</button>
   </div>;
 }
