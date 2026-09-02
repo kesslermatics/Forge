@@ -23,8 +23,8 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 6
-MAX_TOOL_CALLS = 8
+MAX_TOOL_ROUNDS = 10
+MAX_TOOL_CALLS = 12
 MAX_HISTORY_MESSAGES = 40
 
 ToolEvent = Callable[[dict], Awaitable[None]]
@@ -349,10 +349,20 @@ def _response_content(response) -> types.Content | None:
     return getattr(candidates[0], "content", None) if candidates else None
 
 
-def _function_calls(content: types.Content | None) -> list:
-    if content is None:
-        return []
-    return [part.function_call for part in (content.parts or []) if getattr(part, "function_call", None)]
+def _response_thinking_summary(content: types.Content | None, calls: list) -> str | None:
+    """Return a bounded, user-facing thinking summary rather than raw internal reasoning."""
+    if content is not None:
+        thought_text = " ".join(
+            str(getattr(part, "text", "")).strip()
+            for part in (content.parts or [])
+            if getattr(part, "thought", False) and getattr(part, "text", None)
+        )
+        thought_text = " ".join(thought_text.split())
+        if thought_text:
+            return thought_text[:600]
+    if calls:
+        return "Ich prüfe die geladenen Daten und entscheide, welche Information noch fehlt."
+    return None
 
 
 async def run_chat_agent(
@@ -379,15 +389,23 @@ async def run_chat_agent(
             tools=COACH_TOOLS,
             temperature=0.45,
             max_output_tokens=4096,
+            thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=contents,
             config=config,
         )
         last_response = response
         response_content = _response_content(response)
         calls = _function_calls(response_content)
+        thinking_summary = _response_thinking_summary(response_content, calls)
+        if thinking_summary:
+            await emit({
+                "type": "thinking",
+                "text": thinking_summary,
+                "round": round_number,
+            })
         if not calls:
             text = (getattr(response, "text", None) or "").strip()
             if text:
@@ -437,14 +455,19 @@ async def run_chat_agent(
         parts=[types.Part(text="Tool-Aufrufe sind jetzt beendet. Antworte mit den bisher verfügbaren Daten und nenne fehlende Daten ehrlich.")],
     ))
     final = await client.aio.models.generate_content(
-        model="gemini-3.6-flash",
+        model="gemini-3.7-flash",
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=_system_prompt(user.language or "de"),
             temperature=0.45,
             max_output_tokens=4096,
+            thinking_config=types.ThinkingConfig(include_thoughts=True),
         ),
     )
+    final_content = _response_content(final)
+    final_thinking = _response_thinking_summary(final_content, [])
+    if final_thinking:
+        await emit({"type": "thinking", "text": final_thinking, "round": MAX_TOOL_ROUNDS + 1})
     return (getattr(final, "text", None) or getattr(last_response, "text", None) or "Ich konnte daraus gerade keine Antwort erstellen.").strip()
 
 
@@ -479,7 +502,7 @@ Do not include instructions to the assistant. Return plain text in the requested
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=1800),
         )

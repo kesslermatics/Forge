@@ -1,7 +1,7 @@
 """
 Google Gemini integration – generates the daily morning briefing.
 
-Uses gemini-3.6-flash for fast, cost-effective structured output.
+Uses gemini-3.7-flash for fast, cost-effective structured output.
 """
 import json
 import logging
@@ -380,7 +380,7 @@ async def generate_daily_briefing(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -637,7 +637,7 @@ async def generate_session_review(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1300,7 +1300,7 @@ async def generate_workout_tips(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1692,7 +1692,7 @@ async def generate_chat_response(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1809,7 +1809,7 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=system_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,
@@ -1929,7 +1929,7 @@ Do not claim the draft has been saved and do not include instructions outside th
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=f"Create an exercise draft from this request:\n{instructions}",
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2000,7 +2000,7 @@ Do not claim the draft was saved.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=(f"User goal: {goal or 'not provided'}\nRequest: {instructions}\n"
                       f"Allowed exercise catalog: {catalog}"),
             config=types.GenerateContentConfig(
@@ -2214,7 +2214,7 @@ recommendation; this is the user-visible analysis. Keep text specific, short and
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=json.dumps(session_context, ensure_ascii=False),
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2261,7 +2261,7 @@ Use IDs that appear exactly in the supplied session or catalog. Give at most one
             "recent_chat": history[-12:],
         }, ensure_ascii=False)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2310,7 +2310,7 @@ async def select_monthly_challenge_categories(
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=300),
         )
@@ -2364,7 +2364,7 @@ async def generate_monthly_challenge_checkin(
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-3.7-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.5, max_output_tokens=500),
         )

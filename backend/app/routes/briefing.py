@@ -618,6 +618,7 @@ def _serialize_chat_message(message: ChatMessage) -> dict:
         "role": message.role,
         "content": message.content,
         "status": message.status,
+        "agent_details": message.agent_details or [],
         "created_at": _iso(message.created_at),
     }
 
@@ -649,13 +650,20 @@ def _owned_chat(db: Session, user_id, conversation_id: UUID) -> ChatConversation
     return conversation
 
 
-def _append_chat_message(conversation: ChatConversation, role: str, content: str, message_status: str = "completed") -> ChatMessage:
+def _append_chat_message(
+    conversation: ChatConversation,
+    role: str,
+    content: str,
+    message_status: str = "completed",
+    agent_details: list[dict] | None = None,
+) -> ChatMessage:
     message = ChatMessage(
         conversation_id=conversation.id,
         sequence=conversation.next_sequence,
         role=role,
         content=content[:16000],
         status=message_status,
+        agent_details=agent_details,
     )
     conversation.next_sequence += 1
     conversation.messages.append(message)
@@ -794,8 +802,34 @@ async def stream_chat_message(
     db.commit()
 
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    agent_details: list[dict] = []
+
+    def capture_agent_detail(event: dict) -> None:
+        event_type = event.get("type")
+        if event_type == "thinking" and event.get("text"):
+            agent_details.append({
+                "type": "thinking",
+                "text": str(event["text"])[:600],
+                "round": event.get("round"),
+            })
+        elif event_type == "tool_started" and event.get("tool"):
+            agent_details.append({
+                "type": "tool",
+                "tool": str(event["tool"]),
+                "label": str(event.get("label") or "Ich prüfe deine Daten.")[:240],
+                "round": event.get("round"),
+                "call": event.get("call"),
+                "status": "completed",
+            })
+        elif event_type == "summary_started":
+            agent_details.append({
+                "type": "summary",
+                "text": str(event.get("label") or "Älterer Verlauf zusammenfassen.")[:240],
+                "status": "completed",
+            })
 
     async def emit(event: dict):
+        capture_agent_detail(event)
         await queue.put(event)
 
     async def run_agent():
@@ -808,9 +842,10 @@ async def stream_chat_message(
                 summary=conversation.summary,
                 emit=emit,
             )
-            assistant = _append_chat_message(conversation, "assistant", answer)
+            assistant = _append_chat_message(conversation, "assistant", answer, agent_details=agent_details)
             conversation.updated_at = datetime.utcnow()
             await refresh_chat_summary(conversation, db, current_user, emit)
+            assistant.agent_details = agent_details
             db.commit()
             await queue.put({"type": "completed", "message": _serialize_chat_message(assistant), "conversation": _serialize_conversation(conversation, include_messages=False)})
         except asyncio.CancelledError:
@@ -821,6 +856,7 @@ async def stream_chat_message(
                     "assistant",
                     "Diese Anfrage wurde abgebrochen.",
                     message_status="aborted",
+                    agent_details=agent_details,
                 )
                 conversation.updated_at = datetime.utcnow()
                 db.commit()
@@ -837,6 +873,7 @@ async def stream_chat_message(
                     "assistant",
                     "Der Coach konnte gerade keine Antwort erstellen.",
                     message_status="error",
+                    agent_details=agent_details,
                 )
                 conversation.updated_at = datetime.utcnow()
                 db.commit()

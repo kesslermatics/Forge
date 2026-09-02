@@ -329,12 +329,23 @@ export const saveTrainingPlan = (workout_names: string[]) =>
 
 /* ── AI Coach Chat ──────────────────────────────────────── */
 
+export interface ChatAgentDetail {
+  type: 'tool' | 'thinking' | 'summary';
+  text?: string;
+  label?: string;
+  tool?: string;
+  round?: number;
+  call?: number;
+  status?: 'completed' | 'error';
+}
+
 export interface ChatMessage {
   id?: string;
   sequence?: number;
   role: 'user' | 'assistant';
   content: string;
   status?: 'completed' | 'aborted' | 'error';
+  agent_details?: ChatAgentDetail[];
   created_at?: string | null;
 }
 
@@ -349,11 +360,12 @@ export interface ChatConversation {
 }
 
 export interface ChatStreamEvent {
-  type: 'round_started' | 'tool_started' | 'tool_finished' | 'summary_started' | 'summary_finished' | 'completed' | 'error';
+  type: 'round_started' | 'tool_started' | 'tool_finished' | 'thinking' | 'summary_started' | 'summary_finished' | 'completed' | 'error';
   round?: number;
   max_rounds?: number;
   tool?: string;
   label?: string;
+  text?: string;
   call?: number;
   max_calls?: number;
   message?: ChatMessage;

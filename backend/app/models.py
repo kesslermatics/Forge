@@ -87,6 +87,7 @@ class ChatMessage(Base):
     role = Column(String(16), nullable=False)
     content = Column(String(16000), nullable=False)
     status = Column(String(16), nullable=False, server_default="completed")
+    agent_details = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     conversation = relationship("ChatConversation", back_populates="messages")

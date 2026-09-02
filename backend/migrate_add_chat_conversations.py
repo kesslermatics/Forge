@@ -29,9 +29,14 @@ STATEMENTS = [
         role VARCHAR(16) NOT NULL,
         content VARCHAR(16000) NOT NULL,
         status VARCHAR(16) NOT NULL DEFAULT 'completed',
+        agent_details JSONB,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT uq_chat_message_sequence UNIQUE (conversation_id, sequence)
     );
+    """,
+    """
+    ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS agent_details JSONB;
     """,
     "CREATE INDEX IF NOT EXISTS ix_chat_conversations_user_id ON chat_conversations (user_id);",
     "CREATE INDEX IF NOT EXISTS ix_chat_conversations_user_updated ON chat_conversations (user_id, updated_at);",
