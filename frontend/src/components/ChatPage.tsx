@@ -217,7 +217,7 @@ export default function ChatPage() {
 
         {error && <div role="alert" className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.18)' }}>{error}</div>}
 
-        <section className="h-[calc(100dvh-12rem)] min-h-[480px] max-h-[760px] flex flex-col">
+        <section className="relative h-[calc(100dvh-176px)] min-h-[360px] max-h-[760px] flex flex-col overflow-hidden">
             <div className="flex shrink-0 items-center justify-between gap-3 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
                 <div className="flex items-center gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ color: SAND, background: `${SAND}14`, border: `1px solid ${SAND}30` }}><MessageSquare size={17} /></div>
@@ -226,7 +226,7 @@ export default function ChatPage() {
                 {loading && <button onClick={stop} className="tap flex items-center gap-1.5 rounded-xl px-3 py-2 text-[11px] cursor-pointer" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)' }}><Square size={11} fill="currentColor" /> Stoppen</button>}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 space-y-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-32 pt-6 space-y-4" style={{ scrollbarGutter: 'stable' }}>
                 {messages.length === 0 && !loading && <div className="h-full min-h-[330px] flex flex-col items-center justify-center text-center px-6 forge-anim">
                     <div className="w-16 h-16 rounded-[22px] flex items-center justify-center mb-5" style={{ color: SAND, background: `linear-gradient(145deg, ${SAND}22, ${SAND}08)`, border: `1px solid ${SAND}30`, boxShadow: `0 0 40px ${SAND}12` }}><MessageSquare size={27} /></div>
                     <h3 className="text-[18px] font-medium" style={{ color: TEXT }}>Was möchtest du wissen?</h3>
@@ -236,12 +236,12 @@ export default function ChatPage() {
                 {messages.map(message => <MessageBubble key={message.id ?? `${message.role}-${message.sequence}`} message={message} onEdit={message.role === 'user' ? beginEdit : undefined} />)}
                 {loading && <div className="flex justify-start forge-anim"><div className="max-w-[92%] rounded-2xl px-4 py-3" style={{ background: 'rgba(255,247,235,0.045)', border: `1px solid ${BORDER}` }}>
                     <div className="flex items-center gap-2 text-[12px]" style={{ color: MUTED }}><Loader2 size={13} className="animate-spin" style={{ color: SAND }} /> Forge denkt mit <span className="inline-flex gap-0.5"><i className="w-1 h-1 rounded-full animate-bounce" style={{ background: SAND }} /><i className="w-1 h-1 rounded-full animate-bounce [animation-delay:120ms]" style={{ background: SAND }} /><i className="w-1 h-1 rounded-full animate-bounce [animation-delay:240ms]" style={{ background: SAND }} /></span></div>
-                    {toolSteps.length > 0 && <div className="mt-3 space-y-2">{toolSteps.map(step => <div key={step.key} className="flex items-start gap-2 text-[11px] forge-anim" style={{ color: step.done ? DIM : MUTED }}><span className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ color: step.done ? '#9bd3a8' : SAND, background: step.done ? 'rgba(155,211,168,0.10)' : `${SAND}12` }}>{step.kind === 'thinking' ? <Brain size={11} /> : step.done ? <Check size={11} /> : <Loader2 size={11} className="animate-spin" />}</span><span>{step.label}</span></div>)}</div>}
+                    {toolSteps.length > 0 && <div className="mt-3 space-y-2">{toolSteps.map(step => <div key={step.key} className="flex items-start gap-2 text-[11px] forge-anim" style={{ color: step.done ? DIM : MUTED }}><span className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ color: step.done ? '#9bd3a8' : SAND, background: step.done ? 'rgba(155,211,168,0.10)' : `${SAND}12` }}>{step.kind === 'thinking' ? <Brain size={11} /> : step.done ? <Check size={11} /> : <Loader2 size={11} className="animate-spin" />}</span><div className="min-w-0 flex-1">{step.kind === 'thinking' || step.kind === 'summary' ? <FormattedMarkdown content={step.label} compact /> : <span>{step.label}</span>}</div></div>)}</div>}
                 </div></div>}
                 <div ref={endRef} />
             </div>
 
-            <div className="sticky bottom-0 z-10 shrink-0 p-3 sm:p-4" style={{ background: 'rgba(22,19,15,0.96)', borderTop: `1px solid ${BORDER}` }}>
+            <div className="absolute inset-x-0 bottom-0 z-20 p-3 sm:p-4" style={{ background: 'rgba(22,19,15,0.98)', borderTop: `1px solid ${BORDER}` }}>
                 {editingId && <div className="flex items-center justify-between gap-2 mb-2 rounded-xl px-3 py-2 text-[11px]" style={{ color: SAND, background: `${SAND}10`, border: `1px solid ${SAND}25` }}><span className="flex items-center gap-1.5"><Edit3 size={12} /> Nachricht bearbeiten — alles danach wird neu aufgebaut.</span><button onClick={() => { setEditingId(null); setEditingValue(''); }} className="tap cursor-pointer" style={{ color: DIM }}><X size={14} /></button></div>}
                 <form onSubmit={event => void send(event, editingId ?? undefined)} className="flex items-end gap-2 rounded-2xl p-2" style={{ background: 'rgba(255,247,235,0.045)', border: `1px solid ${loading ? `${SAND}22` : BORDER}` }}>
                     <textarea ref={textareaRef} value={editingId ? editingValue : input} onChange={event => editingId ? setEditingValue(event.target.value) : setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(undefined, editingId ?? undefined); } }} rows={1} disabled={loading} placeholder={editingId ? 'Korrigiere deine Nachricht…' : 'Frag Forge alles über dich…'} className="min-h-[42px] max-h-32 flex-1 resize-none bg-transparent px-2 py-2 text-[13px] outline-none" style={{ color: TEXT }} />
@@ -289,12 +289,19 @@ function MessageBubble({ message, onEdit }: { message: ChatMessage; onEdit?: (me
             {user
                 ? <div className="whitespace-pre-wrap">{message.content}</div>
                 : <>
-                    <div className="prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_strong]:text-[#e8c58a] [&_ul]:my-1 [&_li]:my-0.5 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-[#e8c58a33] [&_th]:bg-[#e8c58a12] [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:border [&_td]:border-[#e8c58a22] [&_td]:px-3 [&_td]:py-2 [&_td]:align-top [&_tr]:border-b [&_tr]:border-[#e8c58a18] [&_code]:break-words"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+                    <FormattedMarkdown content={message.content} />
                     <AgentDetails details={message.agent_details ?? []} />
                 </>}
             {user && onEdit && <button onClick={() => onEdit(message)} className="absolute -left-8 top-1/2 -translate-y-1/2 hidden group-hover:flex tap p-1.5 rounded-lg cursor-pointer" style={{ color: DIM, background: 'rgba(255,247,235,0.06)' }} aria-label="Nachricht bearbeiten"><Edit3 size={12} /></button>}
         </div>
     </div>;
+}
+
+function FormattedMarkdown({ content, compact = false }: { content: string; compact?: boolean }) {
+    const className = compact
+        ? 'text-[11px] leading-relaxed [&_p]:my-0.5 [&_strong]:text-[#e8c58a] [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_hr]:my-3 [&_hr]:border-t [&_hr]:border-[#e8c58a55] [&_hr]:opacity-80 [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:mt-2 [&_h3]:mb-1 [&_table]:my-2 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-[#e8c58a33] [&_th]:bg-[#e8c58a12] [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-left [&_td]:border [&_td]:border-[#e8c58a22] [&_td]:px-2 [&_td]:py-1.5 [&_td]:align-top [&_code]:break-words'
+        : 'prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_strong]:text-[#e8c58a] [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_hr]:my-4 [&_hr]:border-t [&_hr]:border-[#e8c58a55] [&_hr]:opacity-80 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-[#e8c58a33] [&_th]:bg-[#e8c58a12] [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:border [&_td]:border-[#e8c58a22] [&_td]:px-3 [&_td]:py-2 [&_td]:align-top [&_tr]:border-b [&_tr]:border-[#e8c58a18] [&_code]:break-words';
+    return <div className={className}><ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>;
 }
 
 function AgentDetails({ details }: { details: ChatAgentDetail[] }) {
@@ -309,7 +316,7 @@ function AgentDetails({ details }: { details: ChatAgentDetail[] }) {
         <div className="space-y-2 px-3 pb-3">
             {details.map((detail, index) => <div key={`${detail.type}-${detail.call ?? index}-${index}`} className="flex items-start gap-2 rounded-lg px-2.5 py-2 text-[11px]" style={{ color: MUTED, background: 'rgba(255,247,235,0.035)' }}>
                 <span className="mt-0.5 shrink-0" style={{ color: detail.type === 'thinking' ? SAND : '#9bd3a8' }}>{detail.type === 'thinking' ? <Brain size={12} /> : <Check size={12} />}</span>
-                <span>{detail.type === 'tool' ? detail.label : detail.text ?? detail.label}</span>
+                <div className="min-w-0 flex-1">{detail.type === 'tool' ? <span>{detail.label}</span> : <FormattedMarkdown content={detail.text ?? detail.label ?? ''} compact />}</div>
             </div>)}
         </div>
     </details>;
