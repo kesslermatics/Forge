@@ -1,19 +1,17 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
-    getTodayBriefing, regenerateBriefing, getWeather, sendChatMessage, getWeightHistory,
+    getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
     getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession, deleteForgeSession,
 } from '../api/api';
 import type {
     UserInfo, Briefing, WeatherData,
-    ChatMessage, WeightHistoryEntry, TodayNutrition, StreaksData, ForgeSession, ForgeToday,
+    WeightHistoryEntry, TodayNutrition, StreaksData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
-    Dumbbell, ChevronDown, ChevronUp,
-    Send, MessageSquare, Scale,
+    Dumbbell, Scale,
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
 import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
 import ConfirmDialog from './ConfirmDialog';
@@ -89,12 +87,6 @@ export default function Dashboard() {
     const [weather, setWeather] = useState<WeatherData | null>(null);
     const [location, setLocation] = useState<{ lat: number; lon: number } | null>(null);
 
-    const [chatOpen, setChatOpen] = useState(false);
-    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-    const [chatInput, setChatInput] = useState('');
-    const [chatLoading, setChatLoading] = useState(false);
-    const chatEndRef = useRef<HTMLDivElement>(null);
-
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
     const [streaks, setStreaks] = useState<StreaksData | null>(null);
@@ -138,31 +130,11 @@ export default function Dashboard() {
         getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
     }, []);
 
-    useEffect(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [chatMessages, chatLoading]);
-
     const handleRegenerate = async () => {
         setRegenerating(true); setError(null);
         try { setBriefing(await regenerateBriefing(location?.lat, location?.lon)); }
         catch (e: any) { setError(e.message); }
         finally { setRegenerating(false); }
-    };
-
-    const handleChatSend = async () => {
-        const msg = chatInput.trim();
-        if (!msg || chatLoading) return;
-        setChatInput('');
-        const userMsg: ChatMessage = { role: 'user', content: msg };
-        setChatMessages(prev => [...prev, userMsg]);
-        setChatLoading(true);
-        try {
-            const res = await sendChatMessage(msg, [...chatMessages, userMsg].slice(-20));
-            setChatMessages(prev => [...prev, { role: 'assistant', content: res.response }]);
-        } catch {
-            setChatMessages(prev => [...prev, { role: 'assistant', content: 'Etwas ist schiefgelaufen — probier es nochmal.' }]);
-        }
-        setChatLoading(false);
     };
 
     const dateStr = new Date().toLocaleDateString(lang === 'de' ? 'de-DE' : 'en-US', {
@@ -354,98 +326,6 @@ export default function Dashboard() {
                             </p>
                         </div>
                     )}
-
-                    {/* ── Coach Chat ── */}
-                    <section className="card-forge overflow-hidden forge-anim forge-d5">
-                        <button onClick={() => setChatOpen(o => !o)}
-                            className="tap w-full flex items-center justify-between p-4 cursor-pointer">
-                            <div className="flex items-center gap-3">
-                                <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-                                    style={{ background: `${SAND}12`, border: `1px solid ${SAND}28` }}>
-                                    <MessageSquare size={16} style={{ color: SAND }} />
-                                </div>
-                                <div className="text-left">
-                                    <p className="text-[14px] font-medium" style={{ color: '#f2ece0' }}>Forge Coach</p>
-                                    <p className="text-[11px]" style={{ color: TEXT_DIM }}>
-                                        Frag nach Training, Ernährung, Fortschritt
-                                    </p>
-                                </div>
-                            </div>
-                            {chatOpen
-                                ? <ChevronUp size={16} style={{ color: TEXT_DIM }} />
-                                : <ChevronDown size={16} style={{ color: TEXT_DIM }} />
-                            }
-                        </button>
-
-                        {chatOpen && (
-                            <div style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
-                                {/* Messages */}
-                                <div className="p-4 space-y-3 overflow-y-auto" style={{ maxHeight: '55vh' }}>
-                                    {chatMessages.length === 0 && (
-                                        <p className="text-center text-[12px] py-6 italic" style={{ color: TEXT_DIM }}>
-                                            Kein Smalltalk — stell mir eine echte Frage. 💪
-                                        </p>
-                                    )}
-                                    {chatMessages.map((m, i) => (
-                                        <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                            <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed"
-                                                style={m.role === 'user'
-                                                    ? { background: `${SAND}18`, border: `1px solid ${SAND}30`, color: '#f2ece0', borderBottomRightRadius: 6 }
-                                                    : { background: 'rgba(255,247,235,0.05)', border: '1px solid rgba(255,247,235,0.08)', color: '#e8dcc8', borderBottomLeftRadius: 6 }
-                                                }>
-                                                {m.role === 'user'
-                                                    ? <div className="whitespace-pre-wrap">{m.content}</div>
-                                                    : <div className="prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_strong]:text-[#e8c58a] [&_ul]:my-1 [&_li]:my-0.5">
-                                                        <ReactMarkdown>{m.content}</ReactMarkdown>
-                                                    </div>
-                                                }
-                                            </div>
-                                        </div>
-                                    ))}
-                                    {chatLoading && (
-                                        <div className="flex justify-start">
-                                            <div className="rounded-2xl px-4 py-2.5 flex items-center gap-2 text-[12px]"
-                                                style={{ background: 'rgba(255,247,235,0.05)', border: '1px solid rgba(255,247,235,0.08)', color: TEXT_DIM }}>
-                                                <Loader2 size={12} className="animate-spin" />
-                                                Denkt nach…
-                                            </div>
-                                        </div>
-                                    )}
-                                    <div ref={chatEndRef} />
-                                </div>
-
-                                {/* Input */}
-                                <div className="p-3" style={{ borderTop: `1px solid ${CARD_BORDER}` }}>
-                                    <form onSubmit={e => { e.preventDefault(); handleChatSend(); }} className="flex gap-2">
-                                        <input
-                                            type="text"
-                                            value={chatInput}
-                                            onChange={e => setChatInput(e.target.value)}
-                                            placeholder="Frag den Coach…"
-                                            disabled={chatLoading}
-                                            className="flex-1 text-[13px] rounded-xl px-4 py-2.5 outline-none"
-                                            style={{
-                                                background: 'rgba(255,247,235,0.05)',
-                                                border: '1px solid rgba(255,247,235,0.1)',
-                                                color: '#f2ece0',
-                                            }}
-                                            onFocus={e => (e.currentTarget.style.borderColor = `${SAND}44`)}
-                                            onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,247,235,0.1)')}
-                                        />
-                                        <button type="submit" disabled={chatLoading || !chatInput.trim()}
-                                            className="tap rounded-xl px-3 cursor-pointer"
-                                            style={{
-                                                background: `${SAND}18`,
-                                                border: `1px solid ${SAND}30`,
-                                                color: chatInput.trim() ? SAND : TEXT_DIM,
-                                            }}>
-                                            <Send size={15} />
-                                        </button>
-                                    </form>
-                                </div>
-                            </div>
-                        )}
-                    </section>
                 </>
             )}
         </div>

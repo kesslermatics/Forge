@@ -36,6 +36,7 @@ export default function NutritionPage() {
     const [history, setHistory] = useState<NutritionHistoryData | null>(null);
     const [stats, setStats] = useState<FoodStatisticsData | null>(null);
     const [analysis, setAnalysis] = useState<NutritionAnalysis | null>(null);
+    const [analysisError, setAnalysisError] = useState<string | null>(null);
 
     const [loadingToday, setLoadingToday] = useState(true);
     const [loadingHistory, setLoadingHistory] = useState(true);
@@ -221,11 +222,21 @@ export default function NutritionPage() {
                             <p className="text-[13px]" style={{ color: TEXT_DIM }}>
                                 Lass den Coach deine Ernährung analysieren.
                             </p>
+                            {analysisError && <p role="alert" className="text-[13px]" style={{ color: '#fca5a5' }}>
+                                {analysisError}
+                            </p>}
                             <button onClick={async () => {
                                 setLoadingAnalysis(true);
-                                try { setAnalysis(await getNutritionAnalysis()); }
-                                catch { }
-                                setLoadingAnalysis(false);
+                                setAnalysisError(null);
+                                try {
+                                    setAnalysis(await getNutritionAnalysis());
+                                } catch (error) {
+                                    setAnalysisError(error instanceof Error
+                                        ? error.message
+                                        : 'Die Analyse konnte nicht geladen werden.');
+                                } finally {
+                                    setLoadingAnalysis(false);
+                                }
                             }}
                                 className="btn-forge text-sm px-5 py-2 mx-auto">
                                 Analyse starten

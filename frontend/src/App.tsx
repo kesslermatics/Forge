@@ -3,6 +3,7 @@ import LoginForm from './components/LoginForm';
 import RegisterForm from './components/RegisterForm';
 import AppLayout from './components/AppLayout';
 import Dashboard from './components/Dashboard';
+import ChatPage from './components/ChatPage';
 import NutritionPage from './components/NutritionPage';
 import SetupPage from './components/SetupPage';
 import SettingsPage from './components/SettingsPage';
@@ -19,6 +20,7 @@ function App() {
     <Route path="/preview" element={<PreviewShowcase />} />
     <Route element={<AppLayout />}>
       <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/chat" element={<ChatPage />} />
       <Route path="/nutrition" element={<NutritionPage />} />
       <Route path="/achievements" element={<Navigate to="/dashboard" replace />} />
       <Route path="/forge" element={<ForgePlanPage />} />

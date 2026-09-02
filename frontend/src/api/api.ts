@@ -327,16 +327,111 @@ export const saveTrainingPlan = (workout_names: string[]) =>
 
 /* ── AI Coach Chat ──────────────────────────────────────── */
 
+/* ── AI Coach Chat ──────────────────────────────────────── */
+
 export interface ChatMessage {
+  id?: string;
+  sequence?: number;
   role: 'user' | 'assistant';
   content: string;
+  status?: 'completed' | 'aborted' | 'error';
+  created_at?: string | null;
 }
 
-export const sendChatMessage = (message: string, conversation_history: ChatMessage[]) =>
-  apiRequest<{ response: string }>('/api/briefing/chat', {
+export interface ChatConversation {
+  id: string;
+  title: string;
+  summary: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  message_count: number;
+  messages?: ChatMessage[];
+}
+
+export interface ChatStreamEvent {
+  type: 'round_started' | 'tool_started' | 'tool_finished' | 'summary_started' | 'summary_finished' | 'completed' | 'error';
+  round?: number;
+  max_rounds?: number;
+  tool?: string;
+  label?: string;
+  call?: number;
+  max_calls?: number;
+  message?: ChatMessage;
+  conversation?: ChatConversation;
+}
+
+export const listChatConversations = () =>
+  apiRequest<ChatConversation[]>('/api/briefing/chat/conversations');
+
+export const createChatConversation = (title?: string) =>
+  apiRequest<ChatConversation>('/api/briefing/chat/conversations', {
     method: 'POST',
-    body: JSON.stringify({ message, conversation_history }),
+    body: JSON.stringify(title ? { title } : {}),
   });
+
+export const getChatConversation = (id: string) =>
+  apiRequest<ChatConversation>(`/api/briefing/chat/conversations/${id}`);
+
+export const renameChatConversation = (id: string, title: string) =>
+  apiRequest<ChatConversation>(`/api/briefing/chat/conversations/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  });
+
+export const deleteChatConversation = (id: string) =>
+  apiRequest<void>(`/api/briefing/chat/conversations/${id}`, { method: 'DELETE' });
+
+export const editChatMessage = (conversationId: string, messageId: string, message: string) =>
+  apiRequest<ChatConversation>(`/api/briefing/chat/conversations/${conversationId}/messages/${messageId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ message }),
+  });
+
+export const streamChatMessage = async (
+  conversationId: string,
+  message: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+  messageId?: string,
+): Promise<void> => {
+  const token = getToken();
+  const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${API_URL}/api/briefing/chat/conversations/${conversationId}/messages/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(messageId ? { message, message_id: messageId } : { message }),
+    signal,
+  });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw new Error(apiErrorMessage(payload, `Error ${response.status}`));
+  }
+  if (!response.body) throw new Error('Der Chat-Stream ist nicht verfügbar.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (block: string) => {
+    const data = block.split(/\r?\n/)
+      .filter(line => line.startsWith('data: '))
+      .map(line => line.slice(6))
+      .join('');
+    if (!data) return;
+    onEvent(JSON.parse(data) as ChatStreamEvent);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? '';
+    blocks.forEach(consume);
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer);
+};
+
 
 /* ── Weight History ─────────────────────────────────────── */
 

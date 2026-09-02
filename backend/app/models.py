@@ -40,9 +40,56 @@ class User(Base):
     forge_progress_photos = relationship("ForgeProgressPhoto", back_populates="user", cascade="all, delete-orphan")
     monthly_challenge_cycles = relationship("MonthlyChallengeCycle", back_populates="user", cascade="all, delete-orphan")
     monthly_challenge_checkins = relationship("MonthlyChallengeCheckin", back_populates="user", cascade="all, delete-orphan")
+    chat_conversations = relationship("ChatConversation", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
+
+
+class ChatConversation(Base):
+    """A user-owned global Coach conversation."""
+
+    __tablename__ = "chat_conversations"
+    __table_args__ = (
+        Index("ix_chat_conversations_user_updated", "user_id", "updated_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(160), nullable=False, server_default="Neuer Chat")
+    summary = Column(String(12000), nullable=True)
+    summary_until_sequence = Column(Integer, nullable=True)
+    next_sequence = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="chat_conversations")
+    messages = relationship(
+        "ChatMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.sequence",
+    )
+
+
+class ChatMessage(Base):
+    """A persisted user or assistant message in a global Coach conversation."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "sequence", name="uq_chat_message_sequence"),
+        Index("ix_chat_messages_conversation_sequence", "conversation_id", "sequence"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence = Column(Integer, nullable=False)
+    role = Column(String(16), nullable=False)
+    content = Column(String(16000), nullable=False)
+    status = Column(String(16), nullable=False, server_default="completed")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    conversation = relationship("ChatConversation", back_populates="messages")
 
 
 class MonthlyChallengeCycle(Base):

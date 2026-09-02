@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import { getMe, logoutUser, isAuthenticated } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { Loader2, Home, UtensilsCrossed, Camera, Dumbbell, UserRound } from 'lucide-react';
+import { Loader2, Home, UtensilsCrossed, Camera, Dumbbell, MessageSquare, UserRound } from 'lucide-react';
 import { LanguageContext } from '../i18n';
 import type { Lang } from '../i18n';
 import ForgeIcon from './ForgeIcon';
@@ -39,7 +39,7 @@ export default function AppLayout() {
             </header>
             <main className="flex-1 w-full max-w-2xl mx-auto px-4 pt-6 pb-28"><Outlet context={{ user, refreshUser }} /></main>
             <nav className="fixed bottom-0 left-0 right-0 z-40" style={{ background: 'rgba(22,19,15,0.92)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(232,197,138,0.1)' }}>
-                <div className="max-w-2xl mx-auto grid grid-cols-4 h-16"><Tab to="/dashboard" icon={<Home size={22} />} label="Home" /><Tab to="/forge" icon={<Dumbbell size={22} />} label="Plan" /><Tab to="/nutrition" icon={<UtensilsCrossed size={22} />} label="Ernährung" /><Tab to="/forge/progress" icon={<Camera size={22} />} label="Progress" /></div>
+                <div className="max-w-2xl mx-auto grid grid-cols-5 h-16"><Tab to="/dashboard" icon={<Home size={21} />} label="Home" /><Tab to="/forge" icon={<Dumbbell size={21} />} label="Plan" /><Tab to="/chat" icon={<MessageSquare size={21} />} label="Coach" /><Tab to="/nutrition" icon={<UtensilsCrossed size={21} />} label="Ernährung" /><Tab to="/forge/progress" icon={<Camera size={21} />} label="Progress" /></div>
             </nav>
         </div>
     </LanguageContext.Provider>;
