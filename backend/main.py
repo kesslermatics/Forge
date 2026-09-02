@@ -30,7 +30,8 @@ with engine.connect() as _conn:
     _migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS training_plan JSON;",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION;",
-        # weight_entries table is created by create_all above (new table)
+        "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS agent_details JSON;",
+        # weight_entries and chat tables are created by create_all above (new tables)
     ]
     for stmt in _migrations:
         try:
