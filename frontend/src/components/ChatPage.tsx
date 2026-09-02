@@ -217,8 +217,8 @@ export default function ChatPage() {
 
         {error && <div role="alert" className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.18)' }}>{error}</div>}
 
-        <section className="min-h-[72vh] flex flex-col">
-            <div className="flex items-center justify-between gap-3 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
+        <section className="h-[calc(100dvh-12rem)] min-h-[480px] max-h-[760px] flex flex-col">
+            <div className="flex shrink-0 items-center justify-between gap-3 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
                 <div className="flex items-center gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ color: SAND, background: `${SAND}14`, border: `1px solid ${SAND}30` }}><MessageSquare size={17} /></div>
                     <div className="min-w-0"><h2 className="truncate text-[14px] font-medium" style={{ color: TEXT }}>{active?.title ?? 'Coach Chat'}</h2><p className="text-[10px]" style={{ color: DIM }}>Deine Daten bleiben in deinem Account.</p></div>
@@ -226,7 +226,7 @@ export default function ChatPage() {
                 {loading && <button onClick={stop} className="tap flex items-center gap-1.5 rounded-xl px-3 py-2 text-[11px] cursor-pointer" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)' }}><Square size={11} fill="currentColor" /> Stoppen</button>}
             </div>
 
-            <div className="flex-1 overflow-y-auto py-6 space-y-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 space-y-4">
                 {messages.length === 0 && !loading && <div className="h-full min-h-[330px] flex flex-col items-center justify-center text-center px-6 forge-anim">
                     <div className="w-16 h-16 rounded-[22px] flex items-center justify-center mb-5" style={{ color: SAND, background: `linear-gradient(145deg, ${SAND}22, ${SAND}08)`, border: `1px solid ${SAND}30`, boxShadow: `0 0 40px ${SAND}12` }}><MessageSquare size={27} /></div>
                     <h3 className="text-[18px] font-medium" style={{ color: TEXT }}>Was möchtest du wissen?</h3>
@@ -241,7 +241,7 @@ export default function ChatPage() {
                 <div ref={endRef} />
             </div>
 
-            <div className="p-3 sm:p-4" style={{ borderTop: `1px solid ${BORDER}` }}>
+            <div className="sticky bottom-0 z-10 shrink-0 p-3 sm:p-4" style={{ background: 'rgba(22,19,15,0.96)', borderTop: `1px solid ${BORDER}` }}>
                 {editingId && <div className="flex items-center justify-between gap-2 mb-2 rounded-xl px-3 py-2 text-[11px]" style={{ color: SAND, background: `${SAND}10`, border: `1px solid ${SAND}25` }}><span className="flex items-center gap-1.5"><Edit3 size={12} /> Nachricht bearbeiten — alles danach wird neu aufgebaut.</span><button onClick={() => { setEditingId(null); setEditingValue(''); }} className="tap cursor-pointer" style={{ color: DIM }}><X size={14} /></button></div>}
                 <form onSubmit={event => void send(event, editingId ?? undefined)} className="flex items-end gap-2 rounded-2xl p-2" style={{ background: 'rgba(255,247,235,0.045)', border: `1px solid ${loading ? `${SAND}22` : BORDER}` }}>
                     <textarea ref={textareaRef} value={editingId ? editingValue : input} onChange={event => editingId ? setEditingValue(event.target.value) : setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(undefined, editingId ?? undefined); } }} rows={1} disabled={loading} placeholder={editingId ? 'Korrigiere deine Nachricht…' : 'Frag Forge alles über dich…'} className="min-h-[42px] max-h-32 flex-1 resize-none bg-transparent px-2 py-2 text-[13px] outline-none" style={{ color: TEXT }} />

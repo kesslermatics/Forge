@@ -349,6 +349,16 @@ def _response_content(response) -> types.Content | None:
     return getattr(candidates[0], "content", None) if candidates else None
 
 
+def _function_calls(content: types.Content | None) -> list:
+    if content is None:
+        return []
+    return [
+        part.function_call
+        for part in (content.parts or [])
+        if getattr(part, "function_call", None)
+    ]
+
+
 def _response_thinking_summary(content: types.Content | None, calls: list) -> str | None:
     """Return a bounded, user-facing thinking summary rather than raw internal reasoning."""
     if content is not None:
