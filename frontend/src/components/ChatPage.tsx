@@ -60,18 +60,20 @@ export default function ChatPage() {
 
     const handleStreamEvent = (event: ChatStreamEvent) => {
         if (event.type === 'tool_started' && event.tool && event.label) {
+            const { tool, label, call } = event;
             setToolSteps(previous => [...previous, {
-                key: `${event.tool}-${event.call ?? previous.length}`,
-                label: event.label,
+                key: `${tool}-${call ?? previous.length}`,
+                label,
                 done: false,
-                call: event.call,
+                call,
                 kind: 'tool',
             }]);
         }
         if (event.type === 'thinking' && event.text) {
+            const text = event.text;
             setToolSteps(previous => [...previous, {
                 key: `thinking-${previous.length}`,
-                label: event.text,
+                label: text,
                 done: true,
                 kind: 'thinking',
             }]);
@@ -87,7 +89,10 @@ export default function ChatPage() {
         if (event.type === 'summary_started') setToolSteps(previous => [...previous, { key: 'summary', label: event.label ?? 'Ich ordne die bisherigen Nachrichten ein.', done: false, kind: 'summary' }]);
         if (event.type === 'summary_finished') setToolSteps(previous => previous.map(step => step.key === 'summary' ? { ...step, done: true, label: event.label ?? step.label } : step));
         if (event.type === 'completed') {
-            if (event.message && typeof event.message !== 'string') setMessages(previous => [...previous, event.message]);
+            const assistantMessage = event.message;
+            if (assistantMessage && typeof assistantMessage !== 'string') {
+                setMessages(previous => [...previous, assistantMessage]);
+            }
             if (event.conversation) setActive(event.conversation);
         }
         if (event.type === 'error') {

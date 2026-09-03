@@ -14,10 +14,10 @@ from app.models import (
     MonthlyChallenge, MonthlyChallengeCheckin, MonthlyChallengeCycle, User, WeightEntry,
 )
 from app.services.ai_service import generate_monthly_challenge_checkin
-from app.services.yazio_service import fetch_yazio_summary
+from app.services.yazio_service import fetch_yazio_summary, resolve_yazio_goal_context
 
 MONTHLY_CATEGORIES = ("consistency", "strength", "weight", "nutrition", "quality")
-CHALLENGE_FORMAT_VERSION = 2
+CHALLENGE_FORMAT_VERSION = 3
 
 
 def month_start_for(day: date | None = None) -> date:
@@ -78,24 +78,22 @@ def _goal_direction(value: Any) -> str | None:
 
 
 async def _goal_context(user: User) -> dict[str, Any]:
-    """Fetch the current Yazio goal direction without silently overwriting user settings."""
-    context: dict[str, Any] = {"direction": _goal_direction(user.current_goal), "source": "settings", "profile": {}, "nutrition": None}
+    """Read the goal direction exclusively from the current Yazio profile."""
     if not user.yazio_email or not user.yazio_password:
-        return context
+        return {"direction": None, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
     try:
-        nutrition = await fetch_yazio_summary(
+        context = await resolve_yazio_goal_context(
             decrypt_value(user.yazio_email), decrypt_value(user.yazio_password), target_date=date.today(),
         )
-        profile = (nutrition or {}).get("profile") or {}
-        yazio_direction = _goal_direction(profile.get("goal"))
-        if yazio_direction:
-            context["direction"] = yazio_direction
-            context["source"] = "yazio"
-        context["profile"] = profile
-        context["nutrition"] = nutrition
     except Exception:
-        pass
-    return context
+        return {"direction": None, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
+    return {
+        "direction": _goal_direction(context["goal"]),
+        "source": context["source"],
+        "goal": context["goal"],
+        "profile": context["profile"],
+        "nutrition": context["nutrition"],
+    }
 
 
 def _base_rules(source: str, **extra: Any) -> dict[str, Any]:
@@ -135,7 +133,7 @@ def _weight_candidate(db: Session, user: User, start: date, goal: dict[str, Any]
     monthly_step = min(1.0, max(0.2, weekly_change * 4 if weekly_change else 0.3))
     target = round(baseline + (monthly_step if direction == "up" else -monthly_step), 2)
     verb = "erhöhen" if direction == "up" else "senken"
-    return {"category": "weight", "metric": "weight_trend_toward_target", "title": f"Gewichtstrend kontrolliert {verb}", "description": f"Ausgangspunkt {baseline:.1f} kg · Monats-Zwischenziel {target:.1f} kg. Der geglättete Trend zählt, nicht ein einzelner Tageswert.", "icon": "Scale", "unit": "kg", "baseline_value": baseline, "target_value": target, "rules": _base_rules("weight_entries", direction=direction, goal_source=goal.get("source"), goal_value=(goal.get("profile") or {}).get("goal") or user.current_goal)}
+    return {"category": "weight", "metric": "weight_trend_toward_target", "title": f"Gewichtstrend kontrolliert {verb}", "description": f"Ausgangspunkt {baseline:.1f} kg · Monats-Zwischenziel {target:.1f} kg. Der geglättete Trend zählt, nicht ein einzelner Tageswert.", "icon": "Scale", "unit": "kg", "baseline_value": baseline, "target_value": target, "rules": _base_rules("weight_entries", direction=direction, goal_source=goal.get("source"), goal_value=goal.get("goal"))}
 
 
 def _nutrition_candidate(user: User, goal: dict[str, Any]) -> dict[str, Any]:
@@ -288,8 +286,9 @@ async def generate_daily_challenge_checkin(db: Session, user: User, today: date 
     db.add(checkin)
     db.flush()
     live = serialize_cycle(db, user, cycle)
+    yazio_goal = (await _goal_context(user))["goal"]
     checkin.progress_snapshot = {"completed_challenges": live["completed_challenges"], "completion_percent": live["completion_percent"], "challenges": live["challenges"]}
-    checkin.checkin_data = await generate_monthly_challenge_checkin(challenges=live["challenges"], current_goal=user.current_goal, nutrition=nutrition, language=user.language or "de")
+    checkin.checkin_data = await generate_monthly_challenge_checkin(challenges=live["challenges"], yazio_goal=yazio_goal, nutrition=nutrition, language=user.language or "de")
     try:
         db.commit()
     except IntegrityError:

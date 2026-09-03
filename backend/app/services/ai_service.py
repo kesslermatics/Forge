@@ -1972,7 +1972,7 @@ async def generate_forge_plan_draft(
     instructions: str,
     exercises: list[dict],
     language: str = "de",
-    goal: str = "",
+    yazio_goal: str | None = None,
 ) -> dict:
     """Generate a transient plan draft constrained to the caller's selected exercises."""
     allowed_ids = {str(exercise["id"]) for exercise in exercises}
@@ -1995,13 +1995,13 @@ Return JSON only with: name, description, exercises.
 Each exercises item MUST contain exercise_id, machine_profile_id (or null), notes, sets.
 You may use ONLY exercise IDs and machine profile IDs supplied in the catalog. Never invent an ID.
 Each set must contain set_type (warmup or working), current_weight_kg (number or null), current_reps (integer or null), coach_suggested_weight_kg (number or null), coach_suggested_reps (integer or null), and note.
-Use conservative, hypertrophy-oriented set suggestions. Do not fabricate a user-specific load when history is absent: use null for weight and provide only sensible reps.
+Use conservative, hypertrophy-oriented set suggestions. Treat the supplied current Yazio goal as the only profile goal; when it is unavailable, do not infer or invent a bulk, cut, or maintenance phase. Do not fabricate a user-specific load when history is absent: use null for weight and provide only sensible reps.
 Do not claim the draft was saved.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
             model="gemini-3.7-flash",
-            contents=(f"User goal: {goal or 'not provided'}\nRequest: {instructions}\n"
+            contents=(f"Current Yazio goal: {yazio_goal or 'unavailable'}\nRequest: {instructions}\n"
                       f"Allowed exercise catalog: {catalog}"),
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2325,7 +2325,7 @@ async def select_monthly_challenge_categories(
 
 async def generate_monthly_challenge_checkin(
     challenges: list[dict],
-    current_goal: str | None,
+    yazio_goal: str | None,
     nutrition: dict,
     language: str = "de",
 ) -> dict:
@@ -2355,7 +2355,7 @@ async def generate_monthly_challenge_checkin(
         "If nutrition is unavailable, state that neutrally and focus on available training facts. "
         "Return JSON only with headline (max 45 chars), message (max 240 chars), and next_step (max 140 chars).\n\n"
         + json.dumps(
-            {"current_goal": current_goal, "challenges": challenge_facts, "nutrition": nutrition},
+            {"yazio_goal": yazio_goal, "challenges": challenge_facts, "nutrition": nutrition},
             ensure_ascii=False,
             default=str,
         )

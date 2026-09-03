@@ -443,3 +443,43 @@ async def fetch_nutrition_dates(
 
         tracked = [r for r in results if r is not None]
         return tracked
+
+
+async def resolve_yazio_goal_context(
+    email: str | None,
+    password: str | None,
+    target_date: Optional[date] = None,
+) -> dict:
+    """Return the only authoritative goal context: the user's current Yazio profile.
+
+    No caller should substitute a local Forge or profile value when this data is
+    unavailable. The source marker lets consumers remain useful without
+    presenting a stale goal as fact.
+    """
+    unavailable = {
+        "available": False,
+        "source": "unavailable",
+        "goal": None,
+        "profile": {},
+        "nutrition": None,
+    }
+    if not email or not password:
+        return unavailable
+    try:
+        nutrition = await fetch_yazio_summary(email, password, target_date=target_date or date.today())
+    except Exception:
+        logger.exception("Could not resolve the Yazio goal context")
+        return unavailable
+    if not nutrition:
+        return unavailable
+
+    profile = nutrition.get("profile") if isinstance(nutrition.get("profile"), dict) else {}
+    raw_goal = profile.get("goal")
+    goal = raw_goal.strip() if isinstance(raw_goal, str) and raw_goal.strip() else None
+    return {
+        "available": True,
+        "source": "yazio",
+        "goal": goal,
+        "profile": profile,
+        "nutrition": nutrition,
+    }

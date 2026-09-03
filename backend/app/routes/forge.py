@@ -70,9 +70,23 @@ from app.services.ai_service import (
     generate_forge_session_chat,
     generate_forge_session_start_coaching,
 )
-from app.services.yazio_service import fetch_yazio_summary
+from app.services.yazio_service import resolve_yazio_goal_context
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
+
+
+async def _yazio_goal_context(user: User) -> dict:
+    """Resolve coaching goals only from Yazio; never fall back to Forge profile data."""
+    if not user.yazio_email or not user.yazio_password:
+        return {"available": False, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
+    try:
+        return await resolve_yazio_goal_context(
+            decrypt_value(user.yazio_email),
+            decrypt_value(user.yazio_password),
+            target_date=date.today(),
+        )
+    except Exception:
+        return {"available": False, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
 
 
 def _not_found(detail: str = "Not found") -> HTTPException:
@@ -107,8 +121,6 @@ def _progress_photo_context(db: Session, user: User, taken_on: date) -> dict:
     ).order_by(ForgeWorkoutSession.completed_at).all()
     return {
         "weight_kg": weight_entry.weight_kg if weight_entry else None,
-        "current_goal": user.current_goal,
-        "target_weight_kg": user.target_weight,
         "workout_names": [session.name for session in sessions],
     }
 
@@ -496,11 +508,12 @@ async def create_plan_draft(
                 for profile in exercise.machine_profiles
             ],
         })
+    yazio_context = await _yazio_goal_context(current_user)
     draft = await generate_forge_plan_draft(
         data.instructions,
         catalog,
         current_user.language or "de",
-        current_user.current_goal or "",
+        yazio_context["goal"],
     )
     return {"draft": draft}
 
@@ -585,43 +598,30 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
 
 
 async def _forge_coaching_profile(user: User) -> dict:
-    """Prefer current Yazio data for the coaching model while retaining an offline fallback."""
+    """Build Forge coaching context exclusively from the live Yazio profile."""
+    yazio_context = await _yazio_goal_context(user)
+    yazio_profile = yazio_context["profile"]
+    nutrition = yazio_context["nutrition"] or {}
+    totals = nutrition.get("totals") or {}
+    goals = nutrition.get("goals") or {}
     profile = {
-        "goal": user.current_goal or "general fitness",
-        "goal_source": "settings",
-        "target_weight_kg": user.target_weight,
+        "goal": yazio_context["goal"],
+        "goal_source": yazio_context["source"],
         "current_weight_kg": None,
         "start_weight_kg": None,
         "weight_change_per_week_kg": None,
         "nutrition": None,
     }
-    if not user.yazio_email or not user.yazio_password:
-        return profile
-    try:
-        yazio_data = await fetch_yazio_summary(
-            decrypt_value(user.yazio_email),
-            decrypt_value(user.yazio_password),
-            target_date=date.today(),
-        )
-        yazio_profile = (yazio_data or {}).get("profile") or {}
-        yazio_goal = yazio_profile.get("goal")
-        if isinstance(yazio_goal, str) and yazio_goal.strip():
-            profile["goal"] = yazio_goal.strip()
-            profile["goal_source"] = "yazio"
-        for key in ("current_weight_kg", "start_weight_kg", "weight_change_per_week_kg"):
-            value = yazio_profile.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
-                profile[key] = float(value)
-        totals = (yazio_data or {}).get("totals") or {}
-        goals = (yazio_data or {}).get("goals") or {}
+    for key in ("current_weight_kg", "start_weight_kg", "weight_change_per_week_kg"):
+        value = yazio_profile.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
+            profile[key] = float(value)
+    if nutrition:
         profile["nutrition"] = {
-            "date": (yazio_data or {}).get("date"),
+            "date": nutrition.get("date"),
             "totals": {key: totals.get(key) for key in ("calories", "protein", "carbs", "fat")},
             "goals": {key: goals.get(key) for key in ("calories", "protein", "carbs", "fat")},
         }
-    except Exception:
-        # Coaching must still load when Yazio is temporarily unavailable.
-        pass
     return profile
 
 

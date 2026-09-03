@@ -26,8 +26,6 @@ class UserResponse(BaseModel):
     id: UUID
     username: str
     has_yazio: bool = False
-    current_goal: Optional[str] = None
-    target_weight: Optional[float] = None
     first_name: Optional[str] = None
     height_cm: Optional[float] = None
     language: str = "de"
@@ -83,23 +81,6 @@ class TokenData(BaseModel):
 class MessageResponse(BaseModel):
     """Generic message response."""
     message: str
-
-
-# ============ Goal Schemas ============
-
-class GoalUpdate(BaseModel):
-    """Schema for updating user goal and target weight."""
-    current_goal: str = Field(..., min_length=1, max_length=100,
-                              description="e.g. Lean Bulk, Cut, Maintain, Recomp")
-    target_weight: Optional[float] = Field(None, gt=0, le=500,
-                                           description="Target weight in kg")
-
-
-class GoalResponse(BaseModel):
-    """Schema for goal update response."""
-    message: str
-    current_goal: Optional[str] = None
-    target_weight: Optional[float] = None
 
 
 # ============ Profile Schemas ============
@@ -489,8 +470,6 @@ class ForgeProgressPhotoUpdate(BaseModel):
 
 class ForgeProgressPhotoContextResponse(BaseModel):
     weight_kg: Optional[float] = None
-    current_goal: Optional[str] = None
-    target_weight_kg: Optional[float] = None
     workout_names: list[str] = Field(default_factory=list)
 
 

@@ -82,8 +82,6 @@ export interface UserInfo {
   id: string;
   username: string;
   has_yazio: boolean;
-  current_goal: string | null;
-    target_weight: number | null;
   first_name: string | null;
   height_cm: number | null;
   language: 'de' | 'en';
@@ -96,14 +94,6 @@ export const saveYazioCredentials = (yazio_email: string, yazio_password: string
   apiRequest<{ message: string; has_yazio: boolean }>('/user/yazio', {
     method: 'POST',
     body: JSON.stringify({ yazio_email, yazio_password }),
-  });
-
-/* ── Goal endpoints ─────────────────────────────────────── */
-
-export const saveGoal = (current_goal: string, target_weight?: number | null) =>
-  apiRequest<{ message: string; current_goal: string; target_weight: number | null }>('/user/goal', {
-    method: 'POST',
-    body: JSON.stringify({ current_goal, target_weight: target_weight ?? null }),
   });
 
 export const updateLanguage = (language: 'de' | 'en') =>
@@ -1039,8 +1029,6 @@ export type ForgeProgressPhotoView = 'front' | 'side' | 'back' | 'other';
 
 export interface ForgeProgressPhotoContext {
   weight_kg: number | null;
-  current_goal: string | null;
-  target_weight_kg: number | null;
   workout_names: string[];
 }
 

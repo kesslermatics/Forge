@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { createMonthlyChallengeCheckin, saveGoal, saveYazioCredentials, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
+import { createMonthlyChallengeCheckin, saveYazioCredentials, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
 import type { UserInfo } from '../api/api';
-import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, Ruler, Target, UserRound, Loader2, Sparkles } from 'lucide-react';
+import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Sparkles } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
 const TEXT_DIM = 'rgba(242,236,226,0.45)';
-const GOALS = ['Muskelaufbau', 'Cut', 'Erhalt', 'Recomp'];
 
 type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 type Feedback = { type: 'success' | 'error'; text: string } | null;
@@ -20,8 +19,6 @@ export default function SettingsPage() {
     const { t, lang } = useLanguage();
     const [firstName, setFirstName] = useState('');
     const [heightCm, setHeightCm] = useState('');
-    const [goal, setGoal] = useState('Muskelaufbau');
-    const [targetWeight, setTargetWeight] = useState('');
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileMsg, setProfileMsg] = useState<Feedback>(null);
     const [creatingCheckin, setCreatingCheckin] = useState(false);
@@ -37,29 +34,20 @@ export default function SettingsPage() {
         if (!user) return;
         setFirstName(user.first_name ?? '');
         setHeightCm(user.height_cm?.toString() ?? '');
-        setGoal(user.current_goal ?? 'Muskelaufbau');
-        setTargetWeight(user.target_weight?.toString() ?? '');
     }, [user]);
-
-    const goalOptions = Array.from(new Set([...GOALS, goal])).filter(Boolean);
 
     const handleSaveProfile = async (event: React.FormEvent) => {
         event.preventDefault();
         const parsedHeight = heightCm.trim() ? Number(heightCm) : null;
-        const parsedTarget = targetWeight.trim() ? Number(targetWeight) : null;
-        if ((parsedHeight !== null && (!Number.isFinite(parsedHeight) || parsedHeight < 80 || parsedHeight > 280)) ||
-            (parsedTarget !== null && (!Number.isFinite(parsedTarget) || parsedTarget <= 0 || parsedTarget > 500))) {
-            setProfileMsg({ type: 'error', text: 'Bitte gib gültige Werte ein (Größe: 80–280 cm, Zielgewicht: 0–500 kg).' });
+        if (parsedHeight !== null && (!Number.isFinite(parsedHeight) || parsedHeight < 80 || parsedHeight > 280)) {
+            setProfileMsg({ type: 'error', text: 'Bitte gib eine gültige Größe zwischen 80 und 280 cm ein.' });
             return;
         }
         setProfileMsg(null); setSavingProfile(true);
         try {
-            await Promise.all([
-                updateUserProfile({ first_name: firstName.trim() || null, height_cm: parsedHeight }),
-                saveGoal(goal, parsedTarget),
-            ]);
+            await updateUserProfile({ first_name: firstName.trim() || null, height_cm: parsedHeight });
             await refreshUser();
-            setProfileMsg({ type: 'success', text: 'Profil und Ziele gespeichert.' });
+            setProfileMsg({ type: 'success', text: 'Profil gespeichert. Trainings- und Ernährungsziele kommen ausschließlich aus Yazio.' });
         } catch (caught: unknown) {
             setProfileMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Profil konnte nicht gespeichert werden.' });
         } finally { setSavingProfile(false); }
@@ -99,10 +87,9 @@ export default function SettingsPage() {
         <Card icon={<UserRound size={15} style={{ color: SAND }} />} title="Dein Profil">
             <form onSubmit={handleSaveProfile} className="space-y-3">
                 <div className="grid grid-cols-2 gap-3"><label className="text-[11px]" style={{ color: TEXT_DIM }}>Vorname<input value={firstName} onChange={(event) => setFirstName(event.target.value)} maxLength={100} placeholder="Wie sollen wir dich nennen?" className="input-forge mt-1 !px-3 !py-2.5 text-[13px]" /></label><label className="text-[11px]" style={{ color: TEXT_DIM }}>Größe (cm)<input type="number" inputMode="decimal" min="80" max="280" value={heightCm} onChange={(event) => setHeightCm(event.target.value)} placeholder="z. B. 182" className="input-forge mt-1 !px-3 !py-2.5 text-[13px]" /></label></div>
-                <div className="grid grid-cols-2 gap-3"><label className="text-[11px]" style={{ color: TEXT_DIM }}>Dein Ziel<select value={goal} onChange={(event) => setGoal(event.target.value)} className="input-forge mt-1 !px-3 !py-2.5 text-[13px]">{goalOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label className="text-[11px]" style={{ color: TEXT_DIM }}>Zielgewicht (kg)<input type="number" inputMode="decimal" min="1" max="500" step="0.1" value={targetWeight} onChange={(event) => setTargetWeight(event.target.value)} placeholder="Optional" className="input-forge mt-1 !px-3 !py-2.5 text-[13px]" /></label></div>
-                <p className="flex gap-1.5 text-[10px] leading-relaxed" style={{ color: TEXT_DIM }}><Ruler size={12} className="shrink-0 mt-0.5" />Größe und Ziel helfen dir, deinen Forge-Verlauf sauber einzuordnen. Dein Tagesgewicht bleibt weiterhin in der Gewichtshistorie.</p>
+                <p className="text-[10px] leading-relaxed" style={{ color: TEXT_DIM }}>Dein Trainings- und Ernährungsziel wird ausschließlich aus deinem verbundenen Yazio-Profil übernommen.</p>
                 <FeedMsg msg={profileMsg} />
-                <button type="submit" disabled={savingProfile} className="btn-forge w-full text-[14px]">{savingProfile ? <><Loader2 size={15} className="animate-spin" />Speichert…</> : <><Target size={15} />Profil speichern</>}</button>
+                <button type="submit" disabled={savingProfile} className="btn-forge w-full text-[14px]">{savingProfile ? <><Loader2 size={15} className="animate-spin" />Speichert…</> : <><UserRound size={15} />Profil speichern</>}</button>
             </form>
         </Card>
 
