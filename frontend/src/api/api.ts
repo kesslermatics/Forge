@@ -368,35 +368,16 @@ export interface ChatStreamEvent {
   text?: string;
   call?: number;
   max_calls?: number;
-  message?: ChatMessage;
+  message?: ChatMessage | string;
   conversation?: ChatConversation;
 }
 
-export const listChatConversations = () =>
-  apiRequest<ChatConversation[]>('/api/briefing/chat/conversations');
-
-export const createChatConversation = (title?: string) =>
+// A fresh, private conversation is created whenever the Coach page opens.
+// Deliberately no list, rename, or delete API is exposed: there is no chat history UI.
+export const createChatConversation = () =>
   apiRequest<ChatConversation>('/api/briefing/chat/conversations', {
     method: 'POST',
-    body: JSON.stringify(title ? { title } : {}),
-  });
-
-export const getChatConversation = (id: string) =>
-  apiRequest<ChatConversation>(`/api/briefing/chat/conversations/${id}`);
-
-export const renameChatConversation = (id: string, title: string) =>
-  apiRequest<ChatConversation>(`/api/briefing/chat/conversations/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ title }),
-  });
-
-export const deleteChatConversation = (id: string) =>
-  apiRequest<void>(`/api/briefing/chat/conversations/${id}`, { method: 'DELETE' });
-
-export const editChatMessage = (conversationId: string, messageId: string, message: string) =>
-  apiRequest<ChatConversation>(`/api/briefing/chat/conversations/${conversationId}/messages/${messageId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({}),
   });
 
 export const streamChatMessage = async (

@@ -578,22 +578,6 @@ async def get_weight_history(
 #  AI CHAT — conversational coaching
 # ════════════════════════════════════════════════════════
 
-class ChatConversationCreate(BaseModel):
-    title: str | None = Field(default=None, max_length=160)
-
-
-class ChatRename(BaseModel):
-    title: str = Field(min_length=1, max_length=160)
-
-    @field_validator("title")
-    @classmethod
-    def title_must_not_be_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Der Chat-Titel darf nicht leer sein.")
-        return value
-
-
 class ChatSendRequest(BaseModel):
     message: str = Field(min_length=1, max_length=16000)
     message_id: UUID | None = None
@@ -670,91 +654,14 @@ def _append_chat_message(
     return message
 
 
-@router.get("/chat/conversations")
-async def list_chat_conversations(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    conversations = db.query(ChatConversation).filter(
-        ChatConversation.user_id == current_user.id,
-    ).order_by(ChatConversation.updated_at.desc(), ChatConversation.created_at.desc()).limit(100).all()
-    return [_serialize_conversation(conversation, include_messages=False) for conversation in conversations]
-
-
 @router.post("/chat/conversations", status_code=status.HTTP_201_CREATED)
 async def create_chat_conversation(
-    body: ChatConversationCreate | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    title = (body.title.strip() if body and body.title else "Neuer Chat") or "Neuer Chat"
-    conversation = ChatConversation(user_id=current_user.id, title=title[:160])
+    """Start one new Coach conversation; previous chats are intentionally not exposed."""
+    conversation = ChatConversation(user_id=current_user.id, title="Coach Chat")
     db.add(conversation)
-    db.commit()
-    db.refresh(conversation)
-    return _serialize_conversation(conversation)
-
-
-@router.get("/chat/conversations/{conversation_id}")
-async def get_chat_conversation(
-    conversation_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    return _serialize_conversation(_owned_chat(db, current_user.id, conversation_id))
-
-
-@router.patch("/chat/conversations/{conversation_id}")
-async def rename_chat_conversation(
-    conversation_id: UUID,
-    body: ChatRename,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    conversation = _owned_chat(db, current_user.id, conversation_id)
-    conversation.title = body.title.strip()[:160]
-    db.commit()
-    db.refresh(conversation)
-    return _serialize_conversation(conversation, include_messages=False)
-
-
-@router.delete("/chat/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_chat_conversation(
-    conversation_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    conversation = _owned_chat(db, current_user.id, conversation_id)
-    db.delete(conversation)
-    db.commit()
-
-
-@router.patch("/chat/conversations/{conversation_id}/messages/{message_id}")
-async def edit_chat_message(
-    conversation_id: UUID,
-    message_id: UUID,
-    body: ChatSendRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    conversation = _owned_chat(db, current_user.id, conversation_id)
-    target = db.query(ChatMessage).filter(
-        ChatMessage.id == message_id,
-        ChatMessage.conversation_id == conversation.id,
-        ChatMessage.role == "user",
-    ).first()
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User-Nachricht nicht gefunden.")
-    db.query(ChatMessage).filter(
-        ChatMessage.conversation_id == conversation.id,
-        ChatMessage.sequence > target.sequence,
-    ).delete(synchronize_session=False)
-    target.content = body.message.strip()
-    target.status = "completed"
-    conversation.next_sequence = target.sequence + 1
-    conversation.summary = None
-    conversation.summary_until_sequence = None
-    conversation.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(conversation)
     return _serialize_conversation(conversation)
@@ -797,8 +704,6 @@ async def stream_chat_message(
             ChatMessage.status == "completed",
         ).order_by(ChatMessage.sequence.asc()).all()
         user_message = _append_chat_message(conversation, "user", body.message.strip())
-    if conversation.title == "Neuer Chat":
-        conversation.title = body.message.strip().replace("\n", " ")[:70] or "Neuer Chat"
     db.commit()
 
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
