@@ -71,6 +71,7 @@ from app.services.ai_service import (
     generate_forge_session_start_coaching,
 )
 from app.services.yazio_service import resolve_yazio_goal_context
+from app.services.google_health_service import export_completed_session
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
 
@@ -1426,6 +1427,9 @@ async def complete_session(session_id: UUID, current_user: User = Depends(get_cu
         _refresh_native_coach_targets(db, current_user.id, plan)
     db.commit()
     db.refresh(session)
+    # The local workout must stay completed even if Google is unavailable.
+    # Export state and any error are persisted by the integration service.
+    await export_completed_session(db, session)
     return _serialize_session(session)
 
 

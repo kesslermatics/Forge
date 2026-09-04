@@ -82,6 +82,7 @@ export interface UserInfo {
   id: string;
   username: string;
   has_yazio: boolean;
+  has_google_health: boolean;
   first_name: string | null;
   height_cm: number | null;
   language: 'de' | 'en';
@@ -107,6 +108,21 @@ export const updateUserProfile = (data: { first_name?: string | null; height_cm?
     method: 'PATCH',
     body: JSON.stringify(data),
   });
+
+export interface GoogleHealthStatus {
+  configured: boolean;
+  connected: boolean;
+  status: 'not_connected' | 'connected' | 'reauthorization_required' | string;
+  last_error: string | null;
+  last_exported_at: string | null;
+  failed_exports: number;
+}
+
+export const getGoogleHealthStatus = () => apiRequest<GoogleHealthStatus>('/user/google-health');
+export const startGoogleHealthConnection = () =>
+  apiRequest<{ authorization_url: string }>('/user/google-health/connect', { method: 'POST' });
+export const disconnectGoogleHealth = () =>
+  apiRequest<GoogleHealthStatus>('/user/google-health', { method: 'DELETE' });
 
 /* ── Briefing endpoints ─────────────────────────────────── */
 

@@ -26,6 +26,7 @@ class UserResponse(BaseModel):
     id: UUID
     username: str
     has_yazio: bool = False
+    has_google_health: bool = False
     first_name: Optional[str] = None
     height_cm: Optional[float] = None
     language: str = "de"
@@ -527,3 +528,18 @@ class MonthlyChallengeCycleResponse(BaseModel):
 class MonthlyChallengeCheckinResponse(BaseModel):
     date: date
     checkin: dict
+
+
+# ============ Google Health API ============
+
+class GoogleHealthConnectResponse(BaseModel):
+    authorization_url: str
+
+
+class GoogleHealthStatusResponse(BaseModel):
+    configured: bool
+    connected: bool
+    status: str
+    last_error: Optional[str] = None
+    last_exported_at: Optional[Any] = None
+    failed_exports: int = 0

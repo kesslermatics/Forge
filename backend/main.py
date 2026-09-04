@@ -24,20 +24,31 @@ logging.basicConfig(
 # Create database tables (new tables only — does not add columns to existing tables)
 Base.metadata.create_all(bind=engine)
 
-# Auto-migrate: add any missing columns to existing tables
+# Auto-migrate: add any missing legacy columns and the complete Google Health schema on every deploy.
+# New ORM tables are also covered by create_all above; the explicit Google Health
+# statements keep production constraints and indexes aligned without manual shell work.
 from sqlalchemy import text as _sql_text
+from migrate_add_google_health import STATEMENTS as _google_health_migrations
+
 with engine.connect() as _conn:
-    _migrations = [
+    _legacy_migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS training_plan JSON;",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION;",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS agent_details JSON;",
         # weight_entries and chat tables are created by create_all above (new tables)
     ]
-    for stmt in _migrations:
+    for stmt in _legacy_migrations:
         try:
             _conn.execute(_sql_text(stmt))
         except Exception:
-            pass  # column already exists or DB doesn't support IF NOT EXISTS
+            pass  # Legacy migration compatibility for already-deployed databases.
+    _conn.commit()
+
+# Google Health is a new production capability. Do not hide a failed schema
+# migration: failing startup is safer than serving requests with no token/export tables.
+with engine.connect() as _conn:
+    for stmt in _google_health_migrations:
+        _conn.execute(_sql_text(stmt))
     _conn.commit()
 
 

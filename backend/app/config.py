@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # Google Gemini
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
 
+    # Google Health API OAuth (optional until the integration is enabled in Google Cloud)
+    google_health_client_id: str = os.getenv("GOOGLE_HEALTH_CLIENT_ID", "")
+    google_health_client_secret: str = os.getenv("GOOGLE_HEALTH_CLIENT_SECRET", "")
+    google_health_redirect_uri: str = os.getenv("GOOGLE_HEALTH_REDIRECT_URI", "")
+    frontend_url: str = os.getenv("FRONTEND_URL", "https://coach.kesslermatics.com")
+
     # Private Forge progress-photo storage. In production this must be a mounted persistent volume.
     # Keep empty by default so uploads never silently use ephemeral container storage.
     photo_storage_dir: str = os.getenv("PHOTO_STORAGE_DIR", "")

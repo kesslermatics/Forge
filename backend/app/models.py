@@ -39,6 +39,9 @@ class User(Base):
     monthly_challenge_cycles = relationship("MonthlyChallengeCycle", back_populates="user", cascade="all, delete-orphan")
     monthly_challenge_checkins = relationship("MonthlyChallengeCheckin", back_populates="user", cascade="all, delete-orphan")
     chat_conversations = relationship("ChatConversation", back_populates="user", cascade="all, delete-orphan")
+    google_health_connection = relationship("GoogleHealthConnection", back_populates="user", cascade="all, delete-orphan", uselist=False)
+    google_health_exports = relationship("GoogleHealthWorkoutExport", back_populates="user", cascade="all, delete-orphan")
+    google_health_oauth_states = relationship("GoogleHealthOAuthState", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
@@ -514,3 +517,57 @@ class ForgeProgressPhoto(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     user = relationship("User", back_populates="forge_progress_photos")
+
+
+class GoogleHealthConnection(Base):
+    """Encrypted OAuth credentials and connection state for one Google Health account."""
+
+    __tablename__ = "google_health_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    refresh_token = Column(String(4096), nullable=False)
+    access_token = Column(String(4096), nullable=True)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    scope = Column(String(2000), nullable=False)
+    status = Column(String(32), nullable=False, server_default="connected")
+    last_error = Column(String(1000), nullable=True)
+    connected_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="google_health_connection")
+
+
+class GoogleHealthWorkoutExport(Base):
+    """One durable, idempotent export attempt per completed Forge session."""
+
+    __tablename__ = "google_health_workout_exports"
+    __table_args__ = (UniqueConstraint("session_id", name="uq_google_health_export_session"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("forge_workout_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(32), nullable=False, server_default="pending")
+    external_data_point_name = Column(String(512), nullable=True)
+    last_error = Column(String(1000), nullable=True)
+    attempt_count = Column(Integer, nullable=False, server_default="0")
+    attempted_at = Column(DateTime(timezone=True), nullable=True)
+    exported_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="google_health_exports")
+    session = relationship("ForgeWorkoutSession")
+
+
+class GoogleHealthOAuthState(Base):
+    """Short-lived, single-use OAuth CSRF state bound to one local account."""
+
+    __tablename__ = "google_health_oauth_states"
+
+    state = Column(String(128), primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="google_health_oauth_states")
