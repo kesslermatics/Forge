@@ -284,6 +284,8 @@ class ForgeTrainingPlan(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(String(500), nullable=True)
+    plan_type = Column(String(16), nullable=False, server_default="workout")
+    default_duration_minutes = Column(Integer, nullable=True)
     position = Column(Integer, nullable=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

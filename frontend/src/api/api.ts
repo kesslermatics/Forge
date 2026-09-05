@@ -802,10 +802,14 @@ export interface ForgePlanExerciseInput {
   sets: ForgePlanSetInput[];
 }
 
+export type ForgePlanType = 'workout' | 'course';
+
 export interface ForgePlan {
   id: string;
   name: string;
   description: string | null;
+  plan_type: ForgePlanType;
+  default_duration_minutes: number | null;
   position: number;
   exercises: ForgePlanExercise[];
 }
@@ -813,6 +817,8 @@ export interface ForgePlan {
 export interface ForgePlanInput {
   name: string;
   description?: string | null;
+  plan_type: ForgePlanType;
+  default_duration_minutes?: number | null;
   position: number;
   exercises: ForgePlanExerciseInput[];
 }
@@ -1003,6 +1009,8 @@ export const getForgeToday = () => apiRequest<ForgeToday>('/api/forge/today');
 
 export const startForgeSession = (plan_id: string, program_id?: string | null) =>
   apiRequest<ForgeSession>('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ plan_id, program_id: program_id ?? null }) });
+export const completeForgeCourse = (planId: string, program_id?: string | null) =>
+  apiRequest<ForgeSession>(`/api/forge/plans/${planId}/complete-course`, { method: 'POST', body: JSON.stringify({ program_id: program_id ?? null }) });
 export const getActiveForgeSession = () => apiRequest<ForgeSession | null>('/api/forge/sessions/active');
 export const listForgeSessions = (limit = 50, offset = 0) =>
   apiRequest<ForgeSessionSummary[]>(`/api/forge/sessions?limit=${limit}&offset=${offset}`);

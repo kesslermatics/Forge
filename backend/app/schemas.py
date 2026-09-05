@@ -256,9 +256,14 @@ class ForgePlanExerciseResponse(BaseModel):
         from_attributes = True
 
 
+ForgePlanType = Literal["workout", "course"]
+
+
 class ForgePlanInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=500)
+    plan_type: ForgePlanType = "workout"
+    default_duration_minutes: Optional[int] = Field(None, ge=1, le=720)
     position: int = Field(0, ge=0, le=100)
     exercises: list[ForgePlanExerciseInput] = Field(default_factory=list, max_length=30)
 
@@ -267,6 +272,8 @@ class ForgePlanResponse(BaseModel):
     id: UUID
     name: str
     description: Optional[str] = None
+    plan_type: ForgePlanType
+    default_duration_minutes: Optional[int] = None
     position: int
     exercises: list[ForgePlanExerciseResponse]
 
@@ -442,6 +449,10 @@ class ForgeSessionSummaryResponse(BaseModel):
 
 class ForgeStartSessionRequest(BaseModel):
     plan_id: UUID
+    program_id: Optional[UUID] = None
+
+
+class ForgeCompleteCourseRequest(BaseModel):
     program_id: Optional[UUID] = None
 
 

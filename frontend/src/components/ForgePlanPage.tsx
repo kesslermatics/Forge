@@ -75,6 +75,8 @@ const parseDecimalInput = (value: string): number | null => {
 const toPlanInput = (plan: ForgePlan): ForgePlanInput => ({
   name: plan.name,
   description: plan.description,
+  plan_type: plan.plan_type,
+  default_duration_minutes: plan.default_duration_minutes,
   position: plan.position,
   exercises: plan.exercises.map((entry) => ({
     exercise_id: entry.exercise.id,
@@ -148,7 +150,7 @@ export default function ForgePlanPage() {
   const startPlan = (plan?: ForgePlan) => {
     setError(null); setNotice(null); setEditingPlanId(plan?.id ?? null);
     setPlanDraft(plan ? toPlanInput(plan) : {
-      name: '', description: '', position: plans.length, exercises: [],
+      name: '', description: '', plan_type: 'workout', default_duration_minutes: null, position: plans.length, exercises: [],
     });
     setPlanEditor(true);
   };
@@ -238,6 +240,7 @@ export default function ForgePlanPage() {
 
   const savePlan = async () => {
     if (!planDraft || !planDraft.name.trim()) { setError('Gib dem Trainingsplan einen Namen.'); return; }
+    if (planDraft.plan_type === 'course' && !planDraft.default_duration_minutes) { setError('Gib für den Kurs eine Standarddauer an.'); return; }
     setSaving(true); setError(null);
     try {
       const saved = editingPlanId
@@ -483,12 +486,13 @@ function AiPrompt({ placeholder, value, onChange, onGenerate, generating }: { pl
 }
 
 function PlanView({ plan, saving, onEdit, onRefresh, onDelete }: { plan: ForgePlan; saving: boolean; onEdit: () => void; onRefresh: () => void; onDelete: () => void }) {
+  const isCourse = plan.plan_type === 'course';
   return <div className="space-y-3">
     <div className="card-forge p-5" style={{ borderColor: `${SAND}20` }}>
-      <div className="flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{plan.name}</h2>{plan.description && <p className="text-[12px] mt-1" style={{ color: DIM }}>{plan.description}</p>}</div><div className="flex gap-2"><button onClick={onRefresh} disabled={saving} className="tap text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>Forge</button><button onClick={onEdit} className="tap cursor-pointer" style={{ color: SAND }}><Pencil size={16} /></button><button onClick={onDelete} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button></div></div>
-      <p className="text-[11px] mt-3" style={{ color: DIM }}>{plan.exercises.length} Übungen · unabhängig von Hevy gespeichert</p>
+      <div className="flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{plan.name}</h2>{plan.description && <p className="text-[12px] mt-1" style={{ color: DIM }}>{plan.description}</p>}</div><div className="flex gap-2">{!isCourse && <button onClick={onRefresh} disabled={saving} className="tap text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>Forge</button>}<button onClick={onEdit} className="tap cursor-pointer" style={{ color: SAND }}><Pencil size={16} /></button><button onClick={onDelete} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button></div></div>
+      <p className="text-[11px] mt-3 flex items-center gap-1.5" style={{ color: DIM }}>{isCourse ? <><Clock3 size={13} style={{ color: SAND }} />Kurs · {plan.default_duration_minutes} Min. Standarddauer · ohne Tracking</> : `${plan.exercises.length} Übungen · unabhängig von Hevy gespeichert`}</p>
     </div>
-    {plan.exercises.map((entry, index) => <div key={entry.id} className="card-forge overflow-hidden">
+    {!isCourse && plan.exercises.map((entry, index) => <div key={entry.id} className="card-forge overflow-hidden">
       <div className="p-4 flex items-start justify-between gap-3"><div><p className="text-[10px] uppercase tracking-widest" style={{ color: SAND }}>Übung {index + 1}</p><h3 className="font-semibold text-[15px] mt-1" style={{ color: TEXT }}>{entry.exercise.name}</h3><p className="text-[11px] mt-1" style={{ color: DIM }}>{entry.exercise.primary_muscle_group} · {entry.machine_profile ? `Maschine · ${entry.machine_profile.name}` : equipmentLabel(entry.exercise.equipment)}</p></div><Dumbbell size={18} style={{ color: 'rgba(232,197,138,0.62)' }} /></div>
       <SetRows sets={entry.sets} />
       {entry.notes && <p className="px-4 py-3 text-[11px] border-t" style={{ color: DIM, borderColor: 'rgba(255,247,235,0.06)' }}>{entry.notes}</p>}
@@ -557,28 +561,31 @@ function PlanEditor({ draft, exercises, saving, onChange, onToggleExercise, onUp
   return <div className="card-forge p-4 space-y-4">
     <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold" style={{ color: TEXT }}>Plan bearbeiten</h2><p className="text-[11px] mt-1" style={{ color: DIM }}>Ordne Übungen und Sätze, lege Warm-ups an und prüfe deine letzte Forge-Leistung.</p></div><button onClick={onCancel} className="shrink-0 text-[12px] cursor-pointer" style={{ color: DIM }}>Abbrechen</button></div>
     <div className="grid gap-2 sm:grid-cols-[1.1fr_0.9fr]"><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} placeholder="z. B. Pull A" className="input-forge min-w-0" /><input value={draft.description ?? ''} onChange={(event) => onChange({ ...draft, description: event.target.value })} placeholder="Optionaler Fokus" className="input-forge min-w-0" /></div>
-    <div><p className="text-[11px] mb-2" style={{ color: DIM }}>Übungen auswählen</p><div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">{exercises.map((exercise) => { const active = draft.exercises.some((entry) => entry.exercise_id === exercise.id); return <button key={exercise.id} onClick={() => onToggleExercise(exercise)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: active ? SAND : DIM, background: active ? 'rgba(232,197,138,0.13)' : 'rgba(255,247,235,0.04)', border: `1px solid ${active ? SAND : BORDER}` }}>{active ? '✓ ' : ''}{exercise.name}</button>; })}</div></div>
-    <div className="space-y-3">{draft.exercises.map((entry, exerciseIndex) => {
-      const exercise = exercises.find((item) => item.id === entry.exercise_id);
-      if (!exercise) return null;
-      return <section key={entry.exercise_id} className="overflow-hidden rounded-2xl" style={{ background: 'rgba(255,247,235,0.035)', border: `1px solid ${BORDER}` }}>
-        <div className="flex items-center gap-2 px-3 py-3 border-b" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold" style={{ color: '#16130f', background: SAND }}>{exerciseIndex + 1}</span>
-          <div className="min-w-0 flex-1"><p className="truncate text-[13px] font-medium" style={{ color: TEXT }}>{exercise.name}</p>{exercise.machine_profiles.length > 0 && <select aria-label={`${exercise.name}: Maschinenprofil`} value={entry.machine_profile_id ?? ''} onChange={(event) => { const next = structuredClone(draft); next.exercises[exerciseIndex].machine_profile_id = event.target.value || null; onChange(next); }} className="mt-0.5 max-w-full bg-transparent text-[10px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Kein Maschinenprofil</option>{exercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>}</div>
-          <div className="flex shrink-0 items-center gap-0.5"><button onClick={() => onMoveExercise(exerciseIndex, -1)} disabled={exerciseIndex === 0} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${exercise.name} nach vorne`} style={{ color: SAND }}><ChevronUp size={15} /></button><button onClick={() => onMoveExercise(exerciseIndex, 1)} disabled={exerciseIndex === draft.exercises.length - 1} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${exercise.name} nach hinten`} style={{ color: SAND }}><ChevronDown size={15} /></button></div>
-        </div>
-        <div className="p-2 space-y-2">{entry.sets.map((set, setIndex) => {
-          const workingNumber = entry.sets.slice(0, setIndex + 1).filter((item) => item.set_type === 'working').length;
-          const label = set.set_type === 'warmup' ? 'Warm-up' : `${workingNumber}. Arbeitssatz`;
-          return <div key={setIndex} className="rounded-xl p-2.5" style={{ background: set.set_type === 'warmup' ? 'rgba(232,197,138,0.075)' : 'rgba(255,247,235,0.025)' }}>
-            <div className="flex items-center gap-2"><select aria-label={`${label}: Satztyp`} value={set.set_type} onChange={(event) => onUpdateSet(exerciseIndex, setIndex, 'set_type', event.target.value as ForgePlanSetInput['set_type'])} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium outline-none cursor-pointer" style={{ color: set.set_type === 'warmup' ? SAND : TEXT }}><option value="warmup">Warm-up</option><option value="working">Arbeitssatz</option></select><div className="flex shrink-0 items-center gap-0.5"><button onClick={() => onMoveSet(exerciseIndex, setIndex, -1)} disabled={setIndex === 0} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${label} nach vorne`} style={{ color: SAND }}><ChevronUp size={14} /></button><button onClick={() => onMoveSet(exerciseIndex, setIndex, 1)} disabled={setIndex === entry.sets.length - 1} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${label} nach hinten`} style={{ color: SAND }}><ChevronDown size={14} /></button><button onClick={() => removeSet(exerciseIndex, setIndex)} className="tap ml-1 p-1 cursor-pointer" aria-label={`${label} löschen`} style={{ color: DIM }}><Trash2 size={14} /></button></div></div>
-            <p className="mt-1.5 text-[10px]" style={{ color: DIM }}>Letztes Forge-Training: <span className="tabular-nums" style={{ color: set.previous_weight_kg != null || set.previous_reps != null ? TEXT : DIM }}>{formatSet(set.previous_weight_kg ?? null, set.previous_reps ?? null)}</span></p>
-            <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: '1fr 1fr' }}><PlanWeightInput value={set.current_weight_kg} onChange={(value) => onUpdateSet(exerciseIndex, setIndex, 'current_weight_kg', value)} /><input type="number" min="0" step="1" value={set.current_reps ?? ''} inputMode="numeric" onChange={(event) => { const value = event.target.value === '' ? null : Number(event.target.value); if (value == null || (Number.isFinite(value) && value >= 0)) onUpdateSet(exerciseIndex, setIndex, 'current_reps', value); }} placeholder="Wdh." aria-label={`${label}: geplante Wiederholungen`} className="input-forge min-w-0 !px-2.5 !py-2 text-center text-[11px]" /></div>
-          </div>;
-        })}</div>
-        <div className="flex gap-3 border-t px-3 py-2.5" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><button onClick={() => addSet(exerciseIndex, 'warmup')} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: DIM }}><Plus size={13} />Warm-up</button><button onClick={() => addSet(exerciseIndex, 'working')} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={13} />Arbeitssatz</button></div>
-      </section>;
-    })}</div>
+    <div><p className="text-[11px] mb-2" style={{ color: DIM }}>Art der Einheit</p><div className="grid grid-cols-2 gap-2"><button onClick={() => onChange({ ...draft, plan_type: 'workout', default_duration_minutes: null })} className="tap rounded-xl py-2.5 text-[12px] cursor-pointer" style={{ color: draft.plan_type === 'workout' ? SAND : DIM, border: `1px solid ${draft.plan_type === 'workout' ? SAND : BORDER}`, background: draft.plan_type === 'workout' ? 'rgba(232,197,138,0.1)' : 'transparent' }}><Dumbbell size={14} className="inline mr-1.5" />Workout</button><button onClick={() => onChange({ ...draft, plan_type: 'course', default_duration_minutes: draft.default_duration_minutes ?? 60, exercises: [] })} className="tap rounded-xl py-2.5 text-[12px] cursor-pointer" style={{ color: draft.plan_type === 'course' ? SAND : DIM, border: `1px solid ${draft.plan_type === 'course' ? SAND : BORDER}`, background: draft.plan_type === 'course' ? 'rgba(232,197,138,0.1)' : 'transparent' }}><Clock3 size={14} className="inline mr-1.5" />Kurs</button></div></div>
+    {draft.plan_type === 'course' ? <div className="rounded-xl p-3" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${BORDER}` }}><label className="block text-[11px] mb-2" style={{ color: DIM }}>Standarddauer in Minuten</label><input type="number" min="1" max="720" value={draft.default_duration_minutes ?? ''} onChange={(event) => { const value = event.target.value === '' ? null : Number(event.target.value); if (value == null || (Number.isInteger(value) && value >= 1 && value <= 720)) onChange({ ...draft, default_duration_minutes: value, exercises: [] }); }} placeholder="z. B. 60" className="input-forge w-full" /><p className="text-[10px] mt-2" style={{ color: DIM }}>Der Kurs wird im Dashboard direkt als erledigt markiert – ohne Trainings- oder Satztracking.</p></div> : <>
+      <div><p className="text-[11px] mb-2" style={{ color: DIM }}>Übungen auswählen</p><div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">{exercises.map((exercise) => { const active = draft.exercises.some((entry) => entry.exercise_id === exercise.id); return <button key={exercise.id} onClick={() => onToggleExercise(exercise)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: active ? SAND : DIM, background: active ? 'rgba(232,197,138,0.13)' : 'rgba(255,247,235,0.04)', border: `1px solid ${active ? SAND : BORDER}` }}>{active ? '✓ ' : ''}{exercise.name}</button>; })}</div></div>
+      <div className="space-y-3">{draft.exercises.map((entry, exerciseIndex) => {
+        const exercise = exercises.find((item) => item.id === entry.exercise_id);
+        if (!exercise) return null;
+        return <section key={entry.exercise_id} className="overflow-hidden rounded-2xl" style={{ background: 'rgba(255,247,235,0.035)', border: `1px solid ${BORDER}` }}>
+          <div className="flex items-center gap-2 px-3 py-3 border-b" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold" style={{ color: '#16130f', background: SAND }}>{exerciseIndex + 1}</span>
+            <div className="min-w-0 flex-1"><p className="truncate text-[13px] font-medium" style={{ color: TEXT }}>{exercise.name}</p>{exercise.machine_profiles.length > 0 && <select aria-label={`${exercise.name}: Maschinenprofil`} value={entry.machine_profile_id ?? ''} onChange={(event) => { const next = structuredClone(draft); next.exercises[exerciseIndex].machine_profile_id = event.target.value || null; onChange(next); }} className="mt-0.5 max-w-full bg-transparent text-[10px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Kein Maschinenprofil</option>{exercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>}</div>
+            <div className="flex shrink-0 items-center gap-0.5"><button onClick={() => onMoveExercise(exerciseIndex, -1)} disabled={exerciseIndex === 0} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${exercise.name} nach vorne`} style={{ color: SAND }}><ChevronUp size={15} /></button><button onClick={() => onMoveExercise(exerciseIndex, 1)} disabled={exerciseIndex === draft.exercises.length - 1} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${exercise.name} nach hinten`} style={{ color: SAND }}><ChevronDown size={15} /></button></div>
+          </div>
+          <div className="p-2 space-y-2">{entry.sets.map((set, setIndex) => {
+            const workingNumber = entry.sets.slice(0, setIndex + 1).filter((item) => item.set_type === 'working').length;
+            const label = set.set_type === 'warmup' ? 'Warm-up' : `${workingNumber}. Arbeitssatz`;
+            return <div key={setIndex} className="rounded-xl p-2.5" style={{ background: set.set_type === 'warmup' ? 'rgba(232,197,138,0.075)' : 'rgba(255,247,235,0.025)' }}>
+              <div className="flex items-center gap-2"><select aria-label={`${label}: Satztyp`} value={set.set_type} onChange={(event) => onUpdateSet(exerciseIndex, setIndex, 'set_type', event.target.value as ForgePlanSetInput['set_type'])} className="min-w-0 flex-1 bg-transparent text-[11px] font-medium outline-none cursor-pointer" style={{ color: set.set_type === 'warmup' ? SAND : TEXT }}><option value="warmup">Warm-up</option><option value="working">Arbeitssatz</option></select><div className="flex shrink-0 items-center gap-0.5"><button onClick={() => onMoveSet(exerciseIndex, setIndex, -1)} disabled={setIndex === 0} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${label} nach vorne`} style={{ color: SAND }}><ChevronUp size={14} /></button><button onClick={() => onMoveSet(exerciseIndex, setIndex, 1)} disabled={setIndex === entry.sets.length - 1} className="tap p-1 cursor-pointer disabled:opacity-25" aria-label={`${label} nach hinten`} style={{ color: SAND }}><ChevronDown size={14} /></button><button onClick={() => removeSet(exerciseIndex, setIndex)} className="tap ml-1 p-1 cursor-pointer" aria-label={`${label} löschen`} style={{ color: DIM }}><Trash2 size={14} /></button></div></div>
+              <p className="mt-1.5 text-[10px]" style={{ color: DIM }}>Letztes Forge-Training: <span className="tabular-nums" style={{ color: set.previous_weight_kg != null || set.previous_reps != null ? TEXT : DIM }}>{formatSet(set.previous_weight_kg ?? null, set.previous_reps ?? null)}</span></p>
+              <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: '1fr 1fr' }}><PlanWeightInput value={set.current_weight_kg} onChange={(value) => onUpdateSet(exerciseIndex, setIndex, 'current_weight_kg', value)} /><input type="number" min="0" step="1" value={set.current_reps ?? ''} inputMode="numeric" onChange={(event) => { const value = event.target.value === '' ? null : Number(event.target.value); if (value == null || (Number.isFinite(value) && value >= 0)) onUpdateSet(exerciseIndex, setIndex, 'current_reps', value); }} placeholder="Wdh." aria-label={`${label}: geplante Wiederholungen`} className="input-forge min-w-0 !px-2.5 !py-2 text-center text-[11px]" /></div>
+            </div>;
+          })}</div>
+          <div className="flex gap-3 border-t px-3 py-2.5" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><button onClick={() => addSet(exerciseIndex, 'warmup')} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: DIM }}><Plus size={13} />Warm-up</button><button onClick={() => addSet(exerciseIndex, 'working')} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={13} />Arbeitssatz</button></div>
+        </section>;
+      })}</div>
+    </>}
     <button onClick={onSave} disabled={saving} className="btn-forge w-full flex justify-center items-center gap-2">{saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}Plan speichern</button>
   </div>;
 }

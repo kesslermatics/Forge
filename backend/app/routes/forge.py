@@ -1,5 +1,5 @@
 """Native Forge exercise library, plans, and explicit-save AI drafts."""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from math import isfinite
 from uuid import UUID, uuid4
 
@@ -37,6 +37,7 @@ from app.schemas import (
     ForgePlanDraftRequest,
     ForgePlanInput,
     ForgePlanResponse,
+    ForgeCompleteCourseRequest,
     ForgeProgressPhotoListResponse,
     ForgeProgressPhotoResponse,
     ForgeProgressPhotoUpdate,
@@ -170,6 +171,8 @@ def _serialize_plan(plan: ForgeTrainingPlan) -> dict:
         "id": plan.id,
         "name": plan.name,
         "description": plan.description,
+        "plan_type": plan.plan_type,
+        "default_duration_minutes": plan.default_duration_minutes,
         "position": plan.position,
         "exercises": [
             {
@@ -246,6 +249,16 @@ def _owned_exercises(db: Session, user_id: UUID, exercise_ids: list[UUID]) -> di
     if len(by_id) != len(set(exercise_ids)):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more exercises do not belong to you.")
     return by_id
+
+
+def _validate_plan_input(data: ForgePlanInput) -> None:
+    if data.plan_type == "course":
+        if data.exercises:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Courses cannot contain exercises.")
+        if data.default_duration_minutes is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Courses require a default duration.")
+    elif data.default_duration_minutes is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only courses can have a default duration.")
 
 
 def _replace_plan_exercises(db: Session, plan: ForgeTrainingPlan, plan_input: ForgePlanInput, user_id: UUID) -> None:
@@ -434,7 +447,15 @@ async def create_plan(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    plan = ForgeTrainingPlan(user_id=current_user.id, name=data.name.strip(), description=data.description, position=data.position)
+    _validate_plan_input(data)
+    plan = ForgeTrainingPlan(
+        user_id=current_user.id,
+        name=data.name.strip(),
+        description=data.description,
+        plan_type=data.plan_type,
+        default_duration_minutes=data.default_duration_minutes,
+        position=data.position,
+    )
     db.add(plan)
     db.flush()
     _replace_plan_exercises(db, plan, data, current_user.id)
@@ -453,8 +474,11 @@ async def update_plan(
     plan = db.query(ForgeTrainingPlan).filter(ForgeTrainingPlan.id == plan_id, ForgeTrainingPlan.user_id == current_user.id).first()
     if plan is None:
         raise _not_found("Training plan not found")
+    _validate_plan_input(data)
     plan.name = data.name.strip()
     plan.description = data.description
+    plan.plan_type = data.plan_type
+    plan.default_duration_minutes = data.default_duration_minutes
     plan.position = data.position
     _replace_plan_exercises(db, plan, data, current_user.id)
     db.commit()
@@ -985,6 +1009,8 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
         return _serialize_session(active_session)
 
     plan = _owned_plan(db, current_user.id, data.plan_id)
+    if plan.plan_type == "course":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Courses are completed directly from the dashboard.")
     program = _owned_program(db, current_user.id, data.program_id) if data.program_id else None
     if program is not None and not any(link.plan_id == plan.id for link in program.routines):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This routine is not part of the selected program.")
@@ -1411,25 +1437,71 @@ async def delete_session_exercise(session_id: UUID, session_exercise_id: UUID, c
     return _serialize_session(session)
 
 
-@router.post("/sessions/{session_id}/complete", response_model=ForgeSessionResponse)
-async def complete_session(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    session = _owned_session(db, current_user.id, session_id)
+async def _complete_session(db: Session, user: User, session: ForgeWorkoutSession, *, refresh_coach_targets: bool = True) -> ForgeWorkoutSession:
+    """Complete a session and run shared program/export side effects exactly once."""
     if session.status == "completed":
-        return _serialize_session(session)
+        return session
     session.status = "completed"
     session.completed_at = datetime.now(timezone.utc)
     if session.program and session.program.mode == "rotation" and session.program.routines:
         current = session.program.routines[session.program.rotation_cursor % len(session.program.routines)]
         if current.plan_id == session.source_plan_id:
             session.program.rotation_cursor = (session.program.rotation_cursor + 1) % len(session.program.routines)
-    # A just-completed profile contributes to every plan that selects the same profile.
-    for plan in db.query(ForgeTrainingPlan).filter(ForgeTrainingPlan.user_id == current_user.id).all():
-        _refresh_native_coach_targets(db, current_user.id, plan)
+    if refresh_coach_targets:
+        for plan in db.query(ForgeTrainingPlan).filter(
+            ForgeTrainingPlan.user_id == user.id,
+            ForgeTrainingPlan.plan_type == "workout",
+        ).all():
+            _refresh_native_coach_targets(db, user.id, plan)
     db.commit()
     db.refresh(session)
     # The local workout must stay completed even if Google is unavailable.
     # Export state and any error are persisted by the integration service.
     await export_completed_session(db, session)
+    return session
+
+
+@router.post("/plans/{plan_id}/complete-course", response_model=ForgeSessionResponse, status_code=status.HTTP_201_CREATED)
+async def complete_course(
+    plan_id: UUID,
+    data: ForgeCompleteCourseRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Record a course immediately without opening a live exercise-tracking session."""
+    active_session = db.query(ForgeWorkoutSession).filter(
+        ForgeWorkoutSession.user_id == current_user.id,
+        ForgeWorkoutSession.status == "active",
+    ).first()
+    if active_session is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Complete or discard your active session before completing a course.")
+
+    plan = _owned_plan(db, current_user.id, plan_id)
+    if plan.plan_type != "course" or plan.default_duration_minutes is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This routine is not a course with a default duration.")
+    program = _owned_program(db, current_user.id, data.program_id) if data.program_id else None
+    if program is not None and not any(link.plan_id == plan.id for link in program.routines):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This routine is not part of the selected program.")
+
+    completed_at = datetime.now(timezone.utc)
+    session = ForgeWorkoutSession(
+        user_id=current_user.id,
+        program_id=program.id if program else None,
+        source_plan_id=plan.id,
+        name=plan.name,
+        status="active",
+        started_at=completed_at - timedelta(minutes=plan.default_duration_minutes),
+    )
+    db.add(session)
+    db.flush()
+    await _complete_session(db, current_user, session, refresh_coach_targets=False)
+    return _serialize_session(session)
+
+
+@router.post("/sessions/{session_id}/complete", response_model=ForgeSessionResponse)
+async def complete_session(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    session = _owned_session(db, current_user.id, session_id)
+    session = await _complete_session(db, current_user, session)
     return _serialize_session(session)
 
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
-    getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession, deleteForgeSession,
+    getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
 } from '../api/api';
 import type {
     UserInfo, Briefing, WeatherData,
@@ -162,6 +162,19 @@ export default function Dashboard() {
         } finally { setStartingSession(false); }
     };
 
+    const handleCompleteForgeCourse = async () => {
+        if (!homeRoutine || homeRoutine.plan_type !== 'course' || startingSession) return;
+        setStartingSession(true); setForgeError(null);
+        try {
+            await completeForgeCourse(homeRoutine.id, forgeToday?.program?.id);
+            const today = await getForgeToday();
+            setForgeToday(today);
+            setTodayRoutineId(today.routine?.id ?? null);
+        } catch (caught: unknown) {
+            setForgeError(caught instanceof Error ? caught.message : 'Kurs konnte nicht als erledigt markiert werden.');
+        } finally { setStartingSession(false); }
+    };
+
     const handleDiscardForgeSession = async () => {
         if (!activeForgeSession || startingSession) return;
         setStartingSession(true); setForgeError(null);
@@ -206,9 +219,9 @@ export default function Dashboard() {
                 </section>;
             })() : homeRoutine && (
                 <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}2c` }}>
-                    <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran'}</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{homeRoutine.exercises.length} Übungen · {forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
+                    <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran'}</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{homeRoutine.plan_type === 'course' ? `Kurs · ${homeRoutine.default_duration_minutes} Min. · ohne Tracking` : `${homeRoutine.exercises.length} Übungen · ${forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}`}</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
                     {forgeToday && forgeToday.options.length > 1 && <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">{forgeToday.options.map(option => <button key={option.id} onClick={() => setTodayRoutineId(option.id)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: homeRoutine.id === option.id ? SAND : TEXT_DIM, border: `1px solid ${homeRoutine.id === option.id ? SAND : CARD_BORDER}`, background: homeRoutine.id === option.id ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{option.name}</button>)}</div>}
-                    <button onClick={handleStartForgeSession} disabled={startingSession} className="btn-forge w-full mt-4 flex items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}Training starten</button>
+                    <button onClick={homeRoutine.plan_type === 'course' ? handleCompleteForgeCourse : handleStartForgeSession} disabled={startingSession} className="btn-forge w-full mt-4 flex items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Done' : 'Training starten'}</button>
                 </section>
             )}
             {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}

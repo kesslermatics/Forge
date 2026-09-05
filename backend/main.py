@@ -29,6 +29,7 @@ Base.metadata.create_all(bind=engine)
 # statements keep production constraints and indexes aligned without manual shell work.
 from sqlalchemy import text as _sql_text
 from migrate_add_google_health import STATEMENTS as _google_health_migrations
+from migrate_add_forge_course_plans import STATEMENTS as _forge_course_plan_migrations
 
 with engine.connect() as _conn:
     _legacy_migrations = [
@@ -44,9 +45,11 @@ with engine.connect() as _conn:
             pass  # Legacy migration compatibility for already-deployed databases.
     _conn.commit()
 
-# Google Health is a new production capability. Do not hide a failed schema
-# migration: failing startup is safer than serving requests with no token/export tables.
+# Forge course plans and Google Health are production capabilities. Do not hide
+# failed schema migrations: failing startup is safer than serving incompatible APIs.
 with engine.connect() as _conn:
+    for stmt in _forge_course_plan_migrations:
+        _conn.execute(_sql_text(stmt))
     for stmt in _google_health_migrations:
         _conn.execute(_sql_text(stmt))
     _conn.commit()
