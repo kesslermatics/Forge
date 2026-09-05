@@ -526,6 +526,24 @@ export interface StreaksData {
 export const getStreaks = () =>
   apiRequest<StreaksData>('/api/briefing/streaks');
 
+export interface ConsistencyDay {
+  date: string;
+  training: boolean;
+  nutrition: boolean;
+}
+
+export interface ConsistencyData {
+  days: ConsistencyDay[];
+  nutrition_streak_days: number;
+  training_streak_weeks: number;
+  training_sessions_this_week: number;
+  training_weekly_goal: number;
+  nutrition_connected: boolean;
+}
+
+export const getConsistency = () =>
+  apiRequest<ConsistencyData>('/api/briefing/consistency');
+
 /* ── Weekly / Monthly Reports ───────────────────────── */
 
 export interface ReportTraining {

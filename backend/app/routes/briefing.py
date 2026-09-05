@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import ChatConversation, ChatMessage, User, MorningBriefing, WorkoutReview, WeightEntry
+from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, User, MorningBriefing, WorkoutReview, WeightEntry
 from app.schemas import BriefingResponse
 from app.services.aggregator import gather_user_context
 from app.services.ai_service import generate_daily_briefing, generate_session_review, generate_workout_tips
@@ -30,6 +30,7 @@ from app.services.yazio_service import fetch_nutrition_dates, fetch_yazio_summar
 from app.services.analytics_service import (
     compute_macro_performance_correlation,
     compute_progressive_overload,
+    compute_consistency_timeline,
     compute_weekly_streaks,
     compute_weekly_report,
     compute_monthly_report,
@@ -924,6 +925,40 @@ async def get_progressive_overload(
     context = await gather_user_context(current_user, db, include_today_nutrition=False)
     workouts = context.get("workouts") or []
     result = compute_progressive_overload(workouts)
+    return result
+
+
+@router.get("/consistency")
+async def get_consistency(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the compact 14-day dashboard timeline and its streak metrics."""
+    workout_dates = [
+        completed_at.date().isoformat()
+        for (completed_at,) in db.query(ForgeWorkoutSession.completed_at).filter(
+            ForgeWorkoutSession.user_id == current_user.id,
+            ForgeWorkoutSession.status == "completed",
+            ForgeWorkoutSession.completed_at.isnot(None),
+        ).all()
+        if completed_at is not None
+    ]
+    nutrition_connected = bool(current_user.yazio_email and current_user.yazio_password)
+    nutrition_dates: list[str] = []
+    if nutrition_connected:
+        try:
+            email = decrypt_value(current_user.yazio_email)
+            password = decrypt_value(current_user.yazio_password)
+            nutrition_dates = [
+                item["date"]
+                for item in await fetch_nutrition_dates(email, password, days=90)
+                if item.get("date")
+            ]
+        except Exception as exc:
+            logger.error("Failed to fetch nutrition dates for dashboard consistency: %s", exc)
+
+    result = compute_consistency_timeline(workout_dates, nutrition_dates)
+    result["nutrition_connected"] = nutrition_connected
     return result
 
 

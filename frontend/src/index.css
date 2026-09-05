@@ -175,6 +175,13 @@ body {
 .forge-d5 { animation-delay: 0.30s; }
 .forge-d6 { animation-delay: 0.36s; }
 
+/* ── Consistency timeline ───────────────────────────── */
+@keyframes consistency-dot-in {
+  from { opacity: 0; transform: scale(0.52); }
+  to { opacity: 1; transform: scale(1); }
+}
+.consistency-dot { animation: consistency-dot-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
 /* ── Ring draw ─────────────────────────────────────── */
 @keyframes ring-draw {
   from { stroke-dashoffset: var(--ring-start); }

@@ -765,3 +765,74 @@ def compute_achievements(
               unique_exercises >= target, min(unique_exercises, target), target)
 
     return achievements
+
+
+def compute_consistency_timeline(
+    workout_dates: list[str],
+    nutrition_dates: list[str],
+    *,
+    today: date | None = None,
+    timeline_days: int = 14,
+    weekly_training_goal: int = 2,
+) -> dict:
+    """Build dashboard consistency data from completed-workout and tracked-nutrition dates.
+
+    Nutrition is a consecutive daily streak. Training is a consecutive weekly streak
+    with at least ``weekly_training_goal`` completed sessions per calendar week.
+    An unfinished current week retains the prior qualifying streak until Sunday.
+    """
+    today = today or date.today()
+
+    def _parse_dates(values: list[str]) -> set[date]:
+        parsed: set[date] = set()
+        for value in values:
+            try:
+                parsed.add(date.fromisoformat(value[:10]))
+            except (TypeError, ValueError):
+                continue
+        return parsed
+
+    workout_days = _parse_dates(workout_dates)
+    nutrition_days = _parse_dates(nutrition_dates)
+    first_day = today - timedelta(days=timeline_days - 1)
+    timeline = [
+        {
+            "date": (first_day + timedelta(days=offset)).isoformat(),
+            "training": first_day + timedelta(days=offset) in workout_days,
+            "nutrition": first_day + timedelta(days=offset) in nutrition_days,
+        }
+        for offset in range(timeline_days)
+    ]
+
+    nutrition_streak = 0
+    cursor = today
+    while cursor in nutrition_days:
+        nutrition_streak += 1
+        cursor -= timedelta(days=1)
+
+    current_monday = today - timedelta(days=today.weekday())
+
+    def _sessions_in_week(monday: date) -> int:
+        return sum(monday <= day < monday + timedelta(days=7) for day in workout_days)
+
+    current_week_sessions = _sessions_in_week(current_monday)
+    training_streak = 0
+    # Do not reset a successful previous-week streak merely because the current
+    # week is still in progress. On Sunday, an unmet weekly goal ends the streak.
+    if current_week_sessions >= weekly_training_goal:
+        cursor = current_monday
+    elif today.weekday() == 6:
+        cursor = None
+    else:
+        cursor = current_monday - timedelta(weeks=1)
+    while cursor is not None and _sessions_in_week(cursor) >= weekly_training_goal:
+        training_streak += 1
+        cursor -= timedelta(weeks=1)
+
+    return {
+        "days": timeline,
+        "nutrition_streak_days": nutrition_streak,
+        "training_streak_weeks": training_streak,
+        "training_sessions_this_week": current_week_sessions,
+        "training_weekly_goal": weekly_training_goal,
+    }

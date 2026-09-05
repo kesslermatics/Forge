@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
-    getTodayNutrition, getStreaks, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
+    getTodayNutrition, getConsistency, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
 } from '../api/api';
 import type {
     UserInfo, Briefing, WeatherData,
-    WeightHistoryEntry, TodayNutrition, StreaksData, ForgeSession, ForgeToday,
+    WeightHistoryEntry, TodayNutrition, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
@@ -89,7 +89,7 @@ export default function Dashboard() {
 
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
-    const [streaks, setStreaks] = useState<StreaksData | null>(null);
+    const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
     const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
     const [todayRoutineId, setTodayRoutineId] = useState<string | null>(null);
     const [activeForgeSession, setActiveForgeSession] = useState<ForgeSession | null>(null);
@@ -125,7 +125,7 @@ export default function Dashboard() {
     useEffect(() => {
         getWeightHistory(90).then(d => setWeightHistory(d.entries)).catch(() => { });
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
-        getStreaks().then(setStreaks).catch(() => { });
+        getConsistency().then(setConsistency).catch(() => { });
         getForgeToday().then(data => { setForgeToday(data); setTodayRoutineId(data.routine?.id ?? null); }).catch(() => { });
         getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
     }, []);
@@ -290,27 +290,12 @@ export default function Dashboard() {
                         </section>
                     )}
 
-                    {/* ── Streaks + Gewicht ── */}
-                    {(streaks || weightValues.length > 0) && (
-                        <section className="grid grid-cols-3 gap-3 forge-anim forge-d2">
-                            {streaks && (
-                                <>
-                                    <StreakTile
-                                        label="Training"
-                                        icon={<Dumbbell size={13} />}
-                                        value={streaks.training.current_streak}
-                                        unit="Wo."
-                                    />
-                                    <StreakTile
-                                        label="Ernährung"
-                                        icon={<Flame size={13} />}
-                                        value={streaks.nutrition.current_streak}
-                                        unit="Tg."
-                                    />
-                                </>
-                            )}
+                    {/* ── Konsistenz + Gewicht ── */}
+                    {(consistency || weightValues.length > 0) && (
+                        <section className="grid gap-3 forge-anim forge-d2 sm:grid-cols-[minmax(0,1fr)_124px]">
+                            {consistency && <ConsistencyTimeline data={consistency} />}
                             {weightValues.length > 0 && (
-                                <div className="card-forge p-3 col-span-1" style={{ gridColumn: streaks ? undefined : '1 / -1' }}>
+                                <div className="card-forge p-3" style={{ gridColumn: consistency ? undefined : '1 / -1' }}>
                                     <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
                                         <div className="flex items-center gap-1"><Scale size={12} /> Gewicht</div>
                                         {weightDelta !== null && (
@@ -345,21 +330,29 @@ export default function Dashboard() {
     );
 }
 
-/* ── Streak tile ── */
-function StreakTile({ label, icon, value, unit }: {
-    label: string; icon: React.ReactNode; value: number; unit: string;
-}) {
-    return (
-        <div className="card-forge p-3">
-            <div className="flex items-center gap-1.5 text-[11px]" style={{ color: TEXT_DIM }}>
-                {icon} {label}
-            </div>
-            <div className="text-[22px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: '#f2ece0' }}>
-                {value}
-                <span className="text-[11px] font-normal ml-1" style={{ color: TEXT_DIM }}>{unit}</span>
-            </div>
-        </div>
-    );
+/* ── 14-day consistency timeline ── */
+function ConsistencyTimeline({ data }: { data: ConsistencyData }) {
+    const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+    const weekday = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('de-DE', { weekday: 'narrow' });
+    const today = data.days[data.days.length - 1]?.date;
+    const rows = [
+        { key: 'nutrition' as const, label: 'Ernährung', active: (day: ConsistencyData['days'][number]) => day.nutrition, icon: <Flame size={13} />, value: `${data.nutrition_streak_days} Tg.`, detail: data.nutrition_connected ? 'Tages-Streak' : 'Yazio verbinden' },
+        { key: 'training' as const, label: 'Training', active: (day: ConsistencyData['days'][number]) => day.training, icon: <Dumbbell size={13} />, value: `${data.training_streak_weeks} Wo.`, detail: `Diese Woche ${data.training_sessions_this_week}/${data.training_weekly_goal}` },
+    ];
+
+    return <section className="card-forge p-4 min-w-0" style={{ borderColor: `${SAND}20` }}>
+        <div className="flex items-center justify-between gap-3 mb-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Konsistenz</p><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>Letzte 14 Tage</p></div><p className="text-[10px] text-right leading-relaxed" style={{ color: TEXT_DIM }}>Training zählt ab<br />2 Einheiten pro Woche</p></div>
+        <div className="space-y-3">{rows.map((row) => <div key={row.key} className="grid items-center gap-2" style={{ gridTemplateColumns: '72px minmax(0, 1fr) 72px' }}>
+            <div className="flex items-center gap-1.5 text-[11px]" style={{ color: TEXT_MID }}>{row.icon}<span className="truncate">{row.label}</span></div>
+            <div className="min-w-0"><div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${data.days.length}, minmax(0, 1fr))` }}>{data.days.map((day, index) => {
+                const active = row.active(day);
+                const isToday = day.date === today;
+                return <span key={`${row.key}-${day.date}`} title={`${formatDate(day.date)}: ${active ? row.label === 'Ernährung' ? 'getrackt' : 'Training erledigt' : 'nicht erfasst'}`} aria-label={`${row.label} am ${formatDate(day.date)}: ${active ? 'erledigt' : 'nicht erfasst'}`} className="consistency-dot aspect-square max-h-4 min-h-2 rounded-full" style={{ animationDelay: `${index * 38 + (row.key === 'training' ? 90 : 0)}ms`, background: active ? '#4ade80' : 'rgba(242,236,226,0.09)', border: `1px solid ${isToday ? (active ? '#86efac' : 'rgba(232,197,138,0.6)') : active ? '#4ade80' : 'rgba(242,236,226,0.08)'}`, boxShadow: active ? '0 0 10px rgba(74,222,128,0.32)' : 'none' }} />;
+            })}</div>
+                <div className="grid mt-1 gap-1" style={{ gridTemplateColumns: `repeat(${data.days.length}, minmax(0, 1fr))` }}>{data.days.map((day) => <span key={`label-${row.key}-${day.date}`} className="text-center text-[8px] leading-none" style={{ color: day.date === today ? SAND : TEXT_DIM }}>{weekday(day.date)}</span>)}</div></div>
+            <div className="text-right"><p className="text-[14px] font-semibold tabular-nums leading-none" style={{ color: '#f2ece0' }}>{row.value}</p><p className="text-[9px] mt-1 leading-tight" style={{ color: TEXT_DIM }}>{row.detail}</p></div>
+        </div>)}</div>
+    </section>
 }
 
 // end of file
