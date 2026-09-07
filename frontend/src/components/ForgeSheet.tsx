@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useEffect, useRef } from 'react';
 
 interface Props {
@@ -28,9 +29,12 @@ export default function ForgeSheet({ label, onClose, children, closeOnBackdrop =
     return () => { document.removeEventListener('keydown', onKeyDown); previous?.focus(); };
   }, []);
 
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (closeOnBackdrop && event.target === event.currentTarget) onClose(); }}>
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={label} className="max-h-[88dvh] w-full max-w-lg overflow-y-auto rounded-t-[26px] p-4 outline-none sm:rounded-[26px]" style={{ background: '#1d1913', border: '1px solid rgba(232,197,138,0.28)' }}>
-      {children}
-    </div>
-  </div>;
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (closeOnBackdrop && event.target === event.currentTarget) onClose(); }}>
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={label} className="max-h-[88dvh] w-full max-w-lg overflow-y-auto rounded-t-[26px] p-4 outline-none sm:rounded-[26px]" style={{ background: '#1d1913', border: '1px solid rgba(232,197,138,0.28)' }}>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
 }

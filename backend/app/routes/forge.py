@@ -301,29 +301,25 @@ def _validate_exercise_input(data: ForgeExerciseInput) -> None:
     if data.equipment not in {"machine", "cable"} and (submitted_profiles or submitted_profile_ids):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Machine profiles are only valid for machine or cable exercises.",
+            detail="Maschinenprofile können nur Übungen mit Gerät ‚Maschine‘ oder ‚Kabelzug‘ zugeordnet werden.",
         )
     normalized_groups = [group.strip().lower() for group in data.secondary_muscle_groups]
     if len(set(normalized_groups)) != len(normalized_groups):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Secondary muscle groups must be unique.")
 
 
-def _assert_profile_links_can_be_removed(
+def _clear_plan_profile_references(
     db: Session,
     exercise_id: UUID,
     profile_ids: set[UUID],
 ) -> None:
+    """Remove outdated defaults without changing historical session snapshots."""
     if not profile_ids:
         return
-    plan_reference = db.query(ForgePlanExercise.id).filter(
+    db.query(ForgePlanExercise).filter(
         ForgePlanExercise.exercise_id == exercise_id,
         ForgePlanExercise.machine_profile_id.in_(profile_ids),
-    ).first()
-    if plan_reference is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Remove this machine-profile assignment from the plan before unlinking it from the exercise.",
-        )
+    ).update({ForgePlanExercise.machine_profile_id: None}, synchronize_session=False)
 
 
 def _apply_exercise_input(db: Session, exercise: ForgeExercise, data: ForgeExerciseInput) -> None:
@@ -339,15 +335,16 @@ def _apply_exercise_input(db: Session, exercise: ForgeExercise, data: ForgeExerc
         requested_ids = list(dict.fromkeys(data.machine_profile_ids))
         profiles = db.query(ForgeMachineProfile).filter(
             ForgeMachineProfile.user_id == exercise.user_id,
+            ForgeMachineProfile.is_archived.is_(False),
             ForgeMachineProfile.id.in_(requested_ids),
         ).all() if requested_ids else []
         if len(profiles) != len(requested_ids):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more machine profiles do not belong to you.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mindestens eines der ausgewählten Maschinenprofile ist nicht verfügbar.")
         exercise.machine_profiles = profiles
     elif data.machine_profiles is not None:
         profile_names = [profile.name.strip().lower() for profile in data.machine_profiles]
         if len(profile_names) != len(set(profile_names)):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile names must be unique per exercise.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maschinenprofilnamen müssen innerhalb einer Übung eindeutig sein.")
         linked_profiles: list[ForgeMachineProfile] = []
         for profile_input in data.machine_profiles:
             profile = None
@@ -357,7 +354,7 @@ def _apply_exercise_input(db: Session, exercise: ForgeExercise, data: ForgeExerc
                     ForgeMachineProfile.user_id == exercise.user_id,
                 ).first()
                 if profile is None:
-                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more machine profiles do not belong to you.")
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mindestens eines der ausgewählten Maschinenprofile ist nicht verfügbar.")
             else:
                 profile = ForgeMachineProfile(user_id=exercise.user_id)
                 db.add(profile)
@@ -371,7 +368,7 @@ def _apply_exercise_input(db: Session, exercise: ForgeExercise, data: ForgeExerc
 
     resulting_profile_ids = {profile.id for profile in exercise.machine_profiles if profile.id is not None}
     if exercise.id is not None:
-        _assert_profile_links_can_be_removed(
+        _clear_plan_profile_references(
             db,
             exercise.id,
             previous_profile_ids - resulting_profile_ids,
@@ -404,11 +401,12 @@ def _replace_plan_exercises(db: Session, plan: ForgeTrainingPlan, plan_input: Fo
     if profile_ids:
         profiles = db.query(ForgeMachineProfile).filter(
             ForgeMachineProfile.user_id == user_id,
+            ForgeMachineProfile.is_archived.is_(False),
             ForgeMachineProfile.id.in_(profile_ids),
         ).all()
         profiles_by_id = {profile.id: profile for profile in profiles}
         if len(profiles_by_id) != len(set(profile_ids)):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more machine profiles do not belong to you.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Mindestens eines der ausgewählten Maschinenprofile ist nicht verfügbar.")
 
     plan.exercises.clear()
     db.flush()
@@ -416,9 +414,9 @@ def _replace_plan_exercises(db: Session, plan: ForgeTrainingPlan, plan_input: Fo
         exercise = exercises_by_id[entry.exercise_id]
         profile = profiles_by_id.get(entry.machine_profile_id) if entry.machine_profile_id else None
         if profile is not None and profile not in exercise.machine_profiles:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The selected machine profile is not assigned to this exercise.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das ausgewählte Maschinenprofil ist dieser Übung nicht zugeordnet.")
         if profile is not None and exercise.equipment not in {"machine", "cable"}:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only machine or cable exercises can use a machine profile.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maschinenprofile können nur Übungen mit Gerät ‚Maschine‘ oder ‚Kabelzug‘ zugeordnet werden.")
         plan_exercise = ForgePlanExercise(
             exercise=exercise,
             machine_profile=profile,
@@ -448,7 +446,7 @@ def _apply_profile_resource_input(
 ) -> None:
     name = data.name.strip()
     if not name:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile name cannot be blank.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bitte gib dem Maschinenprofil einen Namen.")
     if data.exercise_ids is not None:
         exercise_ids = list(dict.fromkeys(data.exercise_ids))
         exercises = _owned_exercises(db, user_id, exercise_ids) if exercise_ids else {}
@@ -456,13 +454,13 @@ def _apply_profile_resource_input(
         if invalid_equipment:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Machine profiles can only be assigned to machine or cable exercises.",
+                detail="Maschinenprofile können nur Übungen mit Gerät ‚Maschine‘ oder ‚Kabelzug‘ zugeordnet werden.",
             )
         if profile.id is not None:
             retained_exercise_ids = set(exercise_ids)
             for linked_exercise in profile.exercises:
                 if linked_exercise.id not in retained_exercise_ids:
-                    _assert_profile_links_can_be_removed(db, linked_exercise.id, {profile.id})
+                    _clear_plan_profile_references(db, linked_exercise.id, {profile.id})
         profile.exercises = [exercises[exercise_id] for exercise_id in exercise_ids]
     profile.name = name
     profile.model = data.model.strip() if data.model and data.model.strip() else None
@@ -473,6 +471,7 @@ def _apply_profile_resource_input(
 async def list_machine_profiles(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     profiles = db.query(ForgeMachineProfile).filter(
         ForgeMachineProfile.user_id == current_user.id,
+        ForgeMachineProfile.is_archived.is_(False),
     ).order_by(ForgeMachineProfile.name, ForgeMachineProfile.created_at).all()
     return [_serialize_profile(profile) for profile in profiles]
 
@@ -482,9 +481,10 @@ async def get_machine_profile(profile_id: UUID, current_user: User = Depends(get
     profile = db.query(ForgeMachineProfile).filter(
         ForgeMachineProfile.id == profile_id,
         ForgeMachineProfile.user_id == current_user.id,
+        ForgeMachineProfile.is_archived.is_(False),
     ).first()
     if profile is None:
-        raise _not_found("Machine profile not found")
+        raise _not_found("Maschinenprofil nicht gefunden.")
     return _serialize_profile(profile)
 
 
@@ -512,9 +512,10 @@ async def update_machine_profile(
     profile = db.query(ForgeMachineProfile).filter(
         ForgeMachineProfile.id == profile_id,
         ForgeMachineProfile.user_id == current_user.id,
+        ForgeMachineProfile.is_archived.is_(False),
     ).first()
     if profile is None:
-        raise _not_found("Machine profile not found")
+        raise _not_found("Maschinenprofil nicht gefunden.")
     _apply_profile_resource_input(db, profile, data, current_user.id)
     db.commit()
     db.refresh(profile)
@@ -526,19 +527,26 @@ async def delete_machine_profile(profile_id: UUID, current_user: User = Depends(
     profile = db.query(ForgeMachineProfile).filter(
         ForgeMachineProfile.id == profile_id,
         ForgeMachineProfile.user_id == current_user.id,
+        ForgeMachineProfile.is_archived.is_(False),
     ).first()
     if profile is None:
-        raise _not_found("Machine profile not found")
-    is_referenced = db.query(ForgePlanExercise.id).filter(ForgePlanExercise.machine_profile_id == profile.id).first() is not None
-    is_referenced = is_referenced or db.query(ForgeSessionExercise.id).filter(
+        raise _not_found("Maschinenprofil nicht gefunden.")
+
+    # Current plans may safely fall back to choosing a profile when the session starts.
+    db.query(ForgePlanExercise).filter(
+        ForgePlanExercise.machine_profile_id == profile.id,
+    ).update({ForgePlanExercise.machine_profile_id: None}, synchronize_session=False)
+
+    has_session_history = db.query(ForgeSessionExercise.id).filter(
         ForgeSessionExercise.source_machine_profile_id == profile.id,
     ).first() is not None
-    if is_referenced:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Machine profiles referenced by a plan or session cannot be deleted; unlink them instead.",
-        )
-    db.delete(profile)
+    if has_session_history:
+        # Keep the UUID for historic machine-specific filters and progression, but hide it
+        # from every current exercise, plan and selector.
+        profile.exercises = []
+        profile.is_archived = True
+    else:
+        db.delete(profile)
     db.commit()
 
 
@@ -573,7 +581,7 @@ async def get_exercise_history(
             ForgeMachineProfile.exercises.any(ForgeExercise.id == exercise.id),
         ).first()
         if profile is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile does not belong to this exercise.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das Maschinenprofil ist dieser Übung nicht zugeordnet.")
 
     rows_query = db.query(ForgeWorkoutSession, ForgeSessionExercise).join(
         ForgeSessionExercise, ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
@@ -648,7 +656,7 @@ async def update_exercise(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="An exercise name must be unique and profiles used by plans or sessions cannot be removed.",
+            detail="Du hast bereits eine Übung mit diesem Namen.",
         )
     db.refresh(exercise)
     return _serialize_exercise(exercise, db, current_user.id)
@@ -1148,7 +1156,7 @@ def _plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> t
             changes.append({
                 "kind": "profile_changed",
                 "label": label,
-                "detail": "Machine profile selection differs from the current source plan.",
+                "detail": "Das ausgewählte Maschinenprofil unterscheidet sich vom aktuellen Trainingstag.",
             })
         if (session_exercise.notes or "").strip() != (plan_exercise.notes or "").strip():
             changes.append({
@@ -1214,8 +1222,9 @@ def _apply_session_plan_changes(db: Session, user_id: UUID, session: ForgeWorkou
             profile = db.query(ForgeMachineProfile).filter(
                 ForgeMachineProfile.id == session_exercise.source_machine_profile_id,
                 ForgeMachineProfile.user_id == user_id,
+                ForgeMachineProfile.is_archived.is_(False),
                 ForgeMachineProfile.exercises.any(ForgeExercise.id == library_exercise.id),
-            ).one()
+            ).one_or_none()
         plan_exercise = matches.get(session_exercise.id)
         if plan_exercise is None:
             plan_exercise = ForgePlanExercise(exercise=library_exercise)
@@ -1253,20 +1262,21 @@ def _session_machine_profile(
     if machine_profile_id is None:
         return None
     if source_exercise_id is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A machine profile requires a library exercise.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Für ein Maschinenprofil muss eine Übung aus deiner Bibliothek gewählt sein.")
     profile = db.query(ForgeMachineProfile).filter(
         ForgeMachineProfile.id == machine_profile_id,
         ForgeMachineProfile.user_id == user_id,
+        ForgeMachineProfile.is_archived.is_(False),
         ForgeMachineProfile.exercises.any(ForgeExercise.id == source_exercise_id),
     ).first()
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Machine profile is not assigned to this exercise.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das ausgewählte Maschinenprofil ist dieser Übung nicht zugeordnet.")
     exercise = db.query(ForgeExercise).filter(
         ForgeExercise.id == source_exercise_id,
         ForgeExercise.user_id == user_id,
     ).first()
     if exercise is None or exercise.equipment not in {"machine", "cable"}:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only machine or cable exercises can use a machine profile.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maschinenprofile können nur Übungen mit Gerät ‚Maschine‘ oder ‚Kabelzug‘ zugeordnet werden.")
     return profile
 
 

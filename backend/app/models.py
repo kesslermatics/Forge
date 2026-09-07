@@ -290,6 +290,8 @@ class ForgeMachineProfile(Base):
     name = Column(String(100), nullable=False)
     model = Column(String(100), nullable=True)
     notes = Column(String(500), nullable=True)
+    # Historical sessions retain this profile's ID; archived profiles are hidden from new selections.
+    is_archived = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
