@@ -8,6 +8,11 @@ import NutritionPage from './components/NutritionPage';
 import SetupPage from './components/SetupPage';
 import SettingsPage from './components/SettingsPage';
 import ForgePlanPage from './components/ForgePlanPage';
+import ForgeTrainingDayPage from './components/ForgeTrainingDayPage';
+import ForgeExerciseLibraryPage from './components/ForgeExerciseLibraryPage';
+import ForgeExerciseEditorPage from './components/ForgeExerciseEditorPage';
+import ForgeMachineProfilesPage from './components/ForgeMachineProfilesPage';
+import ForgeHistoryPage from './components/ForgeHistoryPage';
 import ForgeSessionPage from './components/ForgeSessionPage';
 import ForgeExerciseHistoryPage from './components/ForgeExerciseHistoryPage';
 import ForgeProgressPhotosPage from './components/ForgeProgressPhotosPage';
@@ -24,6 +29,14 @@ function App() {
       <Route path="/nutrition" element={<NutritionPage />} />
       <Route path="/achievements" element={<Navigate to="/dashboard" replace />} />
       <Route path="/forge" element={<ForgePlanPage />} />
+      <Route path="/forge/days/new" element={<ForgeTrainingDayPage />} />
+      <Route path="/forge/days/:planId" element={<ForgeTrainingDayPage />} />
+      <Route path="/forge/days/:planId/edit" element={<ForgeTrainingDayPage />} />
+      <Route path="/forge/exercises" element={<ForgeExerciseLibraryPage />} />
+      <Route path="/forge/exercises/new" element={<ForgeExerciseEditorPage />} />
+      <Route path="/forge/exercises/:exerciseId/edit" element={<ForgeExerciseEditorPage />} />
+      <Route path="/forge/machine-profiles" element={<ForgeMachineProfilesPage />} />
+      <Route path="/forge/history" element={<ForgeHistoryPage />} />
       <Route path="/forge/progress" element={<ForgeProgressPhotosPage />} />
       <Route path="/forge/session/:sessionId" element={<ForgeSessionPage />} />
       <Route path="/forge/exercises/:exerciseId/history" element={<ForgeExerciseHistoryPage />} />

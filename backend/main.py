@@ -30,6 +30,9 @@ Base.metadata.create_all(bind=engine)
 from sqlalchemy import text as _sql_text
 from migrate_add_google_health import STATEMENTS as _google_health_migrations
 from migrate_add_forge_course_plans import STATEMENTS as _forge_course_plan_migrations
+from migrate_fix_forge_decimal_weights import STATEMENTS as _forge_decimal_weight_migrations
+from migrate_forge_central_machine_profiles import STATEMENTS as _forge_machine_profile_migrations
+from migrate_forge_rotation_repeatable_routines import STATEMENTS as _forge_rotation_migrations
 
 with engine.connect() as _conn:
     _legacy_migrations = [
@@ -44,6 +47,17 @@ with engine.connect() as _conn:
         except Exception:
             pass  # Legacy migration compatibility for already-deployed databases.
     _conn.commit()
+
+# The reusable machine-profile schema and repeatable rotation slots change
+# existing Forge tables. Run them fail-closed on startup so an old production
+# database can never be served by the new ORM before it is migrated.
+with engine.begin() as _conn:
+    for stmt in _forge_decimal_weight_migrations:
+        _conn.execute(_sql_text(stmt))
+    for stmt in _forge_machine_profile_migrations:
+        _conn.execute(_sql_text(stmt))
+    for stmt in _forge_rotation_migrations:
+        _conn.execute(_sql_text(stmt))
 
 # Forge course plans and Google Health are production capabilities. Do not hide
 # failed schema migrations: failing startup is safer than serving incompatible APIs.

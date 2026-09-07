@@ -2,11 +2,29 @@
 SQLAlchemy database models.
 """
 import uuid
-from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index, Table
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
+
+
+forge_exercise_machine_profiles = Table(
+    "forge_exercise_machine_profiles",
+    Base.metadata,
+    Column(
+        "exercise_id",
+        UUID(as_uuid=True),
+        ForeignKey("forge_exercises.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "machine_profile_id",
+        UUID(as_uuid=True),
+        ForeignKey("forge_machine_profiles.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
 
 
 class User(Base):
@@ -32,6 +50,7 @@ class User(Base):
     workout_reviews = relationship("WorkoutReview", back_populates="user", cascade="all, delete-orphan")
     weight_entries = relationship("WeightEntry", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
+    forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
     forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
     forge_programs = relationship("ForgeTrainingProgram", back_populates="user", cascade="all, delete-orphan")
     forge_sessions = relationship("ForgeWorkoutSession", back_populates="user", cascade="all, delete-orphan")
@@ -236,7 +255,7 @@ class WeightEntry(Base):
 
 
 class ForgeExercise(Base):
-    """A user-owned canonical exercise; machine variants live in child profiles."""
+    """A user-owned canonical exercise linked to reusable machine profiles."""
 
     __tablename__ = "forge_exercises"
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_forge_exercise_user_name"),)
@@ -252,25 +271,34 @@ class ForgeExercise(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     user = relationship("User", back_populates="forge_exercises")
-    machine_profiles = relationship("ForgeMachineProfile", back_populates="exercise", cascade="all, delete-orphan")
+    machine_profiles = relationship(
+        "ForgeMachineProfile",
+        secondary=forge_exercise_machine_profiles,
+        back_populates="exercises",
+        order_by="ForgeMachineProfile.name",
+    )
     plan_exercises = relationship("ForgePlanExercise", back_populates="exercise")
 
 
 class ForgeMachineProfile(Base):
-    """A machine-specific loading profile for one canonical movement."""
+    """A reusable, user-owned loading profile assignable to several exercises."""
 
     __tablename__ = "forge_machine_profiles"
-    __table_args__ = (UniqueConstraint("exercise_id", "name", name="uq_forge_machine_profile_name"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    exercise_id = Column(UUID(as_uuid=True), ForeignKey("forge_exercises.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = Column(String(100), nullable=False)  # e.g. Life Fitness, Matrix
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
     model = Column(String(100), nullable=True)
     notes = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    exercise = relationship("ForgeExercise", back_populates="machine_profiles")
+    user = relationship("User", back_populates="forge_machine_profiles")
+    exercises = relationship(
+        "ForgeExercise",
+        secondary=forge_exercise_machine_profiles,
+        back_populates="machine_profiles",
+    )
     plan_exercises = relationship("ForgePlanExercise", back_populates="machine_profile")
     session_exercises = relationship("ForgeSessionExercise", back_populates="machine_profile")
 

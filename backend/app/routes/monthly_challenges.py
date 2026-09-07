@@ -7,9 +7,11 @@ from app.dependencies import get_current_user
 from app.models import User
 from app.schemas import MonthlyChallengeCycleResponse, MonthlyChallengeCheckinResponse
 from app.services.monthly_challenge_service import (
+    berlin_today,
     generate_daily_challenge_checkin,
     get_or_create_current_cycle,
     serialize_cycle,
+    sync_monthly_nutrition_history,
 )
 
 router = APIRouter(prefix="/api/challenges", tags=["Monthly challenges"])
@@ -21,7 +23,9 @@ async def get_current_monthly_challenges(
     db: Session = Depends(get_db),
 ):
     """Return this account's frozen monthly goals and freshly calculated Forge progress."""
-    cycle = await get_or_create_current_cycle(db, current_user)
+    today = berlin_today()
+    cycle = await get_or_create_current_cycle(db, current_user, today)
+    await sync_monthly_nutrition_history(db, current_user, cycle, through_date=today)
     payload = serialize_cycle(db, current_user, cycle)
     db.commit()
     return payload

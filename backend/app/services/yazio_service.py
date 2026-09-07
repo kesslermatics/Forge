@@ -388,7 +388,10 @@ async def fetch_yazio_summary(email: str, password: str, target_date: Optional[d
 
 
 async def fetch_nutrition_dates(
-    email: str, password: str, days: int = 180
+    email: str,
+    password: str,
+    days: int = 180,
+    end_date: Optional[date] = None,
 ) -> list[dict]:
     """
     Check which dates have tracked nutrition over the last `days` days.
@@ -403,7 +406,7 @@ async def fetch_nutrition_dates(
             return []
 
         tracked: list[dict] = []
-        today = date.today()
+        through_date = end_date or date.today()
 
         # Fetch in batches to avoid hammering the API
         # Check each day — but limit concurrency
@@ -438,7 +441,7 @@ async def fetch_nutrition_dates(
                 except Exception:
                     return None
 
-        dates_to_check = [today - timedelta(days=i) for i in range(days)]
+        dates_to_check = [through_date - timedelta(days=i) for i in range(days)]
         results = await asyncio.gather(*[check_date(d) for d in dates_to_check])
 
         tracked = [r for r in results if r is not None]

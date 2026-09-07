@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -14,14 +16,21 @@ from app.models import (
     MonthlyChallenge, MonthlyChallengeCheckin, MonthlyChallengeCycle, User, WeightEntry,
 )
 from app.services.ai_service import generate_monthly_challenge_checkin
-from app.services.yazio_service import fetch_yazio_summary, resolve_yazio_goal_context
+from app.services.yazio_service import fetch_nutrition_dates, fetch_yazio_summary, resolve_yazio_goal_context
 
+logger = logging.getLogger(__name__)
+BERLIN_TZ = ZoneInfo("Europe/Berlin")
 MONTHLY_CATEGORIES = ("consistency", "strength", "weight", "nutrition", "quality")
 CHALLENGE_FORMAT_VERSION = 3
+_NUTRITION_SYNC_CACHE: dict[tuple[str, date, date], datetime] = {}
+
+
+def berlin_today() -> date:
+    return datetime.now(BERLIN_TZ).date()
 
 
 def month_start_for(day: date | None = None) -> date:
-    return (day or date.today()).replace(day=1)
+    return (day or berlin_today()).replace(day=1)
 
 
 def next_month_start(month_start: date) -> date:
@@ -83,7 +92,7 @@ async def _goal_context(user: User) -> dict[str, Any]:
         return {"direction": None, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
     try:
         context = await resolve_yazio_goal_context(
-            decrypt_value(user.yazio_email), decrypt_value(user.yazio_password), target_date=date.today(),
+            decrypt_value(user.yazio_email), decrypt_value(user.yazio_password), target_date=berlin_today(),
         )
     except Exception:
         return {"direction": None, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
@@ -226,9 +235,9 @@ def _challenge_progress(db: Session, user: User, cycle: MonthlyChallengeCycle, c
         snapshots = db.query(MonthlyChallengeCheckin).filter(MonthlyChallengeCheckin.cycle_id == cycle.id, MonthlyChallengeCheckin.date >= cycle.month_start, MonthlyChallengeCheckin.date < end).all()
         if challenge.metric == "protein_goal_days":
             protein_goal = float((challenge.rules or {}).get("protein_goal_g") or 0)
-            current = float(sum(float((item.metrics_snapshot or {}).get("nutrition", {}).get("protein_g") or 0) >= protein_goal > 0 for item in snapshots))
+            current = float(sum(float((((item.metrics_snapshot or {}).get("nutrition")) or {}).get("protein_g") or 0) >= protein_goal > 0 for item in snapshots))
         else:
-            current = float(sum(bool((item.metrics_snapshot or {}).get("nutrition", {}).get("logged")) for item in snapshots))
+            current = float(sum(bool((((item.metrics_snapshot or {}).get("nutrition")) or {}).get("logged")) for item in snapshots))
     elif challenge.metric == "nutrition_connection":
         current = 1.0 if user.yazio_email and user.yazio_password else 0.0
     percent = 0.0 if target <= 0 else min(100.0, current / target * 100)
@@ -249,9 +258,88 @@ def serialize_cycle(db: Session, user: User, cycle: MonthlyChallengeCycle) -> di
     cycle.total_challenges = len(challenges)
     cycle.completed_challenges = sum(item["status"] == "completed" for item in challenges)
     cycle.completion_percent = round((cycle.completed_challenges / cycle.total_challenges * 100) if cycle.total_challenges else 0.0, 1)
-    today_checkin = db.query(MonthlyChallengeCheckin).filter(MonthlyChallengeCheckin.cycle_id == cycle.id, MonthlyChallengeCheckin.date == date.today()).first()
-    latest_checkin = today_checkin or db.query(MonthlyChallengeCheckin).filter(MonthlyChallengeCheckin.cycle_id == cycle.id).order_by(MonthlyChallengeCheckin.date.desc()).first()
+    today_checkin = db.query(MonthlyChallengeCheckin).filter(
+        MonthlyChallengeCheckin.cycle_id == cycle.id,
+        MonthlyChallengeCheckin.date == berlin_today(),
+    ).first()
+    if today_checkin is not None and not today_checkin.checkin_data:
+        today_checkin = None
+    latest_checkin = today_checkin
+    if latest_checkin is None:
+        candidates = db.query(MonthlyChallengeCheckin).filter(
+            MonthlyChallengeCheckin.cycle_id == cycle.id,
+        ).order_by(MonthlyChallengeCheckin.date.desc()).all()
+        latest_checkin = next((item for item in candidates if item.checkin_data), None)
     return {"id": cycle.id, "month_start": cycle.month_start, "total_challenges": cycle.total_challenges, "completed_challenges": cycle.completed_challenges, "completion_percent": cycle.completion_percent, "challenges": challenges, "today_checkin": today_checkin.checkin_data if today_checkin else None, "today_checkin_date": today_checkin.date if today_checkin else None, "latest_checkin": latest_checkin.checkin_data if latest_checkin else None, "latest_checkin_date": latest_checkin.date if latest_checkin else None}
+
+
+async def sync_monthly_nutrition_history(
+    db: Session,
+    user: User,
+    cycle: MonthlyChallengeCycle,
+    through_date: date | None = None,
+) -> None:
+    """Upsert successfully fetched Yazio days without generating historical AI text."""
+    if not user.yazio_email or not user.yazio_password:
+        return
+    through = min(through_date or berlin_today(), next_month_start(cycle.month_start) - timedelta(days=1))
+    if through < cycle.month_start:
+        return
+    cache_key = (str(user.id), cycle.month_start, through)
+    last_synced_at = _NUTRITION_SYNC_CACHE.get(cache_key)
+    now = datetime.now(timezone.utc)
+    if last_synced_at is not None and now - last_synced_at < timedelta(minutes=15):
+        return
+    try:
+        email = decrypt_value(user.yazio_email)
+        password = decrypt_value(user.yazio_password)
+        days = (through - cycle.month_start).days + 1
+        tracked = await fetch_nutrition_dates(email, password, days=days, end_date=through)
+    except Exception as exc:
+        logger.warning("Monthly Yazio history sync failed for user %s: %s", user.id, exc)
+        return
+
+    for item in tracked:
+        try:
+            tracked_date = date.fromisoformat(str(item.get("date")))
+        except (TypeError, ValueError):
+            continue
+        if not cycle.month_start <= tracked_date <= through:
+            continue
+        checkin = db.query(MonthlyChallengeCheckin).filter(
+            MonthlyChallengeCheckin.cycle_id == cycle.id,
+            MonthlyChallengeCheckin.date == tracked_date,
+        ).first()
+        if checkin is None:
+            try:
+                with db.begin_nested():
+                    checkin = MonthlyChallengeCheckin(
+                        cycle_id=cycle.id,
+                        user_id=user.id,
+                        date=tracked_date,
+                        metrics_snapshot={},
+                        progress_snapshot={},
+                        checkin_data={},
+                    )
+                    db.add(checkin)
+                    db.flush()
+            except IntegrityError:
+                checkin = db.query(MonthlyChallengeCheckin).filter(
+                    MonthlyChallengeCheckin.cycle_id == cycle.id,
+                    MonthlyChallengeCheckin.date == tracked_date,
+                ).first()
+                if checkin is None:
+                    continue
+        metrics = dict(checkin.metrics_snapshot or {})
+        metrics["nutrition"] = {
+            "available": True,
+            "logged": True,
+            "calories": float(item.get("calories") or 0),
+            "protein_g": float(item.get("protein") or 0),
+        }
+        checkin.metrics_snapshot = metrics
+
+    _NUTRITION_SYNC_CACHE[cache_key] = now
 
 
 async def _nutrition_snapshot(user: User, db: Session, today: date) -> dict[str, Any]:
@@ -275,16 +363,43 @@ async def _nutrition_snapshot(user: User, db: Session, today: date) -> dict[str,
         return snapshot
 
 
-async def generate_daily_challenge_checkin(db: Session, user: User, today: date | None = None) -> MonthlyChallengeCheckin:
-    checkin_date = today or date.today()
+async def generate_daily_challenge_checkin(
+    db: Session,
+    user: User,
+    today: date | None = None,
+    refresh: bool = False,
+) -> MonthlyChallengeCheckin:
+    checkin_date = today or berlin_today()
     cycle = await get_or_create_current_cycle(db, user, checkin_date)
-    existing = db.query(MonthlyChallengeCheckin).filter(MonthlyChallengeCheckin.cycle_id == cycle.id, MonthlyChallengeCheckin.date == checkin_date).first()
-    if existing:
+    existing = db.query(MonthlyChallengeCheckin).filter(
+        MonthlyChallengeCheckin.cycle_id == cycle.id,
+        MonthlyChallengeCheckin.date == checkin_date,
+    ).first()
+    if existing is not None and not refresh:
         return existing
-    nutrition = await _nutrition_snapshot(user, db, checkin_date)
-    checkin = MonthlyChallengeCheckin(cycle_id=cycle.id, user_id=user.id, date=checkin_date, metrics_snapshot={"nutrition": nutrition}, progress_snapshot={}, checkin_data={})
-    db.add(checkin)
+
+    fetched_nutrition = await _nutrition_snapshot(user, db, checkin_date)
+    if existing is None:
+        checkin = MonthlyChallengeCheckin(
+            cycle_id=cycle.id,
+            user_id=user.id,
+            date=checkin_date,
+            metrics_snapshot={},
+            progress_snapshot={},
+            checkin_data={},
+        )
+        db.add(checkin)
+    else:
+        checkin = existing
+    metrics = dict(checkin.metrics_snapshot or {})
+    previous_nutrition = (metrics.get("nutrition") or {}) if isinstance(metrics, dict) else {}
+    nutrition = fetched_nutrition
+    if not fetched_nutrition.get("available") and previous_nutrition.get("available"):
+        nutrition = previous_nutrition
+    metrics["nutrition"] = nutrition
+    checkin.metrics_snapshot = metrics
     db.flush()
+
     live = serialize_cycle(db, user, cycle)
     yazio_goal = (await _goal_context(user))["goal"]
     checkin.progress_snapshot = {"completed_challenges": live["completed_challenges"], "completion_percent": live["completion_percent"], "challenges": live["challenges"]}
@@ -293,9 +408,12 @@ async def generate_daily_challenge_checkin(db: Session, user: User, today: date 
         db.commit()
     except IntegrityError:
         db.rollback()
-        existing = db.query(MonthlyChallengeCheckin).filter(MonthlyChallengeCheckin.cycle_id == cycle.id, MonthlyChallengeCheckin.date == checkin_date).first()
-        if existing:
-            return existing
+        concurrent = db.query(MonthlyChallengeCheckin).filter(
+            MonthlyChallengeCheckin.cycle_id == cycle.id,
+            MonthlyChallengeCheckin.date == checkin_date,
+        ).first()
+        if concurrent:
+            return concurrent
         raise
     db.refresh(checkin)
     return checkin

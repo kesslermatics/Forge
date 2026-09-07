@@ -10,11 +10,12 @@ import type {
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
-    Dumbbell, Scale,
+    Dumbbell, Scale, X, ChevronRight, Clock3,
 } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
 import ConfirmDialog from './ConfirmDialog';
+import ForgeSheet from './ForgeSheet';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -91,7 +92,7 @@ export default function Dashboard() {
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
     const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
     const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
-    const [todayRoutineId, setTodayRoutineId] = useState<string | null>(null);
+    const [alternativePickerOpen, setAlternativePickerOpen] = useState(false);
     const [activeForgeSession, setActiveForgeSession] = useState<ForgeSession | null>(null);
     const [forgeError, setForgeError] = useState<string | null>(null);
     const [startingSession, setStartingSession] = useState(false);
@@ -126,7 +127,7 @@ export default function Dashboard() {
         getWeightHistory(90).then(d => setWeightHistory(d.entries)).catch(() => { });
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
         getConsistency().then(setConsistency).catch(() => { });
-        getForgeToday().then(data => { setForgeToday(data); setTodayRoutineId(data.routine?.id ?? null); }).catch(() => { });
+        getForgeToday().then(setForgeToday).catch(() => { });
         getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
     }, []);
 
@@ -148,30 +149,24 @@ export default function Dashboard() {
     const weightValues = weightHistory.map(w => w.weight_kg);
     const weightCurrent = weightValues[weightValues.length - 1];
     const weightDelta = weightValues.length >= 2 ? weightCurrent - weightValues[0] : null;
-    const homeRoutine = forgeToday?.options.find(option => option.id === todayRoutineId) ?? forgeToday?.routine ?? null;
+    const homeRoutine = forgeToday?.routine ?? null;
 
-    const handleStartForgeSession = async () => {
-        if (!homeRoutine || startingSession) return;
+    const handleStartRoutine = async (routine: NonNullable<ForgeToday['routine']>) => {
+        if (startingSession) return;
         setStartingSession(true); setForgeError(null);
         try {
-            const session = await startForgeSession(homeRoutine.id, forgeToday?.program?.id);
+            if (routine.plan_type === 'course') {
+                await completeForgeCourse(routine.id, forgeToday?.program?.id);
+                setForgeToday(await getForgeToday());
+                setAlternativePickerOpen(false);
+                return;
+            }
+            const session = await startForgeSession(routine.id, forgeToday?.program?.id);
             setActiveForgeSession(session.status === 'active' ? session : null);
+            setAlternativePickerOpen(false);
             navigate(`/forge/session/${session.id}?prepare=1`);
         } catch (caught: unknown) {
-            setForgeError(caught instanceof Error ? caught.message : 'Session konnte nicht gestartet werden.');
-        } finally { setStartingSession(false); }
-    };
-
-    const handleCompleteForgeCourse = async () => {
-        if (!homeRoutine || homeRoutine.plan_type !== 'course' || startingSession) return;
-        setStartingSession(true); setForgeError(null);
-        try {
-            await completeForgeCourse(homeRoutine.id, forgeToday?.program?.id);
-            const today = await getForgeToday();
-            setForgeToday(today);
-            setTodayRoutineId(today.routine?.id ?? null);
-        } catch (caught: unknown) {
-            setForgeError(caught instanceof Error ? caught.message : 'Kurs konnte nicht als erledigt markiert werden.');
+            setForgeError(caught instanceof Error ? caught.message : routine.plan_type === 'course' ? 'Kurs konnte nicht als erledigt markiert werden.' : 'Session konnte nicht gestartet werden.');
         } finally { setStartingSession(false); }
     };
 
@@ -220,10 +215,11 @@ export default function Dashboard() {
             })() : homeRoutine && (
                 <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}2c` }}>
                     <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran'}</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{homeRoutine.plan_type === 'course' ? `Kurs · ${homeRoutine.default_duration_minutes} Min. · ohne Tracking` : `${homeRoutine.exercises.length} Übungen · ${forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}`}</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
-                    {forgeToday && forgeToday.options.length > 1 && <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">{forgeToday.options.map(option => <button key={option.id} onClick={() => setTodayRoutineId(option.id)} className="tap shrink-0 rounded-full px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: homeRoutine.id === option.id ? SAND : TEXT_DIM, border: `1px solid ${homeRoutine.id === option.id ? SAND : CARD_BORDER}`, background: homeRoutine.id === option.id ? 'rgba(232,197,138,0.1)' : 'transparent' }}>{option.name}</button>)}</div>}
-                    <button onClick={homeRoutine.plan_type === 'course' ? handleCompleteForgeCourse : handleStartForgeSession} disabled={startingSession} className="btn-forge w-full mt-4 flex items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Done' : 'Training starten'}</button>
+                    <button onClick={() => void handleStartRoutine(homeRoutine)} disabled={startingSession} className="btn-forge w-full mt-4 flex items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Kurs als erledigt markieren' : 'Training starten'}</button>
+                    {forgeToday && forgeToday.options.length > 1 && <button onClick={() => setAlternativePickerOpen(true)} disabled={startingSession} className="tap mt-2 w-full rounded-xl py-2.5 text-[11px] font-medium" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Anderes Training starten</button>}
                 </section>
             )}
+            {alternativePickerOpen && forgeToday && <ForgeSheet label="Anderes Training" onClose={() => setAlternativePickerOpen(false)}><div className="p-1"><div className="flex items-start justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Einmalige Auswahl</p><h2 id="alternative-workout-title" className="mt-1 text-[20px] font-semibold" style={{ color: '#f2ece0' }}>Anderes Training</h2><p className="mt-1 text-[11px]" style={{ color: TEXT_DIM }}>Deine dauerhafte Routine bleibt unverändert.</p></div><button onClick={() => setAlternativePickerOpen(false)} className="tap flex h-8 w-8 items-center justify-center rounded-full" aria-label="Auswahl schließen" style={{ color: TEXT_DIM, background: 'rgba(255,247,235,0.05)' }}><X size={16} /></button></div><div className="mt-4 space-y-2">{forgeToday.options.map((option) => <button key={option.id} onClick={() => void handleStartRoutine(option)} disabled={startingSession} className="tap flex w-full items-center gap-3 rounded-2xl p-4 text-left disabled:opacity-55" style={{ border: `1px solid ${option.id === forgeToday.routine?.id ? `${SAND}55` : CARD_BORDER}`, background: option.id === forgeToday.routine?.id ? 'rgba(232,197,138,0.07)' : 'rgba(255,247,235,0.025)' }}><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}>{option.plan_type === 'course' ? <Clock3 size={18} /> : <Dumbbell size={18} />}</span><span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-medium" style={{ color: '#f2ece0' }}>{option.name}</span><span className="mt-0.5 block text-[10px]" style={{ color: TEXT_DIM }}>{option.plan_type === 'course' ? `Kurs · ${option.default_duration_minutes} Min.` : `${option.exercises.length} Übungen`}{option.id === forgeToday.routine?.id ? ' · vorgeschlagen' : ''}</span></span><ChevronRight size={16} style={{ color: SAND }} /></button>)}</div></div></ForgeSheet>}
             {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}
             <ConfirmDialog open={discardDialogOpen} busy={startingSession} destructive title="Aktive Session verwerfen?" description="Bereits eingetragene Sätze gehen verloren und können nicht wiederhergestellt werden." confirmLabel="Session verwerfen" onCancel={() => setDiscardDialogOpen(false)} onConfirm={() => { setDiscardDialogOpen(false); void handleDiscardForgeSession(); }} />
 

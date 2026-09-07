@@ -1,7 +1,7 @@
 """Background scheduling for Forge-native morning briefings and workout tips."""
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -13,7 +13,7 @@ from app.models import MorningBriefing, User, WeightEntry, WorkoutReview
 from app.services.aggregator import gather_user_context
 from app.services.ai_service import generate_daily_briefing, generate_workout_tips
 from app.services.forge_session_adapter import completed_forge_workouts, forge_plan_template
-from app.services.monthly_challenge_service import generate_daily_challenge_checkin
+from app.services.monthly_challenge_service import berlin_today, generate_daily_challenge_checkin
 
 logger = logging.getLogger(__name__)
 
@@ -180,15 +180,16 @@ async def workout_review_job():
 
 
 async def monthly_challenge_checkin_job():
-    """Create each account's idempotent daily challenge snapshot at 03:00 Europe/Berlin."""
+    """Refresh the completed previous day at 03:00 Europe/Berlin."""
     logger.info("Starting monthly challenge daily check-ins")
     db: Session = SessionLocal()
+    checkin_date = berlin_today() - timedelta(days=1)
     try:
         users = db.query(User).all()
         generated = 0
         for user in users:
             try:
-                await generate_daily_challenge_checkin(db, user)
+                await generate_daily_challenge_checkin(db, user, today=checkin_date, refresh=True)
                 generated += 1
             except Exception as exc:
                 db.rollback()

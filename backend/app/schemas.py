@@ -159,17 +159,42 @@ ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "cable", "
 
 
 class ForgeMachineProfileInput(BaseModel):
+    """Legacy embedded profile payload accepted by exercise create/update."""
     id: Optional[UUID] = None
     name: str = Field(..., min_length=1, max_length=100)
     model: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
 
 
+class ForgeMachineProfileResourceInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    model: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = Field(None, max_length=500)
+    # Profile metadata can be edited independently. Associations are normally
+    # managed from the exercise editor and only replaced when explicitly sent.
+    exercise_ids: Optional[list[UUID]] = Field(None, max_length=100)
+
+
 class ForgeMachineProfileResponse(ForgeMachineProfileInput):
     id: UUID
+    exercise_ids: list[UUID] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
+
+
+class ForgeLastPerformanceSetResponse(BaseModel):
+    position: int
+    set_type: Literal["warmup", "working"]
+    actual_weight_kg: Optional[float] = None
+    actual_reps: int
+
+
+class ForgeLastPerformanceResponse(BaseModel):
+    machine_profile_id: Optional[UUID] = None
+    machine_profile_name: Optional[str] = None
+    completed_at: Any
+    sets: list[ForgeLastPerformanceSetResponse]
 
 
 class ForgeExerciseInput(BaseModel):
@@ -178,7 +203,9 @@ class ForgeExerciseInput(BaseModel):
     equipment: ForgeEquipment = "other"
     primary_muscle_group: str = Field(..., min_length=1, max_length=64)
     secondary_muscle_groups: list[str] = Field(default_factory=list, max_length=8)
-    machine_profiles: list[ForgeMachineProfileInput] = Field(default_factory=list, max_length=20)
+    machine_profile_ids: Optional[list[UUID]] = Field(None, max_length=20)
+    # Backward compatibility for clients that still submit embedded profiles.
+    machine_profiles: Optional[list[ForgeMachineProfileInput]] = Field(None, max_length=20)
 
 
 class ForgeExerciseResponse(BaseModel):
@@ -189,6 +216,7 @@ class ForgeExerciseResponse(BaseModel):
     primary_muscle_group: str
     secondary_muscle_groups: list[str]
     machine_profiles: list[ForgeMachineProfileResponse]
+    last_performance: Optional[ForgeLastPerformanceResponse] = None
 
     class Config:
         from_attributes = True
@@ -398,6 +426,7 @@ class ForgeSessionExerciseInput(BaseModel):
 class ForgeSessionExerciseResponse(BaseModel):
     id: UUID
     source_exercise_id: Optional[UUID] = None
+    source_plan_exercise_id: Optional[UUID] = None
     name: str
     icon: str
     equipment: str
@@ -454,6 +483,32 @@ class ForgeStartSessionRequest(BaseModel):
 
 class ForgeCompleteCourseRequest(BaseModel):
     program_id: Optional[UUID] = None
+
+
+class ForgeCompleteSessionRequest(BaseModel):
+    apply_plan_changes: bool = False
+
+
+ForgePlanChangeKind = Literal[
+    "exercise_added",
+    "exercise_removed",
+    "exercise_reordered",
+    "profile_changed",
+    "notes_changed",
+    "sets_changed",
+]
+
+
+class ForgePlanChangeResponse(BaseModel):
+    kind: ForgePlanChangeKind
+    label: str
+    detail: str
+
+
+class ForgePlanChangesResponse(BaseModel):
+    has_changes: bool
+    can_apply: bool
+    changes: list[ForgePlanChangeResponse]
 
 
 class ForgeSessionChatRequest(BaseModel):
