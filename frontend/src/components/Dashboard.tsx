@@ -16,6 +16,7 @@ import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
 import ConfirmDialog from './ConfirmDialog';
 import ForgeSheet from './ForgeSheet';
+import ForgePlanImagePreview from './ForgePlanImagePreview';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -226,7 +227,7 @@ export default function Dashboard() {
                         </div>
                         <Dumbbell size={22} style={{ color: SAND }} />
                     </div>
-                    {homeRoutine && <button onClick={() => void handleStartRoutine(homeRoutine)} disabled={startingSession} className="btn-forge w-full mt-4 flex items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Kurs als erledigt markieren' : 'Training starten'}</button>}
+                    {homeRoutine && <div className="mt-4 flex items-stretch gap-2"><ForgePlanImagePreview plan={homeRoutine} className="h-12 w-16 sm:h-14 sm:w-20" /><button onClick={() => void handleStartRoutine(homeRoutine)} disabled={startingSession} className="btn-forge flex min-w-0 flex-1 items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Kurs als erledigt markieren' : 'Training starten'}</button></div>}
                     {availableTrainingPlans.length > (homeRoutine ? 1 : 0) && <button onClick={() => setAlternativePickerOpen(true)} disabled={startingSession} className="tap mt-2 w-full rounded-xl py-2.5 text-[11px] font-medium" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Alternatives Training starten</button>}
                 </section>
             )}
