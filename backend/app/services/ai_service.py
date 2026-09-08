@@ -3,6 +3,7 @@ Google Gemini integration – generates the daily morning briefing.
 
 Uses gemini-3.8-flash for fast, cost-effective structured output.
 """
+import asyncio
 import json
 import logging
 import math
@@ -2300,23 +2301,65 @@ stable progression, first profile use or profile description. first_set_focus an
 at most 160 characters. Be energetic and specific without slogans, repetition, long recaps or generic safety disclaimers.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=json.dumps(session_context, ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                max_output_tokens=8192,
-                response_mime_type="application/json",
+        exercises = session_context.get("session", {}).get("exercises", [])
+        completion_contract = {
+            "required_exercise_ids": [
+                str(exercise.get("session_exercise_id"))
+                for exercise in exercises
+                if exercise.get("session_exercise_id")
+            ],
+            "required_set_ids": [
+                str(target.get("session_set_id"))
+                for exercise in exercises
+                for target in exercise.get("targets", [])
+                if target.get("session_set_id")
+            ],
+            "instruction": (
+                "Return every required exercise ID exactly once in exercise_decisions "
+                "and every required set ID exactly once in set_proposals."
             ),
-        )
-        raw = (response.text or "").strip()
-        if not raw:
-            raise ValueError("Gemini returned an empty response")
-        parsed = json.loads(re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw))
-        return _validate_forge_session_coaching(parsed, session_context)
+        }
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(2 ** (attempt - 1))
+            request_payload: dict[str, object] = {
+                "context": session_context,
+                "completion_contract": completion_contract,
+            }
+            if last_error is not None:
+                request_payload["retry_correction"] = (
+                    f"The previous complete response was rejected: {last_error}. "
+                    "Return the entire corrected JSON object again. Do not omit any required ID."
+                )
+            try:
+                response = await client.aio.models.generate_content(
+                    model="gemini-3.8-flash",
+                    contents=json.dumps(request_payload, ensure_ascii=False),
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=0.7 if attempt == 0 else 0.35,
+                        max_output_tokens=8192,
+                        response_mime_type="application/json",
+                    ),
+                )
+                raw = (response.text or "").strip()
+                if not raw:
+                    raise ValueError("Gemini returned an empty response")
+                parsed = json.loads(re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw))
+                return _validate_forge_session_coaching(parsed, session_context)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Forge AI response rejected (attempt %s/3): %s",
+                    attempt + 1,
+                    exc,
+                )
+        if last_error is not None:
+            raise last_error
+        raise ValueError("Gemini returned no response")
     except Exception as exc:
-        logger.exception("Forge AI coaching generation failed: %s", exc)
+        logger.exception("Forge AI coaching generation failed after retries: %s", exc)
         raise ForgeCoachingGenerationError("Forge KI konnte gerade keine vollständige Prognose erstellen. Bitte erneut versuchen.") from exc
 
 
