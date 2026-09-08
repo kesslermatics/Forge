@@ -59,17 +59,17 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="get_training_plan",
-        description="Read the user's current native Forge training plans and exercises.",
+        description="Read the user's current native Forge training plans, descriptions, and exercises.",
         parameters_json_schema=_schema({}),
     ),
     types.FunctionDeclaration(
         name="get_latest_workout",
-        description="Read the most recently completed Forge workout with actual completed sets.",
+        description="Read the most recently completed Forge workout, its plan description, notes, and actual completed sets.",
         parameters_json_schema=_schema({}),
     ),
     types.FunctionDeclaration(
         name="get_workouts",
-        description="Read recent completed Forge workouts. Use limit up to 30 and optionally restrict by days.",
+        description="Read recent completed Forge workouts including their plan descriptions, notes, and actual sets. Use limit up to 30 and optionally restrict by days.",
         parameters_json_schema=_schema({
             "limit": {"type": "integer", "minimum": 1, "maximum": 30},
             "days": {"type": "integer", "minimum": 1, "maximum": 365},
@@ -77,7 +77,7 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="get_exercise_history",
-        description="Read actual completed-set history for an exercise by its name.",
+        description="Read actual completed-set history for an exercise by its name, including workout descriptions and notes.",
         parameters_json_schema=_schema({
             "exercise_name": {"type": "string", "minLength": 1, "maxLength": 120},
             "limit": {"type": "integer", "minimum": 1, "maximum": 30},
@@ -152,6 +152,7 @@ def _workout_summary(workout: dict) -> dict:
         "title": workout.get("title", "Workout"),
         "start_time": workout.get("start_time"),
         "duration_min": workout.get("duration_min"),
+        "description": (workout.get("plan_description") or "")[:500],
         "exercises": [
             {
                 "title": exercise.get("title"),
@@ -162,6 +163,7 @@ def _workout_summary(workout: dict) -> dict:
                         "weight_kg": item.get("weight_kg"),
                         "reps": item.get("reps"),
                         "duration_seconds": item.get("duration_seconds"),
+                        "note": (item.get("note") or "")[:300],
                     }
                     for item in exercise.get("sets", [])[:20]
                 ],
@@ -228,8 +230,10 @@ async def _execute_tool(name: str, args: dict, user: User, db: Session) -> dict:
                     matches.append({
                         "workout_title": workout.get("title"),
                         "date": str(workout.get("start_time", ""))[:10],
+                        "description": (workout.get("plan_description") or "")[:500],
                         "exercise": exercise.get("title"),
                         "muscle_group": exercise.get("muscle_group"),
+                        "notes": (exercise.get("notes") or "")[:500],
                         "sets": exercise.get("sets", [])[:20],
                     })
         return {"exercise_name": args.get("exercise_name"), "sessions": matches[:limit]}

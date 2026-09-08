@@ -759,6 +759,7 @@ export interface ForgeExercise {
   primary_muscle_group: string;
   secondary_muscle_groups: string[];
   machine_profiles: ForgeMachineProfile[];
+  available_machine_profiles: ForgeMachineProfile[];
   last_performance?: ForgeLastPerformance | null;
 }
 
@@ -977,6 +978,7 @@ export interface ForgeSessionCoachDecision {
 }
 
 export interface ForgeSessionStartCoaching {
+  coaching_source?: 'ai' | 'fallback';
   headline: string;
   session_focus: string;
   readiness_note: string;
@@ -1064,8 +1066,8 @@ export const getActiveForgeSession = () => apiRequest<ForgeSession | null>('/api
 export const listForgeSessions = (limit = 50, offset = 0) =>
   apiRequest<ForgeSessionSummary[]>(`/api/forge/sessions?limit=${limit}&offset=${offset}`);
 export const getForgeSession = (id: string) => apiRequest<ForgeSession>(`/api/forge/sessions/${id}`);
-export const generateForgeSessionStartCoaching = (id: string) =>
-  apiRequest<ForgeSession>(`/api/forge/sessions/${id}/start-coaching`, { method: 'POST' });
+export const generateForgeSessionStartCoaching = (id: string, force = false) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${id}/start-coaching${force ? '?force=true' : ''}`, { method: 'POST' });
 export const deleteForgeSession = (id: string) =>
   apiRequest<void>(`/api/forge/sessions/${id}`, { method: 'DELETE' });
 export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_id?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>

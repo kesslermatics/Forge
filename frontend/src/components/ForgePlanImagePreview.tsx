@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react';
 import { fetchForgePlanImage } from '../api/api';
 import type { ForgePlan } from '../api/api';
 
-const FALLBACK_BACKGROUND = 'rgba(255,247,235,0.045)';
-
 export default function ForgePlanImagePreview({ plan, className }: { plan: ForgePlan; className: string }) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
 
@@ -26,8 +24,8 @@ export default function ForgePlanImagePreview({ plan, className }: { plan: Forge
     };
   }, [plan.id, plan.has_image]);
 
-  if (!imageUrl) return null;
-  return <div className={`shrink-0 overflow-hidden rounded-xl ${className}`} style={{ background: FALLBACK_BACKGROUND }}>
-    <img src={imageUrl} alt={`Bild für ${plan.name}`} className="h-full w-full object-contain" />
+  if (!plan.has_image) return null;
+  return <div className={`pointer-events-none shrink-0 overflow-hidden ${className}`}>
+    {imageUrl && <img src={imageUrl} alt={`Bild für ${plan.name}`} className="h-full w-full object-contain" />}
   </div>;
 }

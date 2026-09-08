@@ -33,6 +33,7 @@ export default function ChatPage() {
     const [editingValue, setEditingValue] = useState('');
     const abortRef = useRef<AbortController | null>(null);
     const endRef = useRef<HTMLDivElement>(null);
+    const latestAssistantRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     useEffect(() => {
@@ -55,7 +56,11 @@ export default function ChatPage() {
     }, []);
 
     useEffect(() => {
-        endRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (messages.at(-1)?.role === 'assistant') {
+            latestAssistantRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+            endRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
     }, [messages, loading, toolSteps]);
 
     const handleStreamEvent = (event: ChatStreamEvent) => {
@@ -155,7 +160,7 @@ export default function ChatPage() {
                     <p className="max-w-sm text-[12px] leading-relaxed mt-2" style={{ color: DIM }}>Ich kann deine echten Workouts, Ernährung, Ziele und Fortschritte nachschauen — statt allgemeine Antworten zu raten.</p>
                     <div className="flex flex-wrap justify-center gap-2 mt-5"><Suggestion text="Wie war mein letztes Workout?" onClick={() => setInput('Wie war mein letztes Workout?')} /><Suggestion text="Wie viel Protein hatte ich?" onClick={() => setInput('Wie viel Protein hatte ich in den letzten Tagen?')} /></div>
                 </div>}
-                {messages.map((message, index) => <MessageBubble key={message.id ?? `${message.role}-${message.sequence ?? index}`} message={message} onEdit={message.role === 'user' ? beginEdit : undefined} />)}
+                {messages.map((message, index) => <div ref={message.role === 'assistant' && index === messages.length - 1 ? latestAssistantRef : undefined} key={message.id ?? `${message.role}-${message.sequence ?? index}`}><MessageBubble message={message} onEdit={message.role === 'user' ? beginEdit : undefined} /></div>)}
                 {loading && <div className="flex justify-start forge-anim"><div className="max-w-[92%] rounded-2xl px-4 py-3" style={{ background: 'rgba(255,247,235,0.045)', border: `1px solid ${BORDER}` }}>
                     <div className="flex items-center gap-2 text-[12px]" style={{ color: MUTED }}><Loader2 size={13} className="animate-spin" style={{ color: SAND }} /> Forge denkt mit <span className="inline-flex gap-0.5"><i className="w-1 h-1 rounded-full animate-bounce" style={{ background: SAND }} /><i className="w-1 h-1 rounded-full animate-bounce [animation-delay:120ms]" style={{ background: SAND }} /><i className="w-1 h-1 rounded-full animate-bounce [animation-delay:240ms]" style={{ background: SAND }} /></span></div>
                     {toolSteps.length > 0 && <div className="mt-3 space-y-2">{toolSteps.map(step => <div key={step.key} className="flex items-start gap-2 text-[11px] forge-anim" style={{ color: step.done ? DIM : MUTED }}><span className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ color: step.done ? '#9bd3a8' : SAND, background: step.done ? 'rgba(155,211,168,0.10)' : `${SAND}12` }}>{step.kind === 'thinking' ? <Brain size={11} /> : step.done ? <Check size={11} /> : <Loader2 size={11} className="animate-spin" />}</span><div className="min-w-0 flex-1">{step.kind === 'thinking' || step.kind === 'summary' ? <FormattedMarkdown content={step.label} compact /> : <span>{step.label}</span>}</div></div>)}</div>}

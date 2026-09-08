@@ -47,7 +47,7 @@ export default function ForgeExerciseEditorPage() {
       if (sessionMatch) {
         const updatedSession = await addForgeSessionExercise(sessionMatch[1], {
           exercise_id: saved.id,
-          machine_profile_id: saved.machine_profiles[0]?.id ?? null,
+          machine_profile_id: null,
           notes: '',
           sets: [{ set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null, coach_suggested_weight_kg: null, coach_suggested_reps: null, completed: false, note: '' }],
         });

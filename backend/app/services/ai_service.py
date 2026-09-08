@@ -2109,26 +2109,42 @@ def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
 
 
 def _forge_coaching_fallback(session_context: dict) -> dict:
-    exercises = session_context.get("session", {}).get("exercises", [])
+    session = session_context.get("session") or {}
+    session_name = str(session.get("name") or "Dein Training").strip()
+    exercises = session.get("exercises", [])
     decisions = []
     for exercise in exercises:
+        exercise_name = str(exercise.get("name") or "Diese Übung")
         guidance = exercise.get("deterministic_guidance") or {}
         status = guidance.get("progression_status", "FIRST_SESSION")
+        first_target = next(
+            (target for target in exercise.get("targets", []) if target.get("type") == "working"),
+            {},
+        )
+        target_weight = _forge_finite_weight(first_target.get("weight_kg"))
+        target_reps = first_target.get("reps")
+        if target_weight is not None and isinstance(target_reps, int):
+            target_label = f"{target_weight:g} kg × {target_reps} Wdh."
+        elif isinstance(target_reps, int):
+            target_label = f"{target_reps} kontrollierte Wdh."
+        else:
+            target_label = "ein konservatives Arbeitsziel"
         recommendation = {
-            "INCREASE_WEIGHT": "Deine letzte Leistung und die bestätigte nächste Last sprechen für einen kontrollierten Lastsprung bei den heutigen Arbeitssätzen.",
-            "KEEP_PROGRESSING": "Deine letzte Leistung zeigt noch Raum für saubere Wiederholungen bei gleicher Last; deshalb bleibt die Progression heute kontrolliert.",
-            "STAGNATED": "Die letzten vergleichbaren Einheiten waren bei gleicher Last stabil. Heute zählt eine saubere, realistische Wiederholung statt ein erzwungener Sprung.",
-            "REGRESSED": "Die letzte vergleichbare Einheit war niedriger. Das heutige Ziel stabilisiert die Leistung, bevor wieder mehr Last oder Volumen sinnvoll wird.",
-        }.get(status, "Ohne vergleichbaren Verlauf bleibt das erste Ziel bewusst konservativ, damit du eine belastbare Ausgangsbasis aufbaust.")
+            "INCREASE_WEIGHT": f"Bei {exercise_name} spricht die letzte Leistung für einen kontrollierten Lastsprung. Starte heute mit {target_label} und erhöhe nur bei sauberer Technik.",
+            "KEEP_PROGRESSING": f"Bei {exercise_name} bleibt die Last zunächst stabil, damit du weitere saubere Wiederholungen sammelst. Dein Startziel heute: {target_label}.",
+            "STAGNATED": f"Bei {exercise_name} waren die letzten vergleichbaren Einheiten stabil. Heute zählt Qualität vor einem erzwungenen Sprung; starte mit {target_label}.",
+            "REGRESSED": f"Bei {exercise_name} war die letzte vergleichbare Leistung niedriger. Wir stabilisieren zuerst und starten heute mit {target_label}.",
+        }.get(status, f"Für {exercise_name} gibt es noch keinen belastbaren Vergleich. Wir bauen mit {target_label} eine sichere Ausgangsbasis auf.")
         decisions.append({
             "session_exercise_id": exercise.get("session_exercise_id"),
             "recommendation": recommendation,
-            "first_set_focus": "Ersten Arbeitssatz bewusst kontrollieren und Technik prüfen.",
-            "effort_hint": "Beende den Satz mit ungefähr 2–3 Wiederholungen im Tank, sofern die Technik sauber bleibt.",
+            "first_set_focus": f"Erster Arbeitssatz bei {exercise_name}: {target_label} kontrolliert beginnen und die Technik vor der Last bewerten.",
+            "effort_hint": f"Lass bei {exercise_name} ungefähr 2–3 Wiederholungen im Tank und stoppe früher, wenn die Technik nachlässt.",
         })
     return {
-        "headline": "Dein Forge-Plan steht.",
-        "session_focus": "Die Satz-Ziele kombinieren deine echte Forge-Historie, das Yazio-Ziel und die Trainingsregeln für jede Übung.",
+        "coaching_source": "fallback",
+        "headline": f"{session_name}: fokussiert starten",
+        "session_focus": f"Für {len(exercises)} Übungen sind konkrete Startziele aus deiner bisherigen Forge-Historie und den Trainingsregeln vorbereitet. Heute zählt eine starke, saubere Ausführung statt blindes Mehrgewicht.",
         "readiness_note": "Passe bei Schmerzen, ungewohnter Erschöpfung oder unsauberer Technik konservativ an und hole bei gesundheitlichen Fragen fachlichen Rat ein.",
         "exercise_decisions": decisions,
         "set_proposals": list(_forge_set_proposal_defaults(session_context).values()),
@@ -2187,6 +2203,7 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
                 proposals[set_id]["target_reps"] = proposed_reps
 
     return {
+        "coaching_source": "ai",
         "headline": _forge_coaching_text(candidate.get("headline"), 160, fallback["headline"]),
         "session_focus": _forge_coaching_text(candidate.get("session_focus"), 420, fallback["session_focus"]),
         "readiness_note": _forge_coaching_text(candidate.get("readiness_note"), 300, fallback["readiness_note"]),
@@ -2207,8 +2224,7 @@ set_proposals item must use a working-set session_set_id supplied by the server 
 
 Use the supplied Yazio profile, nutrition context, matching Forge history, exercise notes and progression rules to choose a
 specific target for every working set. The server gives each set its baseline, a permitted weight list and a repetition range.
-Choose only a listed weight and only a whole-number repetition target within the supplied range. Never add or remove sets,
-change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
+Choose only a listed weight and only a whole-number repetition target within the supplied range. Never use the same recommendation for different exercises: name the exercise, reference its actual history or lack of history, and explain the concrete first-set target. Never add or remove sets, change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
 support progression, choose the conservative baseline. Explain the context and the reasoning for each exercise briefly in
 recommendation; this is the user-visible analysis. Keep text specific, short and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
     try:

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, BrainCircuit, Check, ChevronLeft, ChevronRight, CirclePlus, Clock3, Loader2, MessageSquare, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
 import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction,
@@ -56,8 +56,6 @@ const formatDuration = (startedAt: string, completedAt: string | null) => {
 
 export default function ForgeSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const [searchParams] = useSearchParams();
-  const shouldPrepareSession = searchParams.get('prepare') === '1';
   const navigate = useNavigate();
   const [session, setSession] = useState<ForgeSession | null>(null);
   const [library, setLibrary] = useState<ForgeExercise[]>([]);
@@ -174,10 +172,10 @@ export default function ForgeSessionPage() {
     if (!sessionId) return;
     let cancelled = false;
     const loadSession = async () => {
-      setLoading(true); setError(null); setPreparingSession(shouldPrepareSession);
+      setLoading(true); setError(null); setPreparingSession(true);
       try {
         const [loadedSession, loadedLibrary] = await Promise.all([getForgeSession(sessionId), getForgeExercises()]);
-        const preparedSession = shouldPrepareSession && loadedSession.status === 'active' && !loadedSession.start_coaching
+        const preparedSession = loadedSession.status === 'active' && !loadedSession.start_coaching
           ? await generateForgeSessionStartCoaching(sessionId)
           : loadedSession;
         if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); }
@@ -189,7 +187,7 @@ export default function ForgeSessionPage() {
     };
     void loadSession();
     return () => { cancelled = true; };
-  }, [sessionId, shouldPrepareSession]);
+  }, [sessionId]);
 
   const mutate = async (operation: () => Promise<ForgeSession>) => {
     setSaving(true); setError(null);
@@ -240,7 +238,7 @@ export default function ForgeSessionPage() {
       await flushAllSetAutosaves();
       const addedSession = await enqueueSessionMutation(() => addForgeSessionExercise(session.id, {
         exercise_id: exercise.id,
-        machine_profile_id: exercise.machine_profiles[0]?.id ?? null,
+        machine_profile_id: null,
         notes: '',
         sets: [{ set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null, coach_suggested_weight_kg: null, coach_suggested_reps: null, completed: false, note: '' }],
       }));
@@ -335,7 +333,7 @@ export default function ForgeSessionPage() {
       {session.status === 'active' && <div className="flex items-center gap-3"><button onClick={() => setSessionActionConfirm('discard')} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button><button onClick={() => void reviewCompletion()} disabled={saving || reviewingCompletion} className="tap flex items-center gap-1 text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>{reviewingCompletion && <Loader2 size={12} className="animate-spin" />}Beenden</button></div>}
     </header>
     {session.start_coaching && <section className="forge-coach-brief card-forge p-5" style={{ borderColor: `${SAND}40`, background: 'linear-gradient(135deg, rgba(232,197,138,0.13), rgba(255,247,235,0.025))' }}>
-      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p><p className="mt-3 text-[10px] leading-relaxed" style={{ color: DIM }}>{session.start_coaching.readiness_note}</p></div></div>
+      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p>{session.start_coaching.coaching_source && <span className="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: session.start_coaching.coaching_source === 'fallback' ? DIM : SAND, background: session.start_coaching.coaching_source === 'fallback' ? 'rgba(242,236,226,0.08)' : `${SAND}14` }}>{session.start_coaching.coaching_source === 'fallback' ? 'Basis-Coaching' : 'KI-Analyse'}</span>}</div><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p><p className="mt-3 text-[10px] leading-relaxed" style={{ color: DIM }}>{session.start_coaching.readiness_note}</p>{session.status === 'active' && (!session.start_coaching.coaching_source || session.start_coaching.coaching_source === 'fallback') && <button onClick={() => void mutate(() => generateForgeSessionStartCoaching(session.id, true))} disabled={saving} className="mt-3 tap rounded-xl px-3 py-2 text-[10px] font-medium disabled:opacity-50" style={{ color: SAND, border: `1px solid ${SAND}44`, background: `${SAND}0c` }}>{saving ? 'Analysiert…' : 'KI neu analysieren'}</button>}</div></div>
     </section>}
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
 
@@ -344,13 +342,18 @@ export default function ForgeSessionPage() {
     {activeExercise ? <>
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
-        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{activeLibraryExercise?.machine_profiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active'} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Gerät wählen</option>{activeLibraryExercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.primary_muscle_group}{activeExercise.machine_profile_name ? ` · ${activeExercise.machine_profile_name}` : ''}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
+        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{activeLibraryExercise?.available_machine_profiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active'} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Gerät wählen</option>{activeLibraryExercise.available_machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.primary_muscle_group}{activeExercise.machine_profile_name ? ` · ${activeExercise.machine_profile_name}` : ''}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
         {activeCoachDecision && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Forge Trainingsziel</p>
+              <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Dein Trainingsziel</p>
               <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl p-2.5" style={{ background: 'rgba(255,247,235,0.04)' }}><p className="text-[9px] uppercase tracking-wider" style={{ color: SAND }}>Erster Arbeitssatz</p><p className="mt-1 text-[11px] leading-relaxed" style={{ color: DIM }}>{activeCoachDecision.first_set_focus}</p></div>
+                <div className="rounded-xl p-2.5" style={{ background: 'rgba(255,247,235,0.04)' }}><p className="text-[9px] uppercase tracking-wider" style={{ color: SAND }}>Belastung</p><p className="mt-1 text-[11px] leading-relaxed" style={{ color: DIM }}>{activeCoachDecision.effort_hint}</p></div>
+              </div>
+              {activeExercise.coach_guidance?.rationale && <p className="mt-3 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: SAND }}>Progressionsbasis: </span>{activeExercise.coach_guidance.rationale}</p>}
             </div>
           </div>
         </aside>}

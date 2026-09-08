@@ -216,6 +216,7 @@ class ForgeExerciseResponse(BaseModel):
     primary_muscle_group: str
     secondary_muscle_groups: list[str]
     machine_profiles: list[ForgeMachineProfileResponse]
+    available_machine_profiles: list[ForgeMachineProfileResponse]
     last_performance: Optional[ForgeLastPerformanceResponse] = None
 
     class Config:

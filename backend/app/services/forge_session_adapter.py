@@ -35,7 +35,29 @@ def completed_forge_workouts(
     if limit is not None:
         query = query.limit(limit)
 
-    return [_serialize_completed_session(session) for session in query.all()]
+    sessions = query.all()
+    source_plan_ids = {
+        session.source_plan_id
+        for session in sessions
+        if session.source_plan_id is not None
+    }
+    plan_descriptions: dict[UUID, str | None] = {}
+    if source_plan_ids:
+        plan_descriptions = {
+            plan.id: plan.description
+            for plan in db.query(ForgeTrainingPlan).filter(
+                ForgeTrainingPlan.user_id == user_id,
+                ForgeTrainingPlan.id.in_(source_plan_ids),
+            ).all()
+        }
+
+    return [
+        _serialize_completed_session(
+            session,
+            plan_descriptions.get(session.source_plan_id),
+        )
+        for session in sessions
+    ]
 
 
 def completed_forge_workout_dates(db: Session, user_id: UUID) -> list[dict]:
@@ -52,7 +74,7 @@ def completed_forge_workout_dates(db: Session, user_id: UUID) -> list[dict]:
 
 
 def forge_training_plan_context(db: Session, user_id: UUID) -> list[dict]:
-    """Return native plan names and exercise names for the global coach chat."""
+    """Return native plan names, descriptions, and exercise names for the coach chat."""
     plans = (
         db.query(ForgeTrainingPlan)
         .filter(ForgeTrainingPlan.user_id == user_id)
@@ -62,6 +84,7 @@ def forge_training_plan_context(db: Session, user_id: UUID) -> list[dict]:
     return [
         {
             "name": plan.name,
+            "description": plan.description or "",
             "exercises": [plan_exercise.exercise.name for plan_exercise in plan.exercises],
         }
         for plan in plans
@@ -121,7 +144,10 @@ def _serialize_plan_template(plan: ForgeTrainingPlan) -> list[dict]:
     ]
 
 
-def _serialize_completed_session(session: ForgeWorkoutSession) -> dict:
+def _serialize_completed_session(
+    session: ForgeWorkoutSession,
+    plan_description: str | None = None,
+) -> dict:
     completed_at = session.completed_at or session.started_at
     duration_min = None
     if session.started_at and completed_at:
@@ -130,6 +156,7 @@ def _serialize_completed_session(session: ForgeWorkoutSession) -> dict:
     return {
         "id": str(session.id),
         "source_plan_id": str(session.source_plan_id) if session.source_plan_id else None,
+        "plan_description": plan_description or "",
         "title": session.name,
         "start_time": session.started_at.isoformat() if session.started_at else "",
         "end_time": completed_at.isoformat() if completed_at else "",
@@ -144,6 +171,7 @@ def _serialize_completed_session(session: ForgeWorkoutSession) -> dict:
                         "type": set_data.set_type,
                         "weight_kg": set_data.actual_weight_kg,
                         "reps": set_data.actual_reps,
+                        "note": set_data.note or "",
                     }
                     for set_data in exercise.sets
                     if set_data.completed

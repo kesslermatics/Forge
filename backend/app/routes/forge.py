@@ -164,6 +164,23 @@ def _serialize_profile(profile: ForgeMachineProfile | None) -> dict | None:
     }
 
 
+def _available_machine_profiles(
+    db: Session,
+    user_id: UUID,
+    equipment: str,
+) -> list[ForgeMachineProfile]:
+    """Return current global profiles usable by machine and cable exercises."""
+    if equipment not in {"machine", "cable"}:
+        return []
+    return db.query(ForgeMachineProfile).filter(
+        ForgeMachineProfile.user_id == user_id,
+        ForgeMachineProfile.is_archived.is_(False),
+    ).order_by(
+        ForgeMachineProfile.name,
+        ForgeMachineProfile.created_at,
+    ).all()
+
+
 def _last_exercise_performances(
     db: Session,
     user_id: UUID,
@@ -234,6 +251,10 @@ def _serialize_exercise(
         "machine_profiles": [
             _serialize_profile(profile)
             for profile in exercise.machine_profiles
+        ],
+        "available_machine_profiles": [
+            _serialize_profile(profile)
+            for profile in _available_machine_profiles(db, user_id, exercise.equipment)
         ],
         "last_performance": last_performances.get(exercise.id),
     }
@@ -414,8 +435,6 @@ def _replace_plan_exercises(db: Session, plan: ForgeTrainingPlan, plan_input: Fo
     for position, entry in enumerate(plan_input.exercises):
         exercise = exercises_by_id[entry.exercise_id]
         profile = profiles_by_id.get(entry.machine_profile_id) if entry.machine_profile_id else None
-        if profile is not None and profile not in exercise.machine_profiles:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das ausgewählte Maschinenprofil ist dieser Übung nicht zugeordnet.")
         if profile is not None and exercise.equipment not in {"machine", "cable"}:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Maschinenprofile können nur Übungen mit Gerät ‚Maschine‘ oder ‚Kabelzug‘ zugeordnet werden.")
         plan_exercise = ForgePlanExercise(
@@ -579,10 +598,9 @@ async def get_exercise_history(
         profile = db.query(ForgeMachineProfile).filter(
             ForgeMachineProfile.id == machine_profile_id,
             ForgeMachineProfile.user_id == current_user.id,
-            ForgeMachineProfile.exercises.any(ForgeExercise.id == exercise.id),
         ).first()
         if profile is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das Maschinenprofil ist dieser Übung nicht zugeordnet.")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das Maschinenprofil gehört nicht zu deinem Konto.")
 
     rows_query = db.query(ForgeWorkoutSession, ForgeSessionExercise).join(
         ForgeSessionExercise, ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
@@ -865,7 +883,7 @@ async def create_plan_draft(
             "secondary_muscle_groups": exercise.secondary_muscle_groups or [],
             "machine_profiles": [
                 {"id": str(profile.id), "name": profile.name, "model": profile.model}
-                for profile in exercise.machine_profiles
+                for profile in _available_machine_profiles(db, current_user.id, exercise.equipment)
             ],
         })
     yazio_context = await _yazio_goal_context(current_user)
@@ -1272,7 +1290,7 @@ def _plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> t
             profile = db.query(ForgeMachineProfile).filter(
                 ForgeMachineProfile.id == session_exercise.source_machine_profile_id,
                 ForgeMachineProfile.user_id == user_id,
-                ForgeMachineProfile.exercises.any(ForgeExercise.id == library_exercise.id),
+                ForgeMachineProfile.is_archived.is_(False),
             ).first()
             if profile is None or library_exercise.equipment not in {"machine", "cable"}:
                 can_apply = False
@@ -1309,7 +1327,6 @@ def _apply_session_plan_changes(db: Session, user_id: UUID, session: ForgeWorkou
                 ForgeMachineProfile.id == session_exercise.source_machine_profile_id,
                 ForgeMachineProfile.user_id == user_id,
                 ForgeMachineProfile.is_archived.is_(False),
-                ForgeMachineProfile.exercises.any(ForgeExercise.id == library_exercise.id),
             ).one_or_none()
         plan_exercise = matches.get(session_exercise.id)
         if plan_exercise is None:
@@ -1344,7 +1361,7 @@ def _session_machine_profile(
     source_exercise_id: UUID | None,
     machine_profile_id: UUID | None,
 ) -> ForgeMachineProfile | None:
-    """Resolve a submitted profile ID and verify it belongs to this user's source exercise."""
+    """Resolve a submitted global profile ID for a machine or cable exercise."""
     if machine_profile_id is None:
         return None
     if source_exercise_id is None:
@@ -1353,10 +1370,9 @@ def _session_machine_profile(
         ForgeMachineProfile.id == machine_profile_id,
         ForgeMachineProfile.user_id == user_id,
         ForgeMachineProfile.is_archived.is_(False),
-        ForgeMachineProfile.exercises.any(ForgeExercise.id == source_exercise_id),
     ).first()
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das ausgewählte Maschinenprofil ist dieser Übung nicht zugeordnet.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Das ausgewählte Geräteprofil ist nicht verfügbar.")
     exercise = db.query(ForgeExercise).filter(
         ForgeExercise.id == source_exercise_id,
         ForgeExercise.user_id == user_id,
@@ -1586,12 +1602,17 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
 
 
 @router.post("/sessions/{session_id}/start-coaching", response_model=ForgeSessionResponse)
-async def generate_session_start_coaching(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def generate_session_start_coaching(
+    session_id: UUID,
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Persist one idempotent, text-only coaching briefing after the durable session snapshot exists."""
     session = _owned_session(db, current_user.id, session_id)
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")
-    if session.start_coaching is None:
+    if session.start_coaching is None or force:
         coaching_profile = await _forge_coaching_profile(current_user)
         context = _session_coaching_context(db, current_user, session, coaching_profile)
         coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
