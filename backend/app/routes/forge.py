@@ -70,6 +70,7 @@ from app.services.progress_photo_storage import (
 from app.services.ai_service import (
     _build_deterministic_set_targets,
     _compute_exercise_progression,
+    _parse_available_weights,
     generate_forge_exercise_draft,
     generate_forge_plan_draft,
     generate_forge_session_chat,
@@ -231,6 +232,43 @@ def _last_exercise_performances(
             "actual_reps": set_data.actual_reps,
         })
     return performances
+
+
+def _last_used_machine_profiles(
+    db: Session,
+    user_id: UUID,
+    exercise_ids: list[UUID],
+) -> dict[UUID, ForgeMachineProfile]:
+    """Return the newest active machine profile used for each library exercise."""
+    if not exercise_ids:
+        return {}
+    rows = db.query(ForgeWorkoutSession, ForgeSessionExercise).filter(
+        ForgeWorkoutSession.user_id == user_id,
+        ForgeWorkoutSession.status == "completed",
+        ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
+        ForgeSessionExercise.source_exercise_id.in_(set(exercise_ids)),
+        ForgeSessionExercise.source_machine_profile_id.isnot(None),
+    ).order_by(
+        ForgeWorkoutSession.completed_at.desc().nullslast(),
+        ForgeWorkoutSession.started_at.desc(),
+    ).all()
+    latest_profile_ids: dict[UUID, UUID] = {}
+    for _, session_exercise in rows:
+        if session_exercise.source_exercise_id not in latest_profile_ids and session_exercise.source_machine_profile_id is not None:
+            latest_profile_ids[session_exercise.source_exercise_id] = session_exercise.source_machine_profile_id
+    if not latest_profile_ids:
+        return {}
+    profiles = db.query(ForgeMachineProfile).filter(
+        ForgeMachineProfile.user_id == user_id,
+        ForgeMachineProfile.is_archived.is_(False),
+        ForgeMachineProfile.id.in_(set(latest_profile_ids.values())),
+    ).all()
+    profiles_by_id = {profile.id: profile for profile in profiles}
+    return {
+        exercise_id: profiles_by_id[profile_id]
+        for exercise_id, profile_id in latest_profile_ids.items()
+        if profile_id in profiles_by_id
+    }
 
 
 def _serialize_exercise(
@@ -1029,6 +1067,25 @@ def _session_coaching_context(
         for exercise in selected
     }
     selected_keys.discard(None)
+    selected_profile_ids = {
+        exercise.source_machine_profile_id
+        for exercise in selected
+        if exercise.source_machine_profile_id is not None
+    }
+    selected_profiles = db.query(ForgeMachineProfile).filter(
+        ForgeMachineProfile.user_id == user.id,
+        ForgeMachineProfile.is_archived.is_(False),
+        ForgeMachineProfile.id.in_(selected_profile_ids),
+    ).all() if selected_profile_ids else []
+    profiles_by_id = {profile.id: profile for profile in selected_profiles}
+    profile_weights_by_exercise: dict[UUID, list[float]] = {}
+    profile_notes_by_exercise: dict[UUID, str] = {}
+    for exercise in selected:
+        profile = profiles_by_id.get(exercise.source_machine_profile_id)
+        profile_notes = profile.notes if profile else ""
+        combined_notes = "\n".join(part for part in [exercise.notes, profile_notes] if part)
+        profile_notes_by_exercise[exercise.id] = profile_notes
+        profile_weights_by_exercise[exercise.id] = _parse_available_weights(combined_notes)
     history = []
     historical_weights: dict[str, set[float]] = {}
     for completed in _native_completed_sessions(db, user.id, session.name)[:6]:
@@ -1065,9 +1122,12 @@ def _session_coaching_context(
     def _target_context(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
         minimum, maximum = _rep_bounds(exercise)
         progression_key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
+        profile_weights = profile_weights_by_exercise.get(exercise.id, [])
         baseline_weight = set_data.target_weight_kg
         candidates = {float(baseline_weight)} if isinstance(baseline_weight, (int, float)) and isfinite(baseline_weight) and baseline_weight >= 0 else set()
-        if set_data.set_type == "working":
+        if set_data.set_type == "warmup":
+            candidates.update(profile_weights)
+        else:
             for historical_weight in historical_weights.get(progression_key or "", set()):
                 if baseline_weight is None or historical_weight <= float(baseline_weight) + 0.001:
                     candidates.add(historical_weight)
@@ -1092,7 +1152,9 @@ def _session_coaching_context(
                     "equipment": exercise.equipment,
                     "muscle_group": exercise.primary_muscle_group,
                     "machine_profile": exercise.machine_profile_name,
-                    "notes": exercise.notes or "",
+                    "machine_profile_notes": profile_notes_by_exercise.get(exercise.id, ""),
+                    "available_weight_kg": profile_weights_by_exercise.get(exercise.id, []),
+                    "notes": "\n".join(part for part in [exercise.notes or "", profile_notes_by_exercise.get(exercise.id, "")] if part),
                     "deterministic_guidance": exercise.coach_guidance or {},
                     "working_set_count": sum(1 for set_data in exercise.sets if set_data.set_type == "working"),
                     "targets": [_target_context(exercise, set_data) for set_data in exercise.sets],
@@ -1527,12 +1589,19 @@ def _native_session_rationale(progression_data: dict, progression_status: str) -
     return f"Du hast im {rep_range}-Bereich noch Wiederholungen aufzubauen{weight_text}{previous_text}. Die Last bleibt deshalb konstant; das nächste messbare Ziel ist eine saubere zusätzliche Wiederholung, bevor das Gewicht erhöht wird."
 
 
-def _session_guidance_by_plan_exercise(plan: ForgeTrainingPlan, progression: dict, targets: list[dict]) -> dict[UUID, dict]:
+def _session_guidance_by_plan_exercise(
+    plan: ForgeTrainingPlan,
+    progression: dict,
+    targets: list[dict],
+    profile_overrides: dict[UUID, ForgeMachineProfile] | None = None,
+) -> dict[UUID, dict]:
     """Freeze the deterministic coach explanation next to each planned session exercise."""
+    profile_overrides = profile_overrides or {}
     guidance: dict[UUID, dict] = {}
     for position, plan_exercise in enumerate(plan.exercises):
         target = targets[position] if position < len(targets) else {}
-        progression_key = _native_progression_key(plan_exercise.exercise.id, plan_exercise.machine_profile_id)
+        profile = plan_exercise.machine_profile or profile_overrides.get(plan_exercise.exercise.id)
+        progression_key = _native_progression_key(plan_exercise.exercise.id, profile.id if profile else None)
         progression_data = progression.get(progression_key, {})
         progression_status = target.get("progression_status") or progression_data.get("signal") or "FIRST_SESSION"
         guidance[plan_exercise.id] = {
@@ -1543,10 +1612,17 @@ def _session_guidance_by_plan_exercise(plan: ForgeTrainingPlan, progression: dic
     return guidance
 
 
-def _snapshot_plan_into_session(plan: ForgeTrainingPlan, session: ForgeWorkoutSession, guidance_by_plan_exercise: dict[UUID, dict] | None = None) -> None:
+def _snapshot_plan_into_session(
+    plan: ForgeTrainingPlan,
+    session: ForgeWorkoutSession,
+    guidance_by_plan_exercise: dict[UUID, dict] | None = None,
+    last_used_profiles: dict[UUID, ForgeMachineProfile] | None = None,
+) -> None:
     guidance_by_plan_exercise = guidance_by_plan_exercise or {}
+    last_used_profiles = last_used_profiles or {}
     for exercise_position, plan_exercise in enumerate(plan.exercises):
         exercise = plan_exercise.exercise
+        machine_profile = plan_exercise.machine_profile or last_used_profiles.get(exercise.id)
         session_exercise = ForgeSessionExercise(
             source_exercise_id=exercise.id,
             source_plan_exercise_id=plan_exercise.id,
@@ -1555,8 +1631,8 @@ def _snapshot_plan_into_session(plan: ForgeTrainingPlan, session: ForgeWorkoutSe
             equipment=exercise.equipment,
             primary_muscle_group=exercise.primary_muscle_group,
             secondary_muscle_groups=exercise.secondary_muscle_groups or [],
-            source_machine_profile_id=plan_exercise.machine_profile_id,
-            machine_profile_name=plan_exercise.machine_profile.name if plan_exercise.machine_profile else None,
+            source_machine_profile_id=machine_profile.id if machine_profile else None,
+            machine_profile_name=machine_profile.name if machine_profile else None,
             notes=plan_exercise.notes,
             coach_guidance=guidance_by_plan_exercise.get(plan_exercise.id),
             position=exercise_position,
@@ -1589,8 +1665,18 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
     program = _owned_program(db, current_user.id, data.program_id) if data.program_id else None
     if program is not None and not any(link.plan_id == plan.id for link in program.routines):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This routine is not part of the selected program.")
-    progression, targets = _refresh_native_coach_targets(db, current_user.id, plan)
-    guidance_by_plan_exercise = _session_guidance_by_plan_exercise(plan, progression, targets)
+    last_used_profiles = _last_used_machine_profiles(
+        db,
+        current_user.id,
+        [plan_exercise.exercise_id for plan_exercise in plan.exercises],
+    )
+    progression, targets = _refresh_native_coach_targets(db, current_user.id, plan, last_used_profiles)
+    guidance_by_plan_exercise = _session_guidance_by_plan_exercise(
+        plan,
+        progression,
+        targets,
+        last_used_profiles,
+    )
     session = ForgeWorkoutSession(
         user_id=current_user.id,
         program_id=program.id if program else None,
@@ -1598,7 +1684,7 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
         name=plan.name,
         status="active",
     )
-    _snapshot_plan_into_session(plan, session, guidance_by_plan_exercise)
+    _snapshot_plan_into_session(plan, session, guidance_by_plan_exercise, last_used_profiles)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -1845,11 +1931,15 @@ async def add_session_exercise(session_id: UUID, data: ForgeSessionExerciseInput
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Exercise does not belong to you.")
     if exercise is None and not (data.name or "").strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose a library exercise or supply a name.")
-    machine_profile = _session_machine_profile(
-        db,
-        current_user.id,
-        exercise.id if exercise else None,
-        data.machine_profile_id,
+    machine_profile = (
+        _last_used_machine_profiles(db, current_user.id, [exercise.id]).get(exercise.id)
+        if data.machine_profile_id is None and exercise is not None
+        else _session_machine_profile(
+            db,
+            current_user.id,
+            exercise.id if exercise else None,
+            data.machine_profile_id,
+        )
     )
     session_exercise = ForgeSessionExercise(
         source_exercise_id=exercise.id if exercise else None,
@@ -1873,6 +1963,32 @@ async def add_session_exercise(session_id: UUID, data: ForgeSessionExerciseInput
     return _serialize_session(session)
 
 
+async def _apply_isolated_session_exercise_coaching(
+    db: Session,
+    user: User,
+    session: ForgeWorkoutSession,
+    exercise: ForgeSessionExercise,
+) -> None:
+    """Generate and persist coaching only for one session exercise/profile identity."""
+    coaching_profile = await _forge_coaching_profile(user)
+    context = _session_coaching_context(
+        db, user, session, coaching_profile, only_exercise_id=exercise.id,
+    )
+    generated = await generate_forge_session_start_coaching(context, user.language or "de")
+    _apply_forge_set_proposals(session, generated)
+    decision = next(
+        (item for item in generated.get("exercise_decisions", []) if item.get("session_exercise_id") == str(exercise.id)),
+        None,
+    )
+    if decision is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Exercise coaching could not be prepared safely.")
+    exercise.addition_coaching = {
+        "recommendation": decision["recommendation"],
+        "first_set_focus": decision["first_set_focus"],
+        "effort_hint": decision["effort_hint"],
+    }
+
+
 @router.post("/sessions/{session_id}/exercises/{session_exercise_id}/addition-coaching", response_model=ForgeSessionResponse)
 async def generate_session_exercise_addition_coaching(session_id: UUID, session_exercise_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create one persisted coaching card for a newly added live-session exercise."""
@@ -1883,20 +1999,7 @@ async def generate_session_exercise_addition_coaching(session_id: UUID, session_
     if exercise is None:
         raise _not_found("Session exercise not found")
     if exercise.addition_coaching is None:
-        coaching_profile = await _forge_coaching_profile(current_user)
-        context = _session_coaching_context(
-            db, current_user, session, coaching_profile, only_exercise_id=session_exercise_id,
-        )
-        generated = await generate_forge_session_start_coaching(context, current_user.language or "de")
-        _apply_forge_set_proposals(session, generated)
-        decision = next((item for item in generated.get("exercise_decisions", []) if item.get("session_exercise_id") == str(exercise.id)), None)
-        if decision is None:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Exercise coaching could not be prepared safely.")
-        exercise.addition_coaching = {
-            "recommendation": decision["recommendation"],
-            "first_set_focus": decision["first_set_focus"],
-            "effort_hint": decision["effort_hint"],
-        }
+        await _apply_isolated_session_exercise_coaching(db, current_user, session, exercise)
         db.commit()
         db.refresh(session)
     return _serialize_session(session)
@@ -1911,23 +2014,35 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
     if exercise is None:
         raise _not_found("Session exercise not found")
     updates = data.model_dump(exclude_unset=True)
+    profile_changed = False
+    library_exercise = None
     if "machine_profile_id" in updates:
+        previous_profile_id = exercise.source_machine_profile_id
         machine_profile = _session_machine_profile(
             db,
             current_user.id,
             exercise.source_exercise_id,
             updates.pop("machine_profile_id"),
         )
+        profile_changed = previous_profile_id != (machine_profile.id if machine_profile else None)
         exercise.source_machine_profile_id = machine_profile.id if machine_profile else None
         exercise.machine_profile_name = machine_profile.name if machine_profile else None
         library_exercise = db.query(ForgeExercise).filter(
             ForgeExercise.id == exercise.source_exercise_id,
             ForgeExercise.user_id == current_user.id,
         ).first()
-        if library_exercise is not None:
+        if library_exercise is not None and profile_changed:
+            # Targets and coaching are profile-specific. Do not carry the previous
+            # profile's load into the isolated analysis.
+            for set_data in exercise.sets:
+                set_data.target_weight_kg = None
+                set_data.coach_suggested_weight_kg = None
             _apply_live_session_exercise_guidance(db, current_user.id, exercise, library_exercise, machine_profile)
+            exercise.addition_coaching = None
     for key, value in updates.items():
         setattr(exercise, key, value)
+    if profile_changed and library_exercise is not None:
+        await _apply_isolated_session_exercise_coaching(db, current_user, session, exercise)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -2291,14 +2406,19 @@ def _native_progression_key(exercise_id: UUID | None, machine_profile_id: UUID |
     return f"{exercise_id}:{machine_profile_id or 'unprofiled'}"
 
 
-def _native_plan_template(plan: ForgeTrainingPlan) -> list[dict]:
+def _native_plan_template(
+    plan: ForgeTrainingPlan,
+    profile_overrides: dict[UUID, ForgeMachineProfile] | None = None,
+) -> list[dict]:
     """Normalize a native routine into the deterministic progression template shape."""
+    profile_overrides = profile_overrides or {}
     template = []
     for plan_exercise in plan.exercises:
-        note_parts = [part for part in [plan_exercise.notes, plan_exercise.machine_profile.notes if plan_exercise.machine_profile else None] if part]
+        machine_profile = plan_exercise.machine_profile or profile_overrides.get(plan_exercise.exercise.id)
+        note_parts = [part for part in [plan_exercise.notes, machine_profile.notes if machine_profile else None] if part]
         template.append({
             "title": plan_exercise.exercise.name,
-            "progression_key": _native_progression_key(plan_exercise.exercise.id, plan_exercise.machine_profile_id),
+            "progression_key": _native_progression_key(plan_exercise.exercise.id, machine_profile.id if machine_profile else None),
             "muscle_group": plan_exercise.exercise.primary_muscle_group,
             "notes": "\n".join(note_parts),
             "sets": [
@@ -2408,9 +2528,15 @@ def _apply_live_session_exercise_guidance(
             set_data.coach_suggested_reps = target_reps
 
 
-def _refresh_native_coach_targets(db: Session, user_id: UUID, plan: ForgeTrainingPlan) -> tuple[dict, list[dict]]:
+def _refresh_native_coach_targets(
+    db: Session,
+    user_id: UUID,
+    plan: ForgeTrainingPlan,
+    profile_overrides: dict[UUID, ForgeMachineProfile] | None = None,
+) -> tuple[dict, list[dict]]:
     """Persist targets using a distinct history bucket for every selected machine profile."""
-    template = _native_plan_template(plan)
+    profile_overrides = profile_overrides or {}
+    template = _native_plan_template(plan, profile_overrides)
     history = _native_completed_sessions(db, user_id, plan.name)
     progression = _compute_exercise_progression(history, template)
     targets = _build_deterministic_set_targets(template, progression, [])
@@ -2424,7 +2550,8 @@ def _refresh_native_coach_targets(db: Session, user_id: UUID, plan: ForgeTrainin
                 latest_by_key[progression_key] = exercise
 
     for plan_exercise in plan.exercises:
-        progression_key = _native_progression_key(plan_exercise.exercise.id, plan_exercise.machine_profile_id)
+        profile = plan_exercise.machine_profile or profile_overrides.get(plan_exercise.exercise.id)
+        progression_key = _native_progression_key(plan_exercise.exercise.id, profile.id if profile else None)
         target = targets_by_key.get(progression_key)
         latest = latest_by_key.get(progression_key, {})
         latest_sets = latest.get("sets", [])
