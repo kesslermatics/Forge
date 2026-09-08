@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BrainCircuit, Check, ChevronLeft, ChevronRight, CirclePlus, Clock3, Loader2, MessageSquare, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowLeft, BrainCircuit, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePlus, Clock3, Loader2, MessageSquare, Plus, Send, Sparkles, Trash2, X } from 'lucide-react';
 import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction,
   completeForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, deleteForgeSession,
@@ -74,6 +74,8 @@ export default function ForgeSessionPage() {
   const [actualDrafts, setActualDrafts] = useState<Record<string, string>>({});
   const [checkedSetId, setCheckedSetId] = useState<string | null>(null);
   const [openSetMenuId, setOpenSetMenuId] = useState<string | null>(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [analyzingProfileId, setAnalyzingProfileId] = useState<string | null>(null);
   const [celebratingCompletion, setCelebratingCompletion] = useState(false);
   const [sessionActionConfirm, setSessionActionConfirm] = useState<'complete' | 'discard' | null>(null);
   const [completionChanges, setCompletionChanges] = useState<ForgePlanChanges | null>(null);
@@ -95,7 +97,8 @@ export default function ForgeSessionPage() {
   const activeCoachDecision = useMemo(() => {
     if (!activeExercise) return null;
     if (activeExercise.addition_coaching) return activeExercise.addition_coaching;
-    return session?.start_coaching?.exercise_decisions.find((decision) => decision.session_exercise_id === activeExercise.id) ?? null;
+    if (session?.start_coaching?.coaching_source !== 'ai') return null;
+    return session.start_coaching.exercise_decisions.find((decision) => decision.session_exercise_id === activeExercise.id) ?? null;
   }, [session, activeExercise]);
   const setSessionSafe = (next: ForgeSession) => {
     sessionRef.current = next;
@@ -182,15 +185,24 @@ export default function ForgeSessionPage() {
           getForgeExercises(),
           getForgeMachineProfiles(),
         ]);
-        let preparedSession = loadedSession;
+        if (!cancelled) {
+          setSessionSafe(loadedSession);
+          setLibrary(loadedLibrary);
+          setMachineProfiles(loadedMachineProfiles);
+        }
         const storedFocus = loadedSession.start_coaching?.session_focus || '';
         const hasLegacyDetailedFocus = storedFocus.length > 180 || /(?:\bkg\b|\bwdh\.?\b|×|target_weight_kg|session_set_id)/i.test(storedFocus);
-        const hasMissingWarmupTarget = loadedSession.exercises.some((exercise) => exercise.sets.some((set) => set.set_type === 'warmup' && set.target_weight_kg == null && set.coach_suggested_weight_kg == null));
-        if (loadedSession.status === 'active' && (!loadedSession.start_coaching || hasLegacyDetailedFocus || hasMissingWarmupTarget)) {
+        const hasMissingWarmupTarget = loadedSession.exercises.some((exercise) => exercise.sets.some((set) => set.set_type === 'warmup' && (set.target_weight_kg == null || set.target_reps == null)));
+        const needsRealAi = !loadedSession.start_coaching || loadedSession.start_coaching.coaching_source !== 'ai' || hasLegacyDetailedFocus || hasMissingWarmupTarget;
+        if (loadedSession.status === 'active' && needsRealAi) {
           setPreparingSession(true);
-          preparedSession = await generateForgeSessionStartCoaching(sessionId, Boolean(loadedSession.start_coaching));
+          try {
+            const preparedSession = await generateForgeSessionStartCoaching(sessionId, Boolean(loadedSession.start_coaching));
+            if (!cancelled) setSessionSafe(preparedSession);
+          } catch (caught: unknown) {
+            if (!cancelled) setError(caught instanceof Error ? caught.message : 'Die Forge KI-Prognose konnte nicht erstellt werden.');
+          }
         }
-        if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); setMachineProfiles(loadedMachineProfiles); }
       } catch (caught: unknown) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : 'Session konnte nicht geladen werden.');
       } finally {
@@ -209,6 +221,30 @@ export default function ForgeSessionPage() {
     }
     catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Änderung konnte nicht gespeichert werden.'); }
     finally { setSaving(false); }
+  };
+
+  const selectMachineProfile = async (profileId: string) => {
+    const currentSession = sessionRef.current;
+    const currentExercise = currentSession?.exercises[activeIndex];
+    if (!currentSession || !currentExercise || currentExercise.machine_profile_id === profileId || analyzingProfileId) return;
+    setProfileMenuOpen(false);
+    setAnalyzingProfileId(profileId);
+    setSaving(true);
+    setError(null);
+    try {
+      await flushAllSetAutosaves();
+      const updated = await enqueueSessionMutation(() => updateForgeSessionExercise(
+        currentSession.id,
+        currentExercise.id,
+        { machine_profile_id: profileId },
+      ));
+      setSessionSafe(updated);
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Das Geräteprofil konnte nicht analysiert werden.');
+    } finally {
+      setAnalyzingProfileId(null);
+      setSaving(false);
+    }
   };
 
   const toggleSet = async (set: ForgeSessionSet) => {
@@ -341,6 +377,8 @@ export default function ForgeSessionPage() {
   const canSelectMachineProfile = Boolean(activeExercise?.source_exercise_id && (activeEquipment === 'machine' || activeEquipment === 'cable'));
   const allMachineProfiles = [...machineProfiles, ...(activeLibraryExercise?.available_machine_profiles ?? []), ...(activeLibraryExercise?.machine_profiles ?? [])];
   const selectableMachineProfiles = allMachineProfiles.filter((profile, index) => allMachineProfiles.findIndex((candidate) => candidate.id === profile.id) === index);
+  const selectedMachineProfile = selectableMachineProfiles.find((profile) => profile.id === activeExercise?.machine_profile_id) ?? null;
+  const analyzingMachineProfile = selectableMachineProfiles.find((profile) => profile.id === analyzingProfileId) ?? null;
   const duration = formatDuration(session.started_at, session.completed_at);
 
   return <div className="space-y-4 forge-anim">
@@ -348,8 +386,8 @@ export default function ForgeSessionPage() {
       <div className="flex gap-3"><button onClick={() => void leaveSession()} disabled={saving} className="tap mt-1 cursor-pointer disabled:cursor-default disabled:opacity-50" style={{ color: DIM }} aria-label="Zurück zum Dashboard"><ArrowLeft size={18} /></button><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{session.status === 'active' ? 'Live Session' : 'Abgeschlossen'}</p><h1 className="text-[22px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>{session.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · {duration}</p></div></div>
       {session.status === 'active' && <div className="flex items-center gap-3"><button onClick={() => setSessionActionConfirm('discard')} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button><button onClick={() => void reviewCompletion()} disabled={saving || reviewingCompletion} className="tap flex items-center gap-1 text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>{reviewingCompletion && <Loader2 size={12} className="animate-spin" />}Beenden</button></div>}
     </header>
-    {session.start_coaching && <section className="forge-coach-brief card-forge p-5" style={{ borderColor: `${SAND}40`, background: 'linear-gradient(135deg, rgba(232,197,138,0.13), rgba(255,247,235,0.025))' }}>
-      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p>{session.start_coaching.coaching_source && <span className="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: session.start_coaching.coaching_source === 'fallback' ? DIM : SAND, background: session.start_coaching.coaching_source === 'fallback' ? 'rgba(242,236,226,0.08)' : `${SAND}14` }}>{session.start_coaching.coaching_source === 'fallback' ? 'Basis-Coaching' : 'KI-Analyse'}</span>}</div><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p></div></div>
+    {session.start_coaching?.coaching_source === 'ai' && <section className="forge-coach-brief card-forge p-5" style={{ borderColor: `${SAND}40`, background: 'linear-gradient(135deg, rgba(232,197,138,0.13), rgba(255,247,235,0.025))' }}>
+      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p><span className="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: SAND, background: `${SAND}14` }}>KI-Analyse</span></div><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p></div></div>
     </section>}
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
 
@@ -358,7 +396,8 @@ export default function ForgeSessionPage() {
     {activeExercise ? <>
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
-        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{canSelectMachineProfile ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active' || saving || selectableMachineProfiles.length === 0} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer disabled:cursor-default" style={{ color: SAND }}><option value="">{selectableMachineProfiles.length ? 'Gerät wählen' : 'Keine Geräteprofile verfügbar'}</option>{selectableMachineProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.machine_profile_name || activeExercise.primary_muscle_group}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
+        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{canSelectMachineProfile ? <div className="relative mt-1"><button type="button" disabled={session.status !== 'active' || saving || selectableMachineProfiles.length === 0} onClick={() => setProfileMenuOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={profileMenuOpen} className="tap flex items-center gap-1.5 text-[11px] font-medium cursor-pointer disabled:cursor-default disabled:opacity-60" style={{ color: SAND }}>{selectedMachineProfile ? `${selectedMachineProfile.name}${selectedMachineProfile.model ? ` · ${selectedMachineProfile.model}` : ''}` : selectableMachineProfiles.length ? 'Gerät wählen' : 'Keine Geräteprofile verfügbar'}<ChevronDown size={13} /></button>{profileMenuOpen && <div role="listbox" className="absolute left-0 top-7 z-30 min-w-64 overflow-hidden rounded-xl p-1 shadow-2xl" style={{ background: '#282116', border: `1px solid ${SAND}55` }}>{selectableMachineProfiles.map((profile) => <button key={profile.id} type="button" role="option" aria-selected={profile.id === activeExercise.machine_profile_id} onClick={() => void selectMachineProfile(profile.id)} className="tap flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-[11px] cursor-pointer" style={{ color: profile.id === activeExercise.machine_profile_id ? SAND : TEXT, background: profile.id === activeExercise.machine_profile_id ? 'rgba(232,197,138,0.12)' : 'transparent' }}><span><span className="block font-medium">{profile.name}</span>{profile.model && <span className="mt-0.5 block text-[9px]" style={{ color: DIM }}>{profile.model}</span>}</span>{profile.id === activeExercise.machine_profile_id && <Check size={13} />}</button>)}</div>}</div> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.machine_profile_name || activeExercise.primary_muscle_group}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
+        {analyzingProfileId && <div className="mx-4 mb-4 flex items-center gap-3 rounded-2xl px-4 py-3" style={{ color: SAND, background: 'rgba(232,197,138,0.09)', border: `1px solid ${SAND}44` }}><Loader2 size={18} className="animate-spin shrink-0" /><div><p className="text-[12px] font-semibold">KI analysiert {analyzingMachineProfile?.name || 'das Geräteprofil'}…</p><p className="mt-0.5 text-[10px]" style={{ color: DIM }}>Warm-up und Arbeitssätze werden isoliert neu prognostiziert.</p></div></div>}
         {activeCoachDecision && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />

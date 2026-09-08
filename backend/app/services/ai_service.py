@@ -2067,14 +2067,14 @@ def _forge_coaching_text(value: object, limit: int, fallback: str) -> str:
 
 
 def _forge_meta_session_focus(value: object, fallback: str) -> str:
-    """Accept only a high-level briefing, never a set-by-set load list."""
+    """Accept only a compact high-level briefing, never a set-by-set load list."""
     if not isinstance(value, str):
         return fallback
     normalized = " ".join(value.split())
     lower = normalized.lower()
     if not normalized or any(token in lower for token in ("kg", "wdh", "×", "target_weight_kg", "session_set_id")):
         return fallback
-    return normalized[:420]
+    return normalized[:180]
 
 
 def _forge_finite_weight(value: object) -> float | None:
@@ -2207,10 +2207,11 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
 
 
 def _validate_forge_session_coaching(candidate: object, session_context: dict) -> dict:
-    """Whitelist coaching text and numeric proposals against server-owned set constraints."""
-    fallback = _forge_coaching_fallback(session_context)
+    """Require a complete AI answer and whitelist it against server-owned constraints."""
     if not isinstance(candidate, dict):
-        return fallback
+        raise ValueError("Forge AI returned no JSON object")
+
+    fallback = _forge_coaching_fallback(session_context)
     allowed_ids = {
         str(exercise.get("session_exercise_id"))
         for exercise in session_context.get("session", {}).get("exercises", [])
@@ -2220,75 +2221,97 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
     decisions: list[dict] = []
     seen: set[str] = set()
     raw_decisions = candidate.get("exercise_decisions")
-    if isinstance(raw_decisions, list):
-        for item in raw_decisions:
-            if not isinstance(item, dict):
-                continue
-            exercise_id = str(item.get("session_exercise_id") or "")
-            if exercise_id not in allowed_ids or exercise_id in seen:
-                continue
-            default = defaults[exercise_id]
-            recommendation = _forge_coaching_text(item.get("recommendation"), 360, default["recommendation"])
-            working_set_count = next(
-                (exercise.get("working_set_count") for exercise in session_context.get("session", {}).get("exercises", [])
-                 if str(exercise.get("session_exercise_id")) == exercise_id),
-                0,
-            )
-            all_out_suffix = " Heute gibt es nur einen Arbeitssatz: volle Power bis zum technischen Muskelversagen, solange die Ausführung sauber bleibt."
-            if working_set_count == 1 and "technischen muskelversagen" not in recommendation.lower():
-                recommendation = f"{recommendation[:max(0, 360 - len(all_out_suffix))].rstrip()}{all_out_suffix}"
-            decisions.append({
-                "session_exercise_id": exercise_id,
-                "recommendation": _forge_coaching_text(recommendation, 360, default["recommendation"]),
-                "first_set_focus": _forge_coaching_text(item.get("first_set_focus"), 220, default["first_set_focus"]),
-                "effort_hint": _forge_coaching_text(item.get("effort_hint"), 220, default["effort_hint"]),
-            })
-            seen.add(exercise_id)
-    for exercise_id, default in defaults.items():
-        if exercise_id not in seen:
-            decisions.append(default)
+    if not isinstance(raw_decisions, list):
+        raise ValueError("Forge AI omitted exercise decisions")
+    for item in raw_decisions:
+        if not isinstance(item, dict):
+            continue
+        exercise_id = str(item.get("session_exercise_id") or "")
+        if exercise_id not in allowed_ids or exercise_id in seen:
+            continue
+        default = defaults[exercise_id]
+        recommendation = _forge_coaching_text(item.get("recommendation"), 200, "")
+        first_set_focus = _forge_coaching_text(item.get("first_set_focus"), 120, "")
+        effort_hint = _forge_coaching_text(item.get("effort_hint"), 120, "")
+        if not recommendation or not first_set_focus or not effort_hint:
+            raise ValueError("Forge AI returned an incomplete exercise decision")
+        decisions.append({
+            "session_exercise_id": exercise_id,
+            "recommendation": recommendation,
+            "first_set_focus": first_set_focus,
+            "effort_hint": effort_hint,
+        })
+        seen.add(exercise_id)
+    if seen != allowed_ids:
+        raise ValueError("Forge AI did not analyze every exercise")
 
     proposal_defaults = _forge_set_proposal_defaults(session_context)
-    proposals = {set_id: dict(default) for set_id, default in proposal_defaults.items()}
+    proposals: dict[str, dict] = {}
     raw_proposals = candidate.get("set_proposals")
-    if isinstance(raw_proposals, list):
-        for item in raw_proposals:
-            if not isinstance(item, dict):
-                continue
-            set_id = str(item.get("session_set_id") or "")
-            default = proposal_defaults.get(set_id)
-            if default is None:
-                continue
-            proposed_weight = _forge_finite_weight(item.get("target_weight_kg"))
-            if proposed_weight is not None and any(abs(proposed_weight - allowed) < 0.001 for allowed in default["allowed_weight_kg"]):
-                proposals[set_id]["target_weight_kg"] = proposed_weight
-            proposed_reps = item.get("target_reps")
-            if isinstance(proposed_reps, int) and not isinstance(proposed_reps, bool) and default["min_reps"] <= proposed_reps <= default["max_reps"]:
-                proposals[set_id]["target_reps"] = proposed_reps
+    if not isinstance(raw_proposals, list):
+        raise ValueError("Forge AI omitted set proposals")
+    for item in raw_proposals:
+        if not isinstance(item, dict):
+            continue
+        set_id = str(item.get("session_set_id") or "")
+        default = proposal_defaults.get(set_id)
+        if default is None or set_id in proposals:
+            continue
+        proposed_reps = item.get("target_reps")
+        if not isinstance(proposed_reps, int) or isinstance(proposed_reps, bool) or not default["min_reps"] <= proposed_reps <= default["max_reps"]:
+            raise ValueError("Forge AI returned repetitions outside the allowed range")
+        proposed_weight = _forge_finite_weight(item.get("target_weight_kg"))
+        allowed_weights = default["allowed_weight_kg"]
+        if allowed_weights:
+            if proposed_weight is None or not any(abs(proposed_weight - allowed) < 0.001 for allowed in allowed_weights):
+                raise ValueError("Forge AI returned a weight outside the selected profile")
+        elif proposed_weight is not None:
+            raise ValueError("Forge AI invented an unavailable weight")
+        proposals[set_id] = {
+            **default,
+            "target_weight_kg": proposed_weight,
+            "target_reps": proposed_reps,
+        }
+    if set(proposals) != set(proposal_defaults):
+        raise ValueError("Forge AI did not propose every warm-up and working set")
 
+    headline = _forge_coaching_text(candidate.get("headline"), 80, "")
+    session_focus = _forge_meta_session_focus(candidate.get("session_focus"), "")
+    if not headline or not session_focus:
+        raise ValueError("Forge AI returned an invalid briefing")
     return {
         "coaching_source": "ai",
-        "headline": _forge_coaching_text(candidate.get("headline"), 160, fallback["headline"]),
-        "session_focus": _forge_meta_session_focus(candidate.get("session_focus"), fallback["session_focus"]),
+        "headline": headline,
+        "session_focus": session_focus,
         "exercise_decisions": decisions,
         "set_proposals": list(proposals.values()),
     }
 
 
-async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
-    """Generate short analysis plus bounded numeric proposals for every session set."""
-    fallback = _forge_coaching_fallback(session_context)
-    if not settings.gemini_api_key:
-        return fallback
-    system_prompt = """You are Forge's evidence-informed resistance-training coach. Return JSON only with
-{headline, session_focus, exercise_decisions, set_proposals}. Every exercise_decisions item must use a
-session_exercise_id provided by the server and include recommendation, first_set_focus, and effort_hint. Every
-set_proposals item must use a session_set_id supplied by the server and include target_weight_kg and target_reps.
+class ForgeCoachingGenerationError(RuntimeError):
+    """Raised when real Forge AI coaching cannot be generated safely."""
 
-Use the supplied Yazio profile, nutrition context, matching Forge history, exercise notes and progression rules to choose a
-specific target for every warm-up and working set. The server gives each set its baseline, a permitted weight list and a repetition range. For every planned warm-up, always provide a target repetition count. If the selected machine profile supplies an explicit available-weight list, choose a conservative listed weight for the warm-up as well; never invent a weight and never use historical working weights for a warm-up. Choose only a listed weight and only a whole-number repetition target within the supplied range. Make the headline sound like a real, energetic coach. Make session_focus a short, motivating meta-summary on the level of the whole workout: compare the overall last session with today's overall focus and explain why this session matters. Do not list exercise names, weights, repetitions, set IDs, or set-by-set targets in session_focus. Never use a generic safety disclaimer. Never use the same recommendation for different exercises: name the exercise, reference its actual history or lack of history, and explain the concrete first-set target. If an exercise has exactly one working set, explicitly say that this is the all-out set and that the athlete should give full power up to technical muscular failure while keeping form controlled. Never add or remove sets, change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
-support progression, choose the conservative baseline. Explain the context and the reasoning for each exercise briefly in
-recommendation; this is the user-visible analysis. Keep text specific, short, motivating and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
+
+async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
+    """Generate complete AI coaching for every warm-up and working set."""
+    if not settings.gemini_api_key:
+        raise ForgeCoachingGenerationError("Forge KI ist nicht konfiguriert.")
+    system_prompt = """You are Forge, a concise and motivating resistance-training coach. Return JSON only with
+{headline, session_focus, exercise_decisions, set_proposals}. Return exactly one exercise_decisions item for every
+provided session_exercise_id and exactly one set_proposals item for every provided session_set_id, including every
+warm-up. Each set proposal contains target_weight_kg and an integer target_reps.
+
+Choose every warm-up and working target from the supplied baseline, allowed weights, repetition range, selected machine
+profile and matching profile-specific history. Never invent a load or ID. A null weight is allowed only when the server
+provides no permitted weight. The selected machine profile is part of the exercise identity: never mix history from other
+profiles. If today's target changed from the latest matching performance, state the concrete reason briefly. If it did not
+change, say what should improve today without pretending there was a change.
+
+Write fresh, natural German coaching rather than a repeated slogan. headline: at most 7 words. session_focus: one or two
+short motivating sentences, at most 180 characters, no exercise list and no weights. recommendation: at most two short
+sentences and 200 characters; name the exercise, state the target direction and why. first_set_focus and effort_hint: one
+short sentence each, at most 120 characters. Be direct, energetic and specific. Avoid generic filler, long recaps, safety
+disclaimers and phrases such as 'heute wird abgeliefert'.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
@@ -2296,17 +2319,19 @@ recommendation; this is the user-visible analysis. Keep text specific, short, mo
             contents=json.dumps(session_context, ensure_ascii=False),
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.25,
-                max_output_tokens=2400,
+                temperature=0.7,
+                max_output_tokens=8192,
                 response_mime_type="application/json",
             ),
         )
         raw = (response.text or "").strip()
+        if not raw:
+            raise ValueError("Gemini returned an empty response")
         parsed = json.loads(re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw))
         return _validate_forge_session_coaching(parsed, session_context)
     except Exception as exc:
-        logger.warning("Forge session start coaching fallback: %s", exc)
-        return fallback
+        logger.exception("Forge AI coaching generation failed: %s", exc)
+        raise ForgeCoachingGenerationError("Forge KI konnte gerade keine vollständige Prognose erstellen. Bitte erneut versuchen.") from exc
 
 
 async def generate_forge_session_chat(

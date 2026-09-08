@@ -68,6 +68,7 @@ from app.services.progress_photo_storage import (
     write_progress_photo,
 )
 from app.services.ai_service import (
+    ForgeCoachingGenerationError,
     _build_deterministic_set_targets,
     _compute_exercise_progression,
     _parse_available_weights,
@@ -1695,7 +1696,7 @@ def _session_guidance_by_plan_exercise(
     guidance: dict[UUID, dict] = {}
     for position, plan_exercise in enumerate(plan.exercises):
         target = targets[position] if position < len(targets) else {}
-        profile = plan_exercise.machine_profile or profile_overrides.get(plan_exercise.exercise.id)
+        profile = profile_overrides.get(plan_exercise.exercise.id) or plan_exercise.machine_profile
         progression_key = _native_progression_key(plan_exercise.exercise.id, profile.id if profile else None)
         progression_data = progression.get(progression_key, {})
         progression_status = target.get("progression_status") or progression_data.get("signal") or "FIRST_SESSION"
@@ -1717,7 +1718,7 @@ def _snapshot_plan_into_session(
     last_used_profiles = last_used_profiles or {}
     for exercise_position, plan_exercise in enumerate(plan.exercises):
         exercise = plan_exercise.exercise
-        machine_profile = plan_exercise.machine_profile or last_used_profiles.get(exercise.id)
+        machine_profile = last_used_profiles.get(exercise.id) or plan_exercise.machine_profile
         session_exercise = ForgeSessionExercise(
             source_exercise_id=exercise.id,
             source_plan_exercise_id=plan_exercise.id,
@@ -1811,7 +1812,10 @@ async def generate_session_start_coaching(
     if session.start_coaching is None or force or profiles_backfilled or missing_warmup_targets:
         coaching_profile = await _forge_coaching_profile(current_user)
         context = _session_coaching_context(db, current_user, session, coaching_profile)
-        coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
+        try:
+            coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
+        except ForgeCoachingGenerationError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
         _apply_forge_set_proposals(session, coaching)
         coaching.pop("set_proposals", None)
         session.start_coaching = coaching
@@ -2087,7 +2091,10 @@ async def _apply_isolated_session_exercise_coaching(
     context = _session_coaching_context(
         db, user, session, coaching_profile, only_exercise_id=exercise.id,
     )
-    generated = await generate_forge_session_start_coaching(context, user.language or "de")
+    try:
+        generated = await generate_forge_session_start_coaching(context, user.language or "de")
+    except ForgeCoachingGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     _apply_forge_set_proposals(session, generated)
     decision = next(
         (item for item in generated.get("exercise_decisions", []) if item.get("session_exercise_id") == str(exercise.id)),
@@ -2572,7 +2579,7 @@ def _native_plan_template(
     profile_overrides = profile_overrides or {}
     template = []
     for plan_exercise in plan.exercises:
-        machine_profile = plan_exercise.machine_profile or profile_overrides.get(plan_exercise.exercise.id)
+        machine_profile = profile_overrides.get(plan_exercise.exercise.id) or plan_exercise.machine_profile
         note_parts = [part for part in [plan_exercise.notes, machine_profile.notes if machine_profile else None] if part]
         template.append({
             "title": plan_exercise.exercise.name,
@@ -2708,7 +2715,7 @@ def _refresh_native_coach_targets(
                 latest_by_key[progression_key] = exercise
 
     for plan_exercise in plan.exercises:
-        profile = plan_exercise.machine_profile or profile_overrides.get(plan_exercise.exercise.id)
+        profile = profile_overrides.get(plan_exercise.exercise.id) or plan_exercise.machine_profile
         progression_key = _native_progression_key(plan_exercise.exercise.id, profile.id if profile else None)
         target = targets_by_key.get(progression_key)
         latest = latest_by_key.get(progression_key, {})
