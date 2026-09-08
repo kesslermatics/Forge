@@ -317,6 +317,13 @@ class ForgeTrainingPlan(Base):
     plan_type = Column(String(16), nullable=False, server_default="workout")
     default_duration_minutes = Column(Integer, nullable=True)
     position = Column(Integer, nullable=False, server_default="0")
+    # A plan may have one optional private, normalized image stored outside the database.
+    image_storage_key = Column(String(512), nullable=True)
+    image_content_type = Column(String(100), nullable=True)
+    image_byte_size = Column(Integer, nullable=True)
+    image_width = Column(Integer, nullable=True)
+    image_height = Column(Integer, nullable=True)
+    image_sha256 = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

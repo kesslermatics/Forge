@@ -30,6 +30,7 @@ Base.metadata.create_all(bind=engine)
 from sqlalchemy import text as _sql_text
 from migrate_add_google_health import STATEMENTS as _google_health_migrations
 from migrate_add_forge_course_plans import STATEMENTS as _forge_course_plan_migrations
+from migrate_add_forge_plan_images import STATEMENTS as _forge_plan_image_migrations
 from migrate_archive_forge_machine_profiles import STATEMENTS as _forge_machine_profile_archive_migrations
 from migrate_fix_forge_decimal_weights import STATEMENTS as _forge_decimal_weight_migrations
 from migrate_forge_central_machine_profiles import STATEMENTS as _forge_machine_profile_migrations
@@ -66,6 +67,8 @@ with engine.begin() as _conn:
 # failed schema migrations: failing startup is safer than serving incompatible APIs.
 with engine.connect() as _conn:
     for stmt in _forge_course_plan_migrations:
+        _conn.execute(_sql_text(stmt))
+    for stmt in _forge_plan_image_migrations:
         _conn.execute(_sql_text(stmt))
     for stmt in _google_health_migrations:
         _conn.execute(_sql_text(stmt))

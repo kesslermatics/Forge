@@ -32,7 +32,7 @@ def storage_root() -> Path:
     configured_root = settings.photo_storage_dir.strip()
     if not configured_root:
         raise PhotoStorageUnavailable(
-            "Progress-photo uploads are not configured. Set PHOTO_STORAGE_DIR to a mounted persistent volume."
+            "Private image uploads are not configured. Set PHOTO_STORAGE_DIR to a mounted persistent volume."
         )
     root = Path(configured_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)

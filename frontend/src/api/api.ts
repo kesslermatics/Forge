@@ -844,6 +844,7 @@ export interface ForgePlan {
   plan_type: ForgePlanType;
   default_duration_minutes: number | null;
   position: number;
+  has_image: boolean;
   exercises: ForgePlanExercise[];
 }
 
@@ -887,6 +888,12 @@ export const updateForgePlan = (id: string, data: ForgePlanInput) =>
   apiRequest<ForgePlan>(`/api/forge/plans/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteForgePlan = (id: string) =>
   apiRequest<void>(`/api/forge/plans/${id}`, { method: 'DELETE' });
+export const uploadForgePlanImage = (id: string, form: FormData) =>
+  apiRequest<ForgePlan>(`/api/forge/plans/${id}/image`, { method: 'PUT', body: form });
+export const deleteForgePlanImage = (id: string) =>
+  apiRequest<ForgePlan>(`/api/forge/plans/${id}/image`, { method: 'DELETE' });
+export const fetchForgePlanImage = (id: string) =>
+  apiBlob(`/api/forge/plans/${id}/image`);
 export const generateForgePlanDraft = (instructions: string, exercise_ids: string[], base_plan_id?: string) =>
   apiRequest<{ draft: ForgePlanInput }>('/api/forge/drafts/plan', {
     method: 'POST', body: JSON.stringify({ instructions, exercise_ids, base_plan_id: base_plan_id ?? null }),

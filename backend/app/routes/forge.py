@@ -257,6 +257,7 @@ def _serialize_plan(
         "plan_type": plan.plan_type,
         "default_duration_minutes": plan.default_duration_minutes,
         "position": plan.position,
+        "has_image": bool(plan.image_storage_key),
         "exercises": [
             {
                 "id": plan_exercise.id,
@@ -744,8 +745,93 @@ async def delete_plan(
     plan = db.query(ForgeTrainingPlan).filter(ForgeTrainingPlan.id == plan_id, ForgeTrainingPlan.user_id == current_user.id).first()
     if plan is None:
         raise _not_found("Training plan not found")
+    image_storage_key = plan.image_storage_key
     db.delete(plan)
     db.commit()
+    if image_storage_key:
+        try:
+            delete_progress_photo_file(image_storage_key)
+        except PhotoStorageUnavailable:
+            # The row is gone and the private storage cannot be reached right now.
+            pass
+
+
+@router.put("/plans/{plan_id}/image", response_model=ForgePlanResponse)
+async def replace_plan_image(
+    plan_id: UUID,
+    image: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Normalize and attach one private image to an owned training-day plan."""
+    plan = _owned_plan(db, current_user.id, plan_id)
+    try:
+        storage_root()
+    except PhotoStorageUnavailable as error:
+        raise storage_unavailable_error(error)
+    normalized, width, height, digest = prepare_progress_photo(await image.read())
+    storage_key = plan.image_storage_key or f"{current_user.id}/plans/{plan.id}.webp"
+    try:
+        write_progress_photo(storage_key, normalized)
+        plan.image_storage_key = storage_key
+        plan.image_content_type = "image/webp"
+        plan.image_byte_size = len(normalized)
+        plan.image_width = width
+        plan.image_height = height
+        plan.image_sha256 = digest
+        db.commit()
+        db.refresh(plan)
+    except Exception:
+        db.rollback()
+        raise
+    return _serialize_plan(plan, db)
+
+
+@router.get("/plans/{plan_id}/image")
+async def get_plan_image(
+    plan_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Serve a plan image only to its owner; image files are never public URLs."""
+    plan = _owned_plan(db, current_user.id, plan_id)
+    if not plan.image_storage_key:
+        raise _not_found("Training plan image not found")
+    try:
+        image_path = read_progress_photo(plan.image_storage_key)
+    except PhotoStorageUnavailable as error:
+        raise storage_unavailable_error(error)
+    except FileNotFoundError:
+        raise _not_found("Training plan image not found")
+    return FileResponse(
+        image_path,
+        media_type=plan.image_content_type or "image/webp",
+        headers={"Cache-Control": "private, no-store, max-age=0", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.delete("/plans/{plan_id}/image", response_model=ForgePlanResponse)
+async def delete_plan_image(
+    plan_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    plan = _owned_plan(db, current_user.id, plan_id)
+    storage_key = plan.image_storage_key
+    plan.image_storage_key = None
+    plan.image_content_type = None
+    plan.image_byte_size = None
+    plan.image_width = None
+    plan.image_height = None
+    plan.image_sha256 = None
+    db.commit()
+    db.refresh(plan)
+    if storage_key:
+        try:
+            delete_progress_photo_file(storage_key)
+        except PhotoStorageUnavailable:
+            pass
+    return _serialize_plan(plan, db)
 
 
 @router.post("/drafts/exercise", response_model=ForgeDraftResponse)

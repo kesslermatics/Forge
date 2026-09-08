@@ -303,6 +303,7 @@ class ForgePlanResponse(BaseModel):
     plan_type: ForgePlanType
     default_duration_minutes: Optional[int] = None
     position: int
+    has_image: bool = False
     exercises: list[ForgePlanExerciseResponse]
 
     class Config:
