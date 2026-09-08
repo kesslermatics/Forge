@@ -2074,7 +2074,7 @@ def _forge_meta_session_focus(value: object, fallback: str) -> str:
     lower = normalized.lower()
     if not normalized or any(token in lower for token in ("kg", "wdh", "×", "target_weight_kg", "session_set_id")):
         return fallback
-    return normalized[:180]
+    return normalized[:320]
 
 
 def _forge_finite_weight(value: object) -> float | None:
@@ -2085,7 +2085,7 @@ def _forge_finite_weight(value: object) -> float | None:
 
 
 def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
-    """Build the server-owned baseline and constraints for every editable session set."""
+    """Build identity and broad safety bounds; Gemini owns every concrete target."""
     defaults: dict[str, dict] = {}
     for exercise in session_context.get("session", {}).get("exercises", []):
         for target in exercise.get("targets", []):
@@ -2093,36 +2093,19 @@ def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
                 continue
             min_reps = target.get("min_reps")
             max_reps = target.get("max_reps")
-            baseline_reps = target.get("reps")
+            reference_reps = target.get("reference_reps")
             min_reps = min_reps if isinstance(min_reps, int) and not isinstance(min_reps, bool) else 1
             max_reps = max_reps if isinstance(max_reps, int) and not isinstance(max_reps, bool) else 200
-            baseline_reps = baseline_reps if isinstance(baseline_reps, int) and not isinstance(baseline_reps, bool) else min_reps
             min_reps = max(1, min(200, min_reps))
             max_reps = max(min_reps, min(200, max_reps))
-            baseline_reps = max(min_reps, min(max_reps, baseline_reps))
-            baseline_weight = _forge_finite_weight(target.get("weight_kg"))
-            allowed_weights = []
-            for weight in target.get("allowed_weight_kg", []):
-                normalized = _forge_finite_weight(weight)
-                if normalized is not None and normalized not in allowed_weights:
-                    allowed_weights.append(normalized)
-            is_warmup = target.get("type") == "warmup"
-            if baseline_weight is not None and (
-                not is_warmup or not allowed_weights or baseline_weight in allowed_weights
-            ):
-                allowed_weights.append(baseline_weight)
-            if baseline_weight is None and allowed_weights:
-                # Profiles can also be used on a first-ever working set. When no
-                # exercise/profile history exists, the lightest explicitly documented
-                # profile load is the only safe concrete baseline.
-                baseline_weight = min(allowed_weights)
+            reference_reps = reference_reps if isinstance(reference_reps, int) and not isinstance(reference_reps, bool) else min_reps
             defaults[str(target["session_set_id"])] = {
                 "session_set_id": str(target["session_set_id"]),
-                "target_weight_kg": baseline_weight,
-                "target_reps": baseline_reps,
-                "allowed_weight_kg": sorted(allowed_weights),
+                "target_weight_kg": _forge_finite_weight(target.get("reference_weight_kg")),
+                "target_reps": max(min_reps, min(max_reps, reference_reps)),
                 "min_reps": min_reps,
                 "max_reps": max_reps,
+                "requires_weight": bool(target.get("requires_weight")),
             }
     return defaults
 
@@ -2230,9 +2213,9 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         if exercise_id not in allowed_ids or exercise_id in seen:
             continue
         default = defaults[exercise_id]
-        recommendation = _forge_coaching_text(item.get("recommendation"), 200, "")
-        first_set_focus = _forge_coaching_text(item.get("first_set_focus"), 120, "")
-        effort_hint = _forge_coaching_text(item.get("effort_hint"), 120, "")
+        recommendation = _forge_coaching_text(item.get("recommendation"), 300, "")
+        first_set_focus = _forge_coaching_text(item.get("first_set_focus"), 160, "")
+        effort_hint = _forge_coaching_text(item.get("effort_hint"), 160, "")
         if not recommendation or not first_set_focus or not effort_hint:
             raise ValueError("Forge AI returned an incomplete exercise decision")
         decisions.append({
@@ -2265,16 +2248,8 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         else:
             proposed_reps = default["target_reps"]
         proposed_weight = _forge_finite_weight(item.get("target_weight_kg"))
-        allowed_weights = default["allowed_weight_kg"]
-        if allowed_weights:
-            if proposed_weight is None:
-                proposed_weight = default["target_weight_kg"]
-            elif not any(abs(proposed_weight - allowed) < 0.001 for allowed in allowed_weights):
-                # Machine increments are discrete. Snap an AI rounding mismatch to
-                # the closest verified load for the selected profile.
-                proposed_weight = min(allowed_weights, key=lambda allowed: abs(allowed - proposed_weight))
-        elif proposed_weight is not None:
-            proposed_weight = None
+        if default["requires_weight"] and proposed_weight is None:
+            raise ValueError("Forge AI omitted a required weight proposal")
         proposals[set_id] = {
             **default,
             "target_weight_kg": proposed_weight,
@@ -2304,23 +2279,25 @@ async def generate_forge_session_start_coaching(session_context: dict, language:
     """Generate complete AI coaching for every warm-up and working set."""
     if not settings.gemini_api_key:
         raise ForgeCoachingGenerationError("Forge KI ist nicht konfiguriert.")
-    system_prompt = """You are Forge, a concise and motivating resistance-training coach. Return JSON only with
+    system_prompt = """You are Forge, a motivating and evidence-informed resistance-training coach. Return JSON only with
 {headline, session_focus, exercise_decisions, set_proposals}. Return exactly one exercise_decisions item for every
 provided session_exercise_id and exactly one set_proposals item for every provided session_set_id, including every
-warm-up. Each set proposal contains target_weight_kg and an integer target_reps. Respect each set's own min_reps and
-max_reps exactly; warm-ups deliberately use a different repetition range from working sets.
+warm-up. Each set proposal contains target_weight_kg and an integer target_reps. Respect each set's min_reps and
+max_reps; warm-ups deliberately use a different repetition range from working sets.
 
-Choose every warm-up and working target from the supplied baseline, allowed weights, repetition range, selected machine
-profile and matching profile-specific history. Never invent a load or ID. A null weight is allowed only when the server
-provides no permitted weight. The selected machine profile is part of the exercise identity: never mix history from other
-profiles. If today's target changed from the latest matching performance, state the concrete reason briefly. If it did not
-change, say what should improve today without pretending there was a change.
+YOU choose every weight and repetition target. The server does not calculate loads. Base your forecast on the full selected
+machine_profile_notes, exercise notes, reference targets and recent history for that exact exercise/profile identity. Treat
+the machine-profile description as authoritative: understand its loading system, increments and special instructions. If it
+lists available weights, choose one of those exact weights; never propose an unavailable intermediate load. Do not transfer
+history between machine profiles. For a profile without matching history, make a conservative first forecast from its
+description and explain that this is the initial reference point. Never invent an ID, add a set or remove a set.
 
-Write fresh, natural German coaching rather than a repeated slogan. headline: at most 7 words. session_focus: one or two
-short motivating sentences, at most 180 characters, no exercise list and no weights. recommendation: at most two short
-sentences and 200 characters; name the exercise, state the target direction and why. first_set_focus and effort_hint: one
-short sentence each, at most 120 characters. Be direct, energetic and specific. Avoid generic filler, long recaps, safety
-disclaimers and phrases such as 'heute wird abgeliefert'.""" + _language_instruction(language)
+Write fresh, natural German. headline: energetic and at most 8 words. session_focus: 2–3 motivating sentences, roughly
+200–320 characters, explaining what is on the program today, the main focus and what can improve versus the latest
+matching workout. Do not list every exercise or individual set target there. recommendation: 2–3 compact sentences and at
+most 300 characters; name the exercise, state what you forecast and explain concretely why, referring to changed history,
+stable progression, first profile use or profile description. first_set_focus and effort_hint: one useful sentence each,
+at most 160 characters. Be energetic and specific without slogans, repetition, long recaps or generic safety disclaimers.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(

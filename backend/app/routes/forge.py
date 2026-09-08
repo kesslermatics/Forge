@@ -1154,16 +1154,11 @@ def _session_coaching_context(
         ForgeMachineProfile.id.in_(selected_profile_ids),
     ).all() if selected_profile_ids else []
     profiles_by_id = {profile.id: profile for profile in selected_profiles}
-    profile_weights_by_exercise: dict[UUID, list[float]] = {}
     profile_notes_by_exercise: dict[UUID, str] = {}
     for exercise in selected:
         profile = profiles_by_id.get(exercise.source_machine_profile_id)
-        profile_notes = profile.notes if profile else ""
-        combined_notes = "\n".join(part for part in [exercise.notes, profile_notes] if part)
-        profile_notes_by_exercise[exercise.id] = profile_notes
-        profile_weights_by_exercise[exercise.id] = _parse_available_weights(combined_notes)
+        profile_notes_by_exercise[exercise.id] = profile.notes if profile else ""
     history = []
-    historical_weights: dict[str, set[float]] = {}
     for completed in _native_completed_sessions(db, user.id, session.name)[:6]:
         matching = [
             {
@@ -1179,12 +1174,6 @@ def _session_coaching_context(
         ]
         if matching:
             history.append({"completed_at": completed.get("start_time"), "exercises": matching})
-            for exercise in matching:
-                key = exercise.get("progression_key")
-                for set_data in exercise["working_sets"]:
-                    weight = set_data.get("weight_kg")
-                    if key and isinstance(weight, (int, float)) and not isinstance(weight, bool) and isfinite(weight) and weight >= 0:
-                        historical_weights.setdefault(key, set()).add(float(weight))
 
     def _rep_bounds(exercise: ForgeSessionExercise) -> tuple[int, int]:
         rep_range = str((exercise.coach_guidance or {}).get("rep_range") or "8-12").replace("–", "-")
@@ -1198,47 +1187,17 @@ def _session_coaching_context(
     def _target_context(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
         minimum, maximum = _rep_bounds(exercise)
         if set_data.set_type == "warmup":
-            # Warm-ups prepare the movement and do not share the hypertrophy range
-            # of the working sets. Give the model a dedicated practical range.
             minimum, maximum = 6, 15
-        progression_key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
-        profile_weights = profile_weights_by_exercise.get(exercise.id, [])
-        baseline_weight = set_data.target_weight_kg
-        candidates = {float(baseline_weight)} if isinstance(baseline_weight, (int, float)) and isfinite(baseline_weight) and baseline_weight >= 0 else set()
-        if set_data.set_type == "warmup":
-            candidates.update(profile_weights)
-            if not candidates:
-                # A profile may be selected for the first time and have no explicit
-                # weight list. Give the AI a conservative, concrete warm-up anchor
-                # derived from this exercise's current/profile-specific working load.
-                working_weights = [
-                    sibling.target_weight_kg
-                    for sibling in exercise.sets
-                    if sibling.set_type == "working"
-                    and isinstance(sibling.target_weight_kg, (int, float))
-                    and isfinite(sibling.target_weight_kg)
-                    and sibling.target_weight_kg > 0
-                ]
-                if not working_weights:
-                    working_weights = list(historical_weights.get(progression_key or "", set()))
-                if working_weights:
-                    candidates.add(max(0.5, round(min(working_weights) * 0.5 * 2) / 2))
-        else:
-            # Explicit loads documented on the selected profile are valid for both
-            # working and warm-up proposals. History remains more specific and is
-            # still restricted to the same exercise/profile progression key.
-            candidates.update(profile_weights)
-            for historical_weight in historical_weights.get(progression_key or "", set()):
-                if baseline_weight is None or historical_weight <= float(baseline_weight) + 0.001:
-                    candidates.add(historical_weight)
         return {
             "session_set_id": str(set_data.id),
             "type": set_data.set_type,
-            "weight_kg": set_data.target_weight_kg,
-            "reps": set_data.target_reps,
+            # These are references, not deterministic constraints. Gemini chooses
+            # the actual proposal from profile description and matching history.
+            "reference_weight_kg": set_data.target_weight_kg,
+            "reference_reps": set_data.target_reps,
             "min_reps": minimum,
             "max_reps": maximum,
-            "allowed_weight_kg": sorted(candidates),
+            "requires_weight": exercise.equipment != "none",
         }
 
     return {
@@ -1253,7 +1212,6 @@ def _session_coaching_context(
                     "muscle_group": exercise.primary_muscle_group,
                     "machine_profile": exercise.machine_profile_name,
                     "machine_profile_notes": profile_notes_by_exercise.get(exercise.id, ""),
-                    "available_weight_kg": profile_weights_by_exercise.get(exercise.id, []),
                     "notes": "\n".join(part for part in [exercise.notes or "", profile_notes_by_exercise.get(exercise.id, "")] if part),
                     "deterministic_guidance": exercise.coach_guidance or {},
                     "working_set_count": sum(1 for set_data in exercise.sets if set_data.set_type == "working"),
@@ -2156,16 +2114,9 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
             ForgeExercise.user_id == current_user.id,
         ).first()
         if library_exercise is not None and profile_changed:
-            # Keep the previous snapshot as a first-use anchor only when this profile
-            # has no history yet. Once a profile has history, that history wins and is
-            # isolated by exercise + profile identity.
-            existing_targets = {
-                set_data.position: {
-                    "target_weight_kg": set_data.target_weight_kg,
-                    "target_reps": set_data.target_reps,
-                }
-                for set_data in exercise.sets
-            }
+            # Guidance may summarize matching history, but every concrete weight and
+            # repetition is chosen by Gemini for this exact exercise/profile pair.
+            _apply_live_session_exercise_guidance(db, current_user.id, exercise, library_exercise, machine_profile)
             profile_targets = _last_profile_set_targets(
                 db,
                 current_user.id,
@@ -2177,36 +2128,11 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
                 set_data.target_reps = None
                 set_data.coach_suggested_weight_kg = None
                 set_data.coach_suggested_reps = None
-                seed = (profile_targets.get(set_data.position) or existing_targets.get(set_data.position)) if machine_profile is not None else {}
-                if seed.get("target_weight_kg") is not None:
-                    set_data.target_weight_kg = seed["target_weight_kg"]
-                if seed.get("target_reps") is not None:
-                    set_data.target_reps = seed["target_reps"]
-
-            if machine_profile is not None:
-                profile_notes = "\n".join(part for part in [exercise.notes, machine_profile.notes] if part)
-                documented_weights = _parse_available_weights(profile_notes)
-                working_weights = [
-                    set_data.target_weight_kg
-                    for set_data in exercise.sets
-                    if set_data.set_type == "working"
-                    and isinstance(set_data.target_weight_kg, (int, float))
-                    and set_data.target_weight_kg > 0
-                ]
-                warmup_weight = min(documented_weights) if documented_weights else None
-                if warmup_weight is None and working_weights:
-                    # A first use has no profile history yet. Use a conservative,
-                    # editable half-load anchor so the AI can still return a real
-                    # warm-up target instead of an em dash.
-                    warmup_weight = max(0.5, round(min(working_weights) * 0.5 * 2) / 2)
-                for set_data in exercise.sets:
-                    if set_data.set_type == "warmup":
-                        if set_data.target_weight_kg is None and warmup_weight is not None:
-                            set_data.target_weight_kg = warmup_weight
-                        if set_data.target_reps is None:
-                            set_data.target_reps = 10
-
-            _apply_live_session_exercise_guidance(db, current_user.id, exercise, library_exercise, machine_profile)
+                reference = profile_targets.get(set_data.position) or {}
+                if reference.get("target_weight_kg") is not None:
+                    set_data.target_weight_kg = reference["target_weight_kg"]
+                if reference.get("target_reps") is not None:
+                    set_data.target_reps = reference["target_reps"]
             exercise.addition_coaching = None
     for key, value in updates.items():
         setattr(exercise, key, value)
