@@ -71,7 +71,6 @@ from app.services.ai_service import (
     ForgeCoachingGenerationError,
     _build_deterministic_set_targets,
     _compute_exercise_progression,
-    _parse_available_weights,
     generate_forge_exercise_draft,
     generate_forge_plan_draft,
     generate_forge_session_chat,
