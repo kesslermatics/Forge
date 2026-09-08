@@ -7,7 +7,6 @@ import type { ForgePlan } from '../api/api';
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
 const DIM = 'rgba(242,236,226,0.48)';
-const BORDER = 'rgba(232,197,138,0.11)';
 
 const validateImage = (file: File) => {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
