@@ -709,7 +709,7 @@ def _parse_available_weights(notes: str) -> list[float]:
     # rep targets, tempo cues, or machine-seat settings. A list must be explicitly
     # labelled, for example: "Gewichte: 5, 12, 19" or "only 5 12 19".
     match = re.search(
-        r"(?:available\s+weights?|verf[uü]gbare\s+gewichte|gewichte|only)\s*[:=]?\s*"
+        r"(?:available\s+weights?|verf[uü]gbare\s+gewichte|gewichte(?:\s*stufen|\s*werte)?|only)\s*[:=]?\s*"
         r"((?:\d+(?:[.,]\d+)?[\s,;/]*){1,})",
         notes,
         flags=re.IGNORECASE,
@@ -2111,9 +2111,10 @@ def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
                 not is_warmup or not allowed_weights or baseline_weight in allowed_weights
             ):
                 allowed_weights.append(baseline_weight)
-            if is_warmup and baseline_weight is None and allowed_weights:
-                # The lightest explicitly documented profile load is the conservative
-                # fallback when the plan did not define a warm-up weight.
+            if baseline_weight is None and allowed_weights:
+                # Profiles can also be used on a first-ever working set. When no
+                # exercise/profile history exists, the lightest explicitly documented
+                # profile load is the only safe concrete baseline.
                 baseline_weight = min(allowed_weights)
             defaults[str(target["session_set_id"])] = {
                 "session_set_id": str(target["session_set_id"]),
