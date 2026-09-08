@@ -5,9 +5,9 @@ import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction,
   completeForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, deleteForgeSession,
   dismissForgeSessionAction, generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
-  getForgeExercises, getForgeSession, getForgeSessionPlanChanges, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
+  getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
-import type { ForgeExercise, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
+import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
 import ForgeSessionLoader from './ForgeSessionLoader';
 import ForgeExercisePicker from './ForgeExercisePicker';
 import ForgeSheet from './ForgeSheet';
@@ -31,9 +31,11 @@ const toInput = (set: ForgeSessionSet, overrides: Partial<ForgeSessionSetInput> 
   ...overrides,
 });
 
-const displayLoad = (weight: number | null, reps: number | null) => {
+const displayLoad = (weight: number | null, reps: number | null, equipment: ForgeExercise['equipment']) => {
   if (weight == null && reps == null) return '—';
-  return `${weight != null && weight > 0 ? `${weight} kg` : 'BW'}${reps != null ? ` × ${reps}` : ''}`;
+  const bodyweight = equipment === 'none';
+  const load = weight != null && weight > 0 ? `${weight} kg` : bodyweight ? 'BW' : '—';
+  return `${load}${reps != null ? ` × ${reps}` : ''}`;
 };
 
 /** Returns undefined while a decimal value is still being typed, e.g. "21,". */
@@ -59,6 +61,7 @@ export default function ForgeSessionPage() {
   const navigate = useNavigate();
   const [session, setSession] = useState<ForgeSession | null>(null);
   const [library, setLibrary] = useState<ForgeExercise[]>([]);
+  const [machineProfiles, setMachineProfiles] = useState<ForgeMachineProfile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [preparingSession, setPreparingSession] = useState(false);
@@ -174,13 +177,19 @@ export default function ForgeSessionPage() {
     const loadSession = async () => {
       setLoading(true); setError(null); setPreparingSession(false);
       try {
-        const [loadedSession, loadedLibrary] = await Promise.all([getForgeSession(sessionId), getForgeExercises()]);
+        const [loadedSession, loadedLibrary, loadedMachineProfiles] = await Promise.all([
+          getForgeSession(sessionId),
+          getForgeExercises(),
+          getForgeMachineProfiles().catch(() => [] as ForgeMachineProfile[]),
+        ]);
         let preparedSession = loadedSession;
-        if (loadedSession.status === 'active' && !loadedSession.start_coaching) {
+        const storedFocus = loadedSession.start_coaching?.session_focus || '';
+        const hasLegacyDetailedFocus = /(?:\bkg\b|\bwdh\.?\b|×|target_weight_kg|session_set_id)/i.test(storedFocus);
+        if (loadedSession.status === 'active' && (!loadedSession.start_coaching || hasLegacyDetailedFocus)) {
           setPreparingSession(true);
-          preparedSession = await generateForgeSessionStartCoaching(sessionId);
+          preparedSession = await generateForgeSessionStartCoaching(sessionId, Boolean(loadedSession.start_coaching));
         }
-        if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); }
+        if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); setMachineProfiles(loadedMachineProfiles); }
       } catch (caught: unknown) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : 'Session konnte nicht geladen werden.');
       } finally {
@@ -327,6 +336,11 @@ export default function ForgeSessionPage() {
   const completedSets = session.exercises.flatMap((exercise) => exercise.sets).filter((set) => set.completed).length;
   const totalSets = session.exercises.flatMap((exercise) => exercise.sets).length;
   const activeLibraryExercise = library.find((exercise) => exercise.id === activeExercise?.source_exercise_id) ?? null;
+  const selectableMachineProfiles = activeLibraryExercise?.available_machine_profiles.length
+    ? activeLibraryExercise.available_machine_profiles
+    : activeExercise && (activeExercise.equipment === 'machine' || activeExercise.equipment === 'cable')
+      ? machineProfiles
+      : [];
   const duration = formatDuration(session.started_at, session.completed_at);
 
   return <div className="space-y-4 forge-anim">
@@ -344,7 +358,7 @@ export default function ForgeSessionPage() {
     {activeExercise ? <>
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
-        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{activeLibraryExercise?.available_machine_profiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active'} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Gerät wählen</option>{activeLibraryExercise.available_machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.primary_muscle_group}{activeExercise.machine_profile_name ? ` · ${activeExercise.machine_profile_name}` : ''}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
+        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2><div className="mt-2 flex flex-wrap items-center gap-2">{activeExercise.machine_profile_id && <button type="button" onClick={() => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: null }))} disabled={session.status !== 'active' || saving} className="rounded-lg px-2.5 py-1.5 text-[10px] cursor-pointer disabled:cursor-default disabled:opacity-50" style={{ color: DIM, border: `1px solid ${BORDER}` }}>Gerät wählen</button>}{!activeExercise.machine_profile_id && !selectableMachineProfiles.length && <span className="text-[11px]" style={{ color: DIM }}>Kein Geräteprofil angelegt</span>}{selectableMachineProfiles.map((profile) => <button type="button" key={profile.id} onClick={() => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: profile.id }))} disabled={session.status !== 'active' || saving} className="rounded-lg px-2.5 py-1.5 text-[10px] cursor-pointer disabled:cursor-default disabled:opacity-50" style={{ color: activeExercise.machine_profile_id === profile.id ? '#16130f' : SAND, background: activeExercise.machine_profile_id === profile.id ? SAND : 'rgba(232,197,138,0.08)', border: `1px solid ${SAND}66` }}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</button>)}</div></div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
         {activeCoachDecision && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
@@ -370,8 +384,8 @@ export default function ForgeSessionPage() {
                   {Array.from({ length: workingCount }, (_, workIndex) => <button key={workIndex} role="menuitem" onClick={() => void placeSet(set, 'working', warmupTargetPosition + workIndex)} className="tap flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] cursor-pointer" style={{ color: TEXT, background: set.set_type === 'working' && workingNumber === workIndex + 1 ? 'rgba(232,197,138,0.14)' : 'transparent' }}><span className="flex h-5 w-5 items-center justify-center rounded-md text-[9px] font-semibold" style={{ color: SAND, border: `1px solid ${SAND}66` }}>{workIndex + 1}</span>{workIndex + 1}. Arbeitssatz</button>)}
                 </div>}
               </div>
-              <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps)}</span>
-              <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : 'BW'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
+              <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps, activeExercise.equipment)}</span>
+              <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : activeExercise.equipment === 'none' ? 'BW' : 'kg'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
               {session.status === 'active' ? <button onClick={() => void toggleSet(set)} disabled={saving} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-50" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
             </div>;
           })}

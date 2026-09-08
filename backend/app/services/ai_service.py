@@ -1,7 +1,7 @@
 """
 Google Gemini integration – generates the daily morning briefing.
 
-Uses gemini-3.7-flash for fast, cost-effective structured output.
+Uses gemini-3.8-flash for fast, cost-effective structured output.
 """
 import json
 import logging
@@ -380,7 +380,7 @@ async def generate_daily_briefing(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -637,7 +637,7 @@ async def generate_session_review(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1300,7 +1300,7 @@ async def generate_workout_tips(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1692,7 +1692,7 @@ async def generate_chat_response(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1809,7 +1809,7 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=system_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,
@@ -1929,7 +1929,7 @@ Do not claim the draft has been saved and do not include instructions outside th
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=f"Create an exercise draft from this request:\n{instructions}",
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2000,7 +2000,7 @@ Do not claim the draft was saved.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=(f"Current Yazio goal: {yazio_goal or 'unavailable'}\nRequest: {instructions}\n"
                       f"Allowed exercise catalog: {catalog}"),
             config=types.GenerateContentConfig(
@@ -2066,6 +2066,17 @@ def _forge_coaching_text(value: object, limit: int, fallback: str) -> str:
     return normalized[:limit] if normalized else fallback
 
 
+def _forge_meta_session_focus(value: object, fallback: str) -> str:
+    """Accept only a high-level briefing, never a set-by-set load list."""
+    if not isinstance(value, str):
+        return fallback
+    normalized = " ".join(value.split())
+    lower = normalized.lower()
+    if not normalized or any(token in lower for token in ("kg", "wdh", "×", "target_weight_kg", "session_set_id")):
+        return fallback
+    return normalized[:420]
+
+
 def _forge_finite_weight(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -2122,38 +2133,30 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
             return f"{reps} kontrollierte Wdh."
         return "ein konkretes Arbeitsziel"
 
-    today_summary = []
-    for exercise in exercises[:4]:
-        first_target = next(
-            (target for target in exercise.get("targets", []) if target.get("type") == "working"),
-            {},
-        )
-        today_summary.append(
-            f"{exercise.get('name') or 'Übung'} {format_load(first_target.get('weight_kg'), first_target.get('reps'))}"
-        )
+    planned_exercise_count = len(exercises)
+    planned_working_set_count = sum(
+        1 for exercise in exercises for target in exercise.get("targets", []) if target.get("type") == "working"
+    )
+    planned_warmup_set_count = sum(
+        1 for exercise in exercises for target in exercise.get("targets", []) if target.get("type") == "warmup"
+    )
+    previous_exercises = (recent_history[0].get("exercises") or []) if recent_history else []
+    previous_working_set_count = sum(len(exercise.get("working_sets") or []) for exercise in previous_exercises)
 
-    previous_summary = []
-    if recent_history:
-        for exercise in (recent_history[0].get("exercises") or [])[:4]:
-            previous_sets = [
-                item for item in exercise.get("working_sets", [])
-                if item.get("weight_kg") is not None or item.get("reps") is not None
-            ]
-            if previous_sets:
-                previous = previous_sets[-1]
-                previous_summary.append(
-                    f"{exercise.get('exercise') or 'Übung'} {format_load(previous.get('weight_kg'), previous.get('reps'))}"
-                )
-
-    if previous_summary and today_summary:
+    if previous_exercises:
         session_focus = (
-            f"Letztes Mal: {', '.join(previous_summary[:3])}. Heute gehen wir mit {', '.join(today_summary[:3])} in {session_name} "
-            "und holen aus jedem Satz mehr Qualität, Spannung und Fokus heraus. Heute wird abgeliefert."
+            f"Letztes Mal hast du diese Einheit mit {previous_working_set_count} Arbeitssätzen als Grundlage gelegt und gezeigt, wo heute mehr drin ist. "
+            f"Heute greifen wir genau diese Punkte an: verdiente Progression, stabile Lasten dort, wo noch Qualität fehlt, "
+            f"und volle Konzentration durch die gesamte Einheit. {planned_exercise_count} Übungen mit "
+            f"{planned_working_set_count} Arbeitssätzen stehen an"
+            f"{f' – davor {planned_warmup_set_count} Warm-ups zum Reinkommen' if planned_warmup_set_count else ''}; "
+            "heute wird nicht verwaltet, sondern abgeliefert."
         )
-    elif today_summary:
+    elif planned_exercise_count:
         session_focus = (
-            f"Das ist deine Ausgangsbasis für {session_name}: {', '.join(today_summary[:3])}. "
-            "Wir bauen heute einen starken Referenzpunkt auf und machen aus jedem Satz eine klare Ansage."
+            f"Heute bauen wir in {session_name} deinen Referenzpunkt auf: erst Spannung und Technik finden, "
+            f"dann jeden der {planned_working_set_count} Arbeitssätze mit klarer Absicht durchziehen. "
+            "Kein blindes Mehrgewicht – eine fokussierte Einheit, nach der du weißt, dass du abgeliefert hast."
         )
     else:
         session_focus = f"{session_name} ist bereit. Heute wird fokussiert gearbeitet, sauber durchgezogen und abgeliefert."
@@ -2258,7 +2261,7 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
     return {
         "coaching_source": "ai",
         "headline": _forge_coaching_text(candidate.get("headline"), 160, fallback["headline"]),
-        "session_focus": _forge_coaching_text(candidate.get("session_focus"), 420, fallback["session_focus"]),
+        "session_focus": _forge_meta_session_focus(candidate.get("session_focus"), fallback["session_focus"]),
         "exercise_decisions": decisions,
         "set_proposals": list(proposals.values()),
     }
@@ -2275,13 +2278,13 @@ session_exercise_id provided by the server and include recommendation, first_set
 set_proposals item must use a session_set_id supplied by the server and include target_weight_kg and target_reps.
 
 Use the supplied Yazio profile, nutrition context, matching Forge history, exercise notes and progression rules to choose a
-specific target for every warm-up and working set. The server gives each set its baseline, a permitted weight list and a repetition range. For warm-ups, do not invent a weight: keep the supplied baseline unless the server supplied another permitted weight. Historical weights are valid candidates only for working sets. Choose only a listed weight and only a whole-number repetition target within the supplied range. Make the headline sound like a real, energetic coach. Make session_focus a short, motivating meta-summary: compare what the athlete did last time with what is planned today, then explain what this session is about. Never use a generic safety disclaimer. Never use the same recommendation for different exercises: name the exercise, reference its actual history or lack of history, and explain the concrete first-set target. If an exercise has exactly one working set, explicitly say that this is the all-out set and that the athlete should give full power up to technical muscular failure while keeping form controlled. Never add or remove sets, change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
+specific target for every warm-up and working set. The server gives each set its baseline, a permitted weight list and a repetition range. For warm-ups, do not invent a weight: keep the supplied baseline unless the server supplied another permitted weight. Historical weights are valid candidates only for working sets. Choose only a listed weight and only a whole-number repetition target within the supplied range. Make the headline sound like a real, energetic coach. Make session_focus a short, motivating meta-summary on the level of the whole workout: compare the overall last session with today's overall focus and explain why this session matters. Do not list exercise names, weights, repetitions, set IDs, or set-by-set targets in session_focus. Never use a generic safety disclaimer. Never use the same recommendation for different exercises: name the exercise, reference its actual history or lack of history, and explain the concrete first-set target. If an exercise has exactly one working set, explicitly say that this is the all-out set and that the athlete should give full power up to technical muscular failure while keeping form controlled. Never add or remove sets, change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
 support progression, choose the conservative baseline. Explain the context and the reasoning for each exercise briefly in
 recommendation; this is the user-visible analysis. Keep text specific, short, motivating and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=json.dumps(session_context, ensure_ascii=False),
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2328,7 +2331,7 @@ Use IDs that appear exactly in the supplied session or catalog. Give at most one
             "recent_chat": history[-12:],
         }, ensure_ascii=False)
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2377,7 +2380,7 @@ async def select_monthly_challenge_categories(
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=300),
         )
@@ -2431,7 +2434,7 @@ async def generate_monthly_challenge_checkin(
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.7-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.5, max_output_tokens=500),
         )

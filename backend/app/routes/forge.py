@@ -2304,9 +2304,20 @@ def _native_plan_template(plan: ForgeTrainingPlan) -> list[dict]:
             "sets": [
                 {
                     "type": plan_set.set_type,
-                    # Plan weights are not historical truth; completed actual sets drive load progression.
-                    "weight_kg": None,
-                    "reps": plan_set.current_reps,
+                    # Preserve an explicitly configured warm-up load. Working-set loads still come
+                    # exclusively from completed actual sets and the verified progression logic.
+                    "weight_kg": (
+                        plan_set.coach_suggested_weight_kg
+                        if plan_set.set_type == "warmup" and plan_set.coach_suggested_weight_kg is not None
+                        else plan_set.current_weight_kg
+                        if plan_set.set_type == "warmup"
+                        else None
+                    ),
+                    "reps": (
+                        plan_set.coach_suggested_reps
+                        if plan_set.set_type == "warmup" and plan_set.coach_suggested_reps is not None
+                        else plan_set.current_reps
+                    ),
                 }
                 for plan_set in plan_exercise.sets
             ],
