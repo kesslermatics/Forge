@@ -271,6 +271,42 @@ def _last_used_machine_profiles(
     }
 
 
+def _apply_last_used_profiles_to_session(
+    db: Session,
+    user_id: UUID,
+    session: ForgeWorkoutSession,
+) -> bool:
+    """Backfill the last active profile on legacy active sessions before coaching."""
+    candidates = [
+        exercise.source_exercise_id
+        for exercise in session.exercises
+        if exercise.source_exercise_id is not None
+        and exercise.source_machine_profile_id is None
+        and exercise.equipment in {"machine", "cable"}
+    ]
+    last_used = _last_used_machine_profiles(db, user_id, candidates)
+    changed = False
+    for exercise in session.exercises:
+        profile = last_used.get(exercise.source_exercise_id)
+        if profile is None or exercise.source_machine_profile_id is not None:
+            continue
+        exercise.source_machine_profile_id = profile.id
+        exercise.machine_profile_name = profile.name
+        for set_data in exercise.sets:
+            set_data.target_weight_kg = None
+            set_data.target_reps = None
+            set_data.coach_suggested_weight_kg = None
+            set_data.coach_suggested_reps = None
+        exercise.coach_guidance = None
+        exercise.addition_coaching = None
+        changed = True
+    if changed:
+        # The previous briefing was generated without the profile identity and
+        # must not survive the profile backfill.
+        session.start_coaching = None
+    return changed
+
+
 def _serialize_exercise(
     exercise: ForgeExercise,
     db: Session,
@@ -1657,6 +1693,9 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
         ForgeWorkoutSession.status == "active",
     ).order_by(ForgeWorkoutSession.started_at.desc()).first()
     if active_session is not None:
+        if _apply_last_used_profiles_to_session(db, current_user.id, active_session):
+            db.commit()
+            db.refresh(active_session)
         return _serialize_session(active_session)
 
     plan = _owned_plan(db, current_user.id, data.plan_id)
@@ -1702,7 +1741,15 @@ async def generate_session_start_coaching(
     session = _owned_session(db, current_user.id, session_id)
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")
-    if session.start_coaching is None or force:
+    profiles_backfilled = _apply_last_used_profiles_to_session(db, current_user.id, session)
+    missing_warmup_targets = any(
+        set_data.set_type == "warmup"
+        and set_data.target_weight_kg is None
+        and set_data.coach_suggested_weight_kg is None
+        for exercise in session.exercises
+        for set_data in exercise.sets
+    )
+    if session.start_coaching is None or force or profiles_backfilled or missing_warmup_targets:
         coaching_profile = await _forge_coaching_profile(current_user)
         context = _session_coaching_context(db, current_user, session, coaching_profile)
         coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
@@ -1721,6 +1768,9 @@ async def get_active_session(current_user: User = Depends(get_current_user), db:
         ForgeWorkoutSession.user_id == current_user.id,
         ForgeWorkoutSession.status == "active",
     ).order_by(ForgeWorkoutSession.started_at.desc()).first()
+    if session is not None and _apply_last_used_profiles_to_session(db, current_user.id, session):
+        db.commit()
+        db.refresh(session)
     return _serialize_session(session) if session is not None else None
 
 
@@ -1916,7 +1966,11 @@ async def get_session_plan_changes(
 
 @router.get("/sessions/{session_id}", response_model=ForgeSessionResponse)
 async def get_session(session_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return _serialize_session(_owned_session(db, current_user.id, session_id))
+    session = _owned_session(db, current_user.id, session_id)
+    if session.status == "active" and _apply_last_used_profiles_to_session(db, current_user.id, session):
+        db.commit()
+        db.refresh(session)
+    return _serialize_session(session)
 
 
 @router.post("/sessions/{session_id}/exercises", response_model=ForgeSessionResponse)
@@ -2036,7 +2090,9 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
             # profile's load into the isolated analysis.
             for set_data in exercise.sets:
                 set_data.target_weight_kg = None
+                set_data.target_reps = None
                 set_data.coach_suggested_weight_kg = None
+                set_data.coach_suggested_reps = None
             _apply_live_session_exercise_guidance(db, current_user.id, exercise, library_exercise, machine_profile)
             exercise.addition_coaching = None
     for key, value in updates.items():

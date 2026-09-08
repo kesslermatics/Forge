@@ -710,7 +710,7 @@ def _parse_available_weights(notes: str) -> list[float]:
     # labelled, for example: "Gewichte: 5, 12, 19" or "only 5 12 19".
     match = re.search(
         r"(?:available\s+weights?|verf[uü]gbare\s+gewichte|gewichte|only)\s*[:=]?\s*"
-        r"((?:\d+(?:[.,]\d+)?[\s,;/]*){2,})",
+        r"((?:\d+(?:[.,]\d+)?[\s,;/]*){1,})",
         notes,
         flags=re.IGNORECASE,
     )
@@ -2106,9 +2106,12 @@ def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
                 normalized = _forge_finite_weight(weight)
                 if normalized is not None and normalized not in allowed_weights:
                     allowed_weights.append(normalized)
-            if baseline_weight is not None and baseline_weight not in allowed_weights:
+            is_warmup = target.get("type") == "warmup"
+            if baseline_weight is not None and (
+                not is_warmup or not allowed_weights or baseline_weight in allowed_weights
+            ):
                 allowed_weights.append(baseline_weight)
-            if target.get("type") == "warmup" and baseline_weight is None and allowed_weights:
+            if is_warmup and baseline_weight is None and allowed_weights:
                 # The lightest explicitly documented profile load is the conservative
                 # fallback when the plan did not define a warm-up weight.
                 baseline_weight = min(allowed_weights)

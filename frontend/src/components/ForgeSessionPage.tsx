@@ -5,9 +5,9 @@ import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction,
   completeForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, deleteForgeSession,
   dismissForgeSessionAction, generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
-  getForgeExercises, getForgeSession, getForgeSessionPlanChanges, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
+  getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
-import type { ForgeExercise, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
+import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
 import ForgeSessionLoader from './ForgeSessionLoader';
 import ForgeExercisePicker from './ForgeExercisePicker';
 import ForgeSheet from './ForgeSheet';
@@ -61,6 +61,7 @@ export default function ForgeSessionPage() {
   const navigate = useNavigate();
   const [session, setSession] = useState<ForgeSession | null>(null);
   const [library, setLibrary] = useState<ForgeExercise[]>([]);
+  const [machineProfiles, setMachineProfiles] = useState<ForgeMachineProfile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [preparingSession, setPreparingSession] = useState(false);
@@ -176,18 +177,20 @@ export default function ForgeSessionPage() {
     const loadSession = async () => {
       setLoading(true); setError(null); setPreparingSession(false);
       try {
-        const [loadedSession, loadedLibrary] = await Promise.all([
+        const [loadedSession, loadedLibrary, loadedMachineProfiles] = await Promise.all([
           getForgeSession(sessionId),
           getForgeExercises(),
+          getForgeMachineProfiles(),
         ]);
         let preparedSession = loadedSession;
         const storedFocus = loadedSession.start_coaching?.session_focus || '';
-        const hasLegacyDetailedFocus = /(?:\bkg\b|\bwdh\.?\b|×|target_weight_kg|session_set_id)/i.test(storedFocus);
-        if (loadedSession.status === 'active' && (!loadedSession.start_coaching || hasLegacyDetailedFocus)) {
+        const hasLegacyDetailedFocus = storedFocus.length > 180 || /(?:\bkg\b|\bwdh\.?\b|×|target_weight_kg|session_set_id)/i.test(storedFocus);
+        const hasMissingWarmupTarget = loadedSession.exercises.some((exercise) => exercise.sets.some((set) => set.set_type === 'warmup' && set.target_weight_kg == null && set.coach_suggested_weight_kg == null));
+        if (loadedSession.status === 'active' && (!loadedSession.start_coaching || hasLegacyDetailedFocus || hasMissingWarmupTarget)) {
           setPreparingSession(true);
           preparedSession = await generateForgeSessionStartCoaching(sessionId, Boolean(loadedSession.start_coaching));
         }
-        if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); }
+        if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); setMachineProfiles(loadedMachineProfiles); }
       } catch (caught: unknown) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : 'Session konnte nicht geladen werden.');
       } finally {
@@ -334,7 +337,9 @@ export default function ForgeSessionPage() {
   const completedSets = session.exercises.flatMap((exercise) => exercise.sets).filter((set) => set.completed).length;
   const totalSets = session.exercises.flatMap((exercise) => exercise.sets).length;
   const activeLibraryExercise = library.find((exercise) => exercise.id === activeExercise?.source_exercise_id) ?? null;
-  const selectableMachineProfiles = activeLibraryExercise?.available_machine_profiles ?? [];
+  const canSelectMachineProfile = Boolean(activeExercise?.source_exercise_id && (activeExercise.equipment === 'machine' || activeExercise.equipment === 'cable'));
+  const allMachineProfiles = [...machineProfiles, ...(activeLibraryExercise?.available_machine_profiles ?? []), ...(activeLibraryExercise?.machine_profiles ?? [])];
+  const selectableMachineProfiles = allMachineProfiles.filter((profile, index) => allMachineProfiles.findIndex((candidate) => candidate.id === profile.id) === index);
   const duration = formatDuration(session.started_at, session.completed_at);
 
   return <div className="space-y-4 forge-anim">
@@ -352,7 +357,7 @@ export default function ForgeSessionPage() {
     {activeExercise ? <>
       <div className="flex items-center justify-between gap-3"><button onClick={() => setActiveIndex((index) => Math.max(0, index - 1))} disabled={activeIndex === 0} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronLeft size={20} /></button><p className="text-[11px]" style={{ color: DIM }}>Übung {activeIndex + 1} von {session.exercises.length}</p><button onClick={() => setActiveIndex((index) => Math.min(session.exercises.length - 1, index + 1))} disabled={activeIndex >= session.exercises.length - 1} className="tap cursor-pointer disabled:opacity-20" style={{ color: SAND }}><ChevronRight size={20} /></button></div>
       <section className="card-forge overflow-hidden" style={{ borderColor: `${SAND}22` }}>
-        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{selectableMachineProfiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active' || saving} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Gerät wählen</option>{selectableMachineProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.machine_profile_name || activeExercise.primary_muscle_group}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
+        <div className="p-5 flex items-start justify-between gap-3"><div><h2 className="text-[20px] font-semibold" style={{ color: TEXT }}>{activeExercise.name}</h2>{canSelectMachineProfile && selectableMachineProfiles.length ? <select value={activeExercise.machine_profile_id ?? ''} disabled={session.status !== 'active' || saving} onChange={(event) => void mutate(() => updateForgeSessionExercise(session.id, activeExercise.id, { machine_profile_id: event.target.value || null }))} className="mt-1 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Gerät wählen</option>{selectableMachineProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select> : <p className="text-[11px] mt-1" style={{ color: DIM }}>{activeExercise.machine_profile_name || activeExercise.primary_muscle_group}</p>}</div>{session.status === 'active' && <button onClick={() => void mutate(() => deleteForgeSessionExercise(session.id, activeExercise.id))} className="tap cursor-pointer" style={{ color: DIM }}><Trash2 size={16} /></button>}</div>
         {activeCoachDecision && <aside className="forge-coach-detail mx-4 mb-4 rounded-2xl p-4" style={{ background: 'rgba(232,197,138,0.075)', border: `1px solid ${SAND}38` }}>
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
