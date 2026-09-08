@@ -2258,15 +2258,23 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         if default is None or set_id in proposals:
             continue
         proposed_reps = item.get("target_reps")
-        if not isinstance(proposed_reps, int) or isinstance(proposed_reps, bool) or not default["min_reps"] <= proposed_reps <= default["max_reps"]:
-            raise ValueError("Forge AI returned repetitions outside the allowed range")
+        if isinstance(proposed_reps, int) and not isinstance(proposed_reps, bool):
+            # Gemini owns the proposal; the server only bounds a minor numeric
+            # overshoot instead of rejecting an otherwise complete AI response.
+            proposed_reps = max(default["min_reps"], min(default["max_reps"], proposed_reps))
+        else:
+            proposed_reps = default["target_reps"]
         proposed_weight = _forge_finite_weight(item.get("target_weight_kg"))
         allowed_weights = default["allowed_weight_kg"]
         if allowed_weights:
-            if proposed_weight is None or not any(abs(proposed_weight - allowed) < 0.001 for allowed in allowed_weights):
-                raise ValueError("Forge AI returned a weight outside the selected profile")
+            if proposed_weight is None:
+                proposed_weight = default["target_weight_kg"]
+            elif not any(abs(proposed_weight - allowed) < 0.001 for allowed in allowed_weights):
+                # Machine increments are discrete. Snap an AI rounding mismatch to
+                # the closest verified load for the selected profile.
+                proposed_weight = min(allowed_weights, key=lambda allowed: abs(allowed - proposed_weight))
         elif proposed_weight is not None:
-            raise ValueError("Forge AI invented an unavailable weight")
+            proposed_weight = None
         proposals[set_id] = {
             **default,
             "target_weight_kg": proposed_weight,
@@ -2299,7 +2307,8 @@ async def generate_forge_session_start_coaching(session_context: dict, language:
     system_prompt = """You are Forge, a concise and motivating resistance-training coach. Return JSON only with
 {headline, session_focus, exercise_decisions, set_proposals}. Return exactly one exercise_decisions item for every
 provided session_exercise_id and exactly one set_proposals item for every provided session_set_id, including every
-warm-up. Each set proposal contains target_weight_kg and an integer target_reps.
+warm-up. Each set proposal contains target_weight_kg and an integer target_reps. Respect each set's own min_reps and
+max_reps exactly; warm-ups deliberately use a different repetition range from working sets.
 
 Choose every warm-up and working target from the supplied baseline, allowed weights, repetition range, selected machine
 profile and matching profile-specific history. Never invent a load or ID. A null weight is allowed only when the server

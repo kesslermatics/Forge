@@ -1197,6 +1197,10 @@ def _session_coaching_context(
 
     def _target_context(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
         minimum, maximum = _rep_bounds(exercise)
+        if set_data.set_type == "warmup":
+            # Warm-ups prepare the movement and do not share the hypertrophy range
+            # of the working sets. Give the model a dedicated practical range.
+            minimum, maximum = 6, 15
         progression_key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
         profile_weights = profile_weights_by_exercise.get(exercise.id, [])
         baseline_weight = set_data.target_weight_kg
