@@ -2074,11 +2074,11 @@ def _forge_finite_weight(value: object) -> float | None:
 
 
 def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
-    """Build the server-owned baseline and constraints for every editable working set."""
+    """Build the server-owned baseline and constraints for every editable session set."""
     defaults: dict[str, dict] = {}
     for exercise in session_context.get("session", {}).get("exercises", []):
         for target in exercise.get("targets", []):
-            if target.get("type") != "working" or not target.get("session_set_id"):
+            if not target.get("session_set_id"):
                 continue
             min_reps = target.get("min_reps")
             max_reps = target.get("max_reps")
@@ -2112,6 +2112,52 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
     session = session_context.get("session") or {}
     session_name = str(session.get("name") or "Dein Training").strip()
     exercises = session.get("exercises", [])
+    recent_history = session_context.get("recent_matching_history") or []
+
+    def format_load(weight: object, reps: object) -> str:
+        normalized_weight = _forge_finite_weight(weight)
+        if normalized_weight is not None and isinstance(reps, int):
+            return f"{normalized_weight:g} kg × {reps} Wdh."
+        if isinstance(reps, int):
+            return f"{reps} kontrollierte Wdh."
+        return "ein konkretes Arbeitsziel"
+
+    today_summary = []
+    for exercise in exercises[:4]:
+        first_target = next(
+            (target for target in exercise.get("targets", []) if target.get("type") == "working"),
+            {},
+        )
+        today_summary.append(
+            f"{exercise.get('name') or 'Übung'} {format_load(first_target.get('weight_kg'), first_target.get('reps'))}"
+        )
+
+    previous_summary = []
+    if recent_history:
+        for exercise in (recent_history[0].get("exercises") or [])[:4]:
+            previous_sets = [
+                item for item in exercise.get("working_sets", [])
+                if item.get("weight_kg") is not None or item.get("reps") is not None
+            ]
+            if previous_sets:
+                previous = previous_sets[-1]
+                previous_summary.append(
+                    f"{exercise.get('exercise') or 'Übung'} {format_load(previous.get('weight_kg'), previous.get('reps'))}"
+                )
+
+    if previous_summary and today_summary:
+        session_focus = (
+            f"Letztes Mal: {', '.join(previous_summary[:3])}. Heute gehen wir mit {', '.join(today_summary[:3])} in {session_name} "
+            "und holen aus jedem Satz mehr Qualität, Spannung und Fokus heraus. Heute wird abgeliefert."
+        )
+    elif today_summary:
+        session_focus = (
+            f"Das ist deine Ausgangsbasis für {session_name}: {', '.join(today_summary[:3])}. "
+            "Wir bauen heute einen starken Referenzpunkt auf und machen aus jedem Satz eine klare Ansage."
+        )
+    else:
+        session_focus = f"{session_name} ist bereit. Heute wird fokussiert gearbeitet, sauber durchgezogen und abgeliefert."
+
     decisions = []
     for exercise in exercises:
         exercise_name = str(exercise.get("name") or "Diese Übung")
@@ -2121,31 +2167,29 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
             (target for target in exercise.get("targets", []) if target.get("type") == "working"),
             {},
         )
-        target_weight = _forge_finite_weight(first_target.get("weight_kg"))
-        target_reps = first_target.get("reps")
-        if target_weight is not None and isinstance(target_reps, int):
-            target_label = f"{target_weight:g} kg × {target_reps} Wdh."
-        elif isinstance(target_reps, int):
-            target_label = f"{target_reps} kontrollierte Wdh."
-        else:
-            target_label = "ein konservatives Arbeitsziel"
+        target_label = format_load(first_target.get("weight_kg"), first_target.get("reps"))
         recommendation = {
-            "INCREASE_WEIGHT": f"Bei {exercise_name} spricht die letzte Leistung für einen kontrollierten Lastsprung. Starte heute mit {target_label} und erhöhe nur bei sauberer Technik.",
-            "KEEP_PROGRESSING": f"Bei {exercise_name} bleibt die Last zunächst stabil, damit du weitere saubere Wiederholungen sammelst. Dein Startziel heute: {target_label}.",
-            "STAGNATED": f"Bei {exercise_name} waren die letzten vergleichbaren Einheiten stabil. Heute zählt Qualität vor einem erzwungenen Sprung; starte mit {target_label}.",
-            "REGRESSED": f"Bei {exercise_name} war die letzte vergleichbare Leistung niedriger. Wir stabilisieren zuerst und starten heute mit {target_label}.",
-        }.get(status, f"Für {exercise_name} gibt es noch keinen belastbaren Vergleich. Wir bauen mit {target_label} eine sichere Ausgangsbasis auf.")
+            "INCREASE_WEIGHT": f"Bei {exercise_name} spricht die letzte Leistung für einen kontrollierten Lastsprung. Starte heute mit {target_label} und greif dir diesen Satz mit voller Konzentration.",
+            "KEEP_PROGRESSING": f"Bei {exercise_name} bleibt die Last zunächst stabil, damit du weitere saubere Wiederholungen sammelst. Dein Startziel heute: {target_label} – mach daraus einen starken Satz.",
+            "STAGNATED": f"Bei {exercise_name} waren die letzten vergleichbaren Einheiten stabil. Heute zählt Qualität vor einem erzwungenen Sprung; starte mit {target_label} und setze ein klares Zeichen.",
+            "REGRESSED": f"Bei {exercise_name} war die letzte vergleichbare Leistung niedriger. Wir stabilisieren zuerst und starten heute mit {target_label}; Kontrolle vor Ego.",
+        }.get(status, f"Für {exercise_name} gibt es noch keinen belastbaren Vergleich. Wir starten mit {target_label} und bauen heute eine starke Basis auf.")
+        working_set_count = sum(1 for target in exercise.get("targets", []) if target.get("type") == "working")
+        if working_set_count == 1:
+            recommendation += " Heute gibt es nur einen Arbeitssatz: volle Power bis zum technischen Muskelversagen, solange die Ausführung sauber bleibt."
+            effort_hint = f"Nur ein Arbeitssatz: Bei {exercise_name} volle Power bis zum technischen Muskelversagen, ohne die saubere Ausführung zu verlieren."
+        else:
+            effort_hint = f"Lass bei {exercise_name} ungefähr 2–3 Wiederholungen im Tank und beende den Satz stark, solange die Ausführung sitzt."
         decisions.append({
             "session_exercise_id": exercise.get("session_exercise_id"),
             "recommendation": recommendation,
-            "first_set_focus": f"Erster Arbeitssatz bei {exercise_name}: {target_label} kontrolliert beginnen und die Technik vor der Last bewerten.",
-            "effort_hint": f"Lass bei {exercise_name} ungefähr 2–3 Wiederholungen im Tank und stoppe früher, wenn die Technik nachlässt.",
+            "first_set_focus": f"Erster Arbeitssatz bei {exercise_name}: {target_label} kontrolliert beginnen und direkt Spannung aufbauen.",
+            "effort_hint": effort_hint,
         })
     return {
         "coaching_source": "fallback",
-        "headline": f"{session_name}: fokussiert starten",
-        "session_focus": f"Für {len(exercises)} Übungen sind konkrete Startziele aus deiner bisherigen Forge-Historie und den Trainingsregeln vorbereitet. Heute zählt eine starke, saubere Ausführung statt blindes Mehrgewicht.",
-        "readiness_note": "Passe bei Schmerzen, ungewohnter Erschöpfung oder unsauberer Technik konservativ an und hole bei gesundheitlichen Fragen fachlichen Rat ein.",
+        "headline": f"{session_name}: heute wird abgeliefert",
+        "session_focus": session_focus,
         "exercise_decisions": decisions,
         "set_proposals": list(_forge_set_proposal_defaults(session_context).values()),
     }
@@ -2173,9 +2217,18 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
             if exercise_id not in allowed_ids or exercise_id in seen:
                 continue
             default = defaults[exercise_id]
+            recommendation = _forge_coaching_text(item.get("recommendation"), 360, default["recommendation"])
+            working_set_count = next(
+                (exercise.get("working_set_count") for exercise in session_context.get("session", {}).get("exercises", [])
+                 if str(exercise.get("session_exercise_id")) == exercise_id),
+                0,
+            )
+            all_out_suffix = " Heute gibt es nur einen Arbeitssatz: volle Power bis zum technischen Muskelversagen, solange die Ausführung sauber bleibt."
+            if working_set_count == 1 and "technischen muskelversagen" not in recommendation.lower():
+                recommendation = f"{recommendation[:max(0, 360 - len(all_out_suffix))].rstrip()}{all_out_suffix}"
             decisions.append({
                 "session_exercise_id": exercise_id,
-                "recommendation": _forge_coaching_text(item.get("recommendation"), 360, default["recommendation"]),
+                "recommendation": _forge_coaching_text(recommendation, 360, default["recommendation"]),
                 "first_set_focus": _forge_coaching_text(item.get("first_set_focus"), 220, default["first_set_focus"]),
                 "effort_hint": _forge_coaching_text(item.get("effort_hint"), 220, default["effort_hint"]),
             })
@@ -2206,27 +2259,25 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         "coaching_source": "ai",
         "headline": _forge_coaching_text(candidate.get("headline"), 160, fallback["headline"]),
         "session_focus": _forge_coaching_text(candidate.get("session_focus"), 420, fallback["session_focus"]),
-        "readiness_note": _forge_coaching_text(candidate.get("readiness_note"), 300, fallback["readiness_note"]),
         "exercise_decisions": decisions,
         "set_proposals": list(proposals.values()),
     }
 
 
 async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
-    """Generate short analysis plus bounded numeric proposals for server-owned working sets."""
+    """Generate short analysis plus bounded numeric proposals for every session set."""
     fallback = _forge_coaching_fallback(session_context)
     if not settings.gemini_api_key:
         return fallback
     system_prompt = """You are Forge's evidence-informed resistance-training coach. Return JSON only with
-{headline, session_focus, readiness_note, exercise_decisions, set_proposals}. Every exercise_decisions item must use a
+{headline, session_focus, exercise_decisions, set_proposals}. Every exercise_decisions item must use a
 session_exercise_id provided by the server and include recommendation, first_set_focus, and effort_hint. Every
-set_proposals item must use a working-set session_set_id supplied by the server and include target_weight_kg and target_reps.
+set_proposals item must use a session_set_id supplied by the server and include target_weight_kg and target_reps.
 
 Use the supplied Yazio profile, nutrition context, matching Forge history, exercise notes and progression rules to choose a
-specific target for every working set. The server gives each set its baseline, a permitted weight list and a repetition range.
-Choose only a listed weight and only a whole-number repetition target within the supplied range. Never use the same recommendation for different exercises: name the exercise, reference its actual history or lack of history, and explain the concrete first-set target. Never add or remove sets, change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
+specific target for every warm-up and working set. The server gives each set its baseline, a permitted weight list and a repetition range. For warm-ups, do not invent a weight: keep the supplied baseline unless the server supplied another permitted weight. Historical weights are valid candidates only for working sets. Choose only a listed weight and only a whole-number repetition target within the supplied range. Make the headline sound like a real, energetic coach. Make session_focus a short, motivating meta-summary: compare what the athlete did last time with what is planned today, then explain what this session is about. Never use a generic safety disclaimer. Never use the same recommendation for different exercises: name the exercise, reference its actual history or lack of history, and explain the concrete first-set target. If an exercise has exactly one working set, explicitly say that this is the all-out set and that the athlete should give full power up to technical muscular failure while keeping form controlled. Never add or remove sets, change warm-ups, invent an ID, weight increment, diagnosis or medical advice. If history, readiness or nutrition does not
 support progression, choose the conservative baseline. Explain the context and the reasoning for each exercise briefly in
-recommendation; this is the user-visible analysis. Keep text specific, short and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
+recommendation; this is the user-visible analysis. Keep text specific, short, motivating and encouraging. The athlete owns the final decision.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(

@@ -172,12 +172,14 @@ export default function ForgeSessionPage() {
     if (!sessionId) return;
     let cancelled = false;
     const loadSession = async () => {
-      setLoading(true); setError(null); setPreparingSession(true);
+      setLoading(true); setError(null); setPreparingSession(false);
       try {
         const [loadedSession, loadedLibrary] = await Promise.all([getForgeSession(sessionId), getForgeExercises()]);
-        const preparedSession = loadedSession.status === 'active' && !loadedSession.start_coaching
-          ? await generateForgeSessionStartCoaching(sessionId)
-          : loadedSession;
+        let preparedSession = loadedSession;
+        if (loadedSession.status === 'active' && !loadedSession.start_coaching) {
+          setPreparingSession(true);
+          preparedSession = await generateForgeSessionStartCoaching(sessionId);
+        }
         if (!cancelled) { setSessionSafe(preparedSession); setLibrary(loadedLibrary); }
       } catch (caught: unknown) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : 'Session konnte nicht geladen werden.');
@@ -333,7 +335,7 @@ export default function ForgeSessionPage() {
       {session.status === 'active' && <div className="flex items-center gap-3"><button onClick={() => setSessionActionConfirm('discard')} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button><button onClick={() => void reviewCompletion()} disabled={saving || reviewingCompletion} className="tap flex items-center gap-1 text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>{reviewingCompletion && <Loader2 size={12} className="animate-spin" />}Beenden</button></div>}
     </header>
     {session.start_coaching && <section className="forge-coach-brief card-forge p-5" style={{ borderColor: `${SAND}40`, background: 'linear-gradient(135deg, rgba(232,197,138,0.13), rgba(255,247,235,0.025))' }}>
-      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p>{session.start_coaching.coaching_source && <span className="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: session.start_coaching.coaching_source === 'fallback' ? DIM : SAND, background: session.start_coaching.coaching_source === 'fallback' ? 'rgba(242,236,226,0.08)' : `${SAND}14` }}>{session.start_coaching.coaching_source === 'fallback' ? 'Basis-Coaching' : 'KI-Analyse'}</span>}</div><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p><p className="mt-3 text-[10px] leading-relaxed" style={{ color: DIM }}>{session.start_coaching.readiness_note}</p>{session.status === 'active' && (!session.start_coaching.coaching_source || session.start_coaching.coaching_source === 'fallback') && <button onClick={() => void mutate(() => generateForgeSessionStartCoaching(session.id, true))} disabled={saving} className="mt-3 tap rounded-xl px-3 py-2 text-[10px] font-medium disabled:opacity-50" style={{ color: SAND, border: `1px solid ${SAND}44`, background: `${SAND}0c` }}>{saving ? 'Analysiert…' : 'KI neu analysieren'}</button>}</div></div>
+      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p>{session.start_coaching.coaching_source && <span className="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: session.start_coaching.coaching_source === 'fallback' ? DIM : SAND, background: session.start_coaching.coaching_source === 'fallback' ? 'rgba(242,236,226,0.08)' : `${SAND}14` }}>{session.start_coaching.coaching_source === 'fallback' ? 'Basis-Coaching' : 'KI-Analyse'}</span>}</div><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p>{session.status === 'active' && (!session.start_coaching.coaching_source || session.start_coaching.coaching_source === 'fallback') && <button onClick={() => void mutate(() => generateForgeSessionStartCoaching(session.id, true))} disabled={saving} className="mt-3 tap rounded-xl px-3 py-2 text-[10px] font-medium disabled:opacity-50" style={{ color: SAND, border: `1px solid ${SAND}44`, background: `${SAND}0c` }}>{saving ? 'Analysiert…' : 'KI neu analysieren'}</button>}</div></div>
     </section>}
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
 
@@ -347,13 +349,8 @@ export default function ForgeSessionPage() {
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Dein Trainingsziel</p>
+              <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Coach-Ansage</p>
               <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <div className="rounded-xl p-2.5" style={{ background: 'rgba(255,247,235,0.04)' }}><p className="text-[9px] uppercase tracking-wider" style={{ color: SAND }}>Erster Arbeitssatz</p><p className="mt-1 text-[11px] leading-relaxed" style={{ color: DIM }}>{activeCoachDecision.first_set_focus}</p></div>
-                <div className="rounded-xl p-2.5" style={{ background: 'rgba(255,247,235,0.04)' }}><p className="text-[9px] uppercase tracking-wider" style={{ color: SAND }}>Belastung</p><p className="mt-1 text-[11px] leading-relaxed" style={{ color: DIM }}>{activeCoachDecision.effort_hint}</p></div>
-              </div>
-              {activeExercise.coach_guidance?.rationale && <p className="mt-3 text-[10px] leading-relaxed" style={{ color: DIM }}><span style={{ color: SAND }}>Progressionsbasis: </span>{activeExercise.coach_guidance.rationale}</p>}
             </div>
           </div>
         </aside>}
@@ -374,7 +371,7 @@ export default function ForgeSessionPage() {
                 </div>}
               </div>
               <span className="text-center text-[12px]" style={{ color: DIM }}>{displayLoad(set.target_weight_kg, set.target_reps)}</span>
-              <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : 'kg'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
+              <div className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}><input value={actualDrafts[`${set.id}:actual_weight_kg`] ?? (set.actual_weight_kg ?? '')} disabled={session.status !== 'active'} inputMode="decimal" onChange={(event) => scheduleActualSave(set, 'actual_weight_kg', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_weight_kg != null ? `${set.target_weight_kg} kg` : 'BW'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /><input value={actualDrafts[`${set.id}:actual_reps`] ?? (set.actual_reps ?? '')} disabled={session.status !== 'active'} inputMode="numeric" onChange={(event) => scheduleActualSave(set, 'actual_reps', event.target.value)} onBlur={() => void flushSetAutosave(set.id)} placeholder={set.target_reps != null ? `${set.target_reps} Wdh.` : 'Wdh.'} className="input-forge min-w-0 !px-2 !py-2 text-center text-[11px]" /></div>
               {session.status === 'active' ? <button onClick={() => void toggleSet(set)} disabled={saving} className="tap w-7 h-7 rounded-full flex items-center justify-center cursor-pointer disabled:opacity-50" style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM }}><Check size={15} /></button> : <Check size={15} style={{ color: set.completed ? SAND : DIM }} />}
             </div>;
           })}

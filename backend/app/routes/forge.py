@@ -1067,9 +1067,10 @@ def _session_coaching_context(
         progression_key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
         baseline_weight = set_data.target_weight_kg
         candidates = {float(baseline_weight)} if isinstance(baseline_weight, (int, float)) and isfinite(baseline_weight) and baseline_weight >= 0 else set()
-        for historical_weight in historical_weights.get(progression_key or "", set()):
-            if baseline_weight is None or historical_weight <= float(baseline_weight) + 0.001:
-                candidates.add(historical_weight)
+        if set_data.set_type == "working":
+            for historical_weight in historical_weights.get(progression_key or "", set()):
+                if baseline_weight is None or historical_weight <= float(baseline_weight) + 0.001:
+                    candidates.add(historical_weight)
         return {
             "session_set_id": str(set_data.id),
             "type": set_data.set_type,
@@ -1093,6 +1094,7 @@ def _session_coaching_context(
                     "machine_profile": exercise.machine_profile_name,
                     "notes": exercise.notes or "",
                     "deterministic_guidance": exercise.coach_guidance or {},
+                    "working_set_count": sum(1 for set_data in exercise.sets if set_data.set_type == "working"),
                     "targets": [_target_context(exercise, set_data) for set_data in exercise.sets],
                 }
                 for exercise in selected
@@ -1103,20 +1105,22 @@ def _session_coaching_context(
 
 
 def _apply_forge_set_proposals(session: ForgeWorkoutSession, coaching: dict) -> None:
-    """Persist only already-normalized working-set proposals from the coaching service."""
+    """Persist already-normalized proposals for both warm-up and working sets."""
     by_id = {str(set_data.id): set_data for exercise in session.exercises for set_data in exercise.sets}
     for proposal in coaching.get("set_proposals", []):
         if not isinstance(proposal, dict):
             continue
         set_data = by_id.get(str(proposal.get("session_set_id") or ""))
-        if set_data is None or set_data.set_type != "working":
+        if set_data is None:
             continue
         weight = proposal.get("target_weight_kg")
         reps = proposal.get("target_reps")
         if isinstance(weight, (int, float)) and not isinstance(weight, bool) and isfinite(weight) and 0 <= weight <= 1000:
             set_data.target_weight_kg = float(weight)
+            set_data.coach_suggested_weight_kg = float(weight)
         if isinstance(reps, int) and not isinstance(reps, bool) and 1 <= reps <= 200:
             set_data.target_reps = reps
+            set_data.coach_suggested_reps = reps
 
 
 def _serialize_session_summary(session: ForgeWorkoutSession) -> dict:
@@ -1608,7 +1612,7 @@ async def generate_session_start_coaching(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Persist one idempotent, text-only coaching briefing after the durable session snapshot exists."""
+    """Persist the session briefing; force allows an active session to regenerate it."""
     session = _owned_session(db, current_user.id, session_id)
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")

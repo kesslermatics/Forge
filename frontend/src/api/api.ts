@@ -981,7 +981,6 @@ export interface ForgeSessionStartCoaching {
   coaching_source?: 'ai' | 'fallback';
   headline: string;
   session_focus: string;
-  readiness_note: string;
   exercise_decisions: ForgeSessionCoachDecision[];
 }
 

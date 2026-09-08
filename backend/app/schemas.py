@@ -405,9 +405,9 @@ class ForgeSessionCoachExerciseDecisionResponse(BaseModel):
 
 
 class ForgeSessionStartCoachingResponse(BaseModel):
+    coaching_source: Optional[Literal["ai", "fallback"]] = None
     headline: str = Field(..., max_length=160)
     session_focus: str = Field(..., max_length=420)
-    readiness_note: str = Field(..., max_length=300)
     exercise_decisions: list[ForgeSessionCoachExerciseDecisionResponse] = Field(default_factory=list, max_length=30)
 
 
