@@ -1,0 +1,67 @@
+[
+  {
+    "id": "40b8dd25-58f4-4b90-b104-00ea079eff7d",
+    "user_id": "f2d04b40-b75c-4145-b5d3-d78a57fff5cc",
+    "name": "Life Fitness Kabel Innen",
+    "model": null,
+    "notes": "5 7,5 10 12,5 15 17,5 21,25 25 28,75 32,5 36,25 40 43,75 47,5",
+    "is_archived": false,
+    "created_at": "2026-09-07 17:05:08.415162+00:00",
+    "updated_at": "2026-09-07 21:07:29.105514+00:00",
+    "loading_system": "unknown",
+    "load_basis": "unknown",
+    "available_weights_kg": []
+  },
+  {
+    "id": "c77415d6-cba4-4d54-9027-094a4f64c666",
+    "user_id": "f2d04b40-b75c-4145-b5d3-d78a57fff5cc",
+    "name": "Life fitness Kabel innent",
+    "model": null,
+    "notes": "5 10 12,5 15 17,5 21,25 25 28,75 32,5 36,25",
+    "is_archived": true,
+    "created_at": "2026-09-07 17:39:10.740997+00:00",
+    "updated_at": "2026-09-07 21:07:10.500156+00:00",
+    "loading_system": "unknown",
+    "load_basis": "unknown",
+    "available_weights_kg": []
+  },
+  {
+    "id": "45dafa6e-cd1d-4d85-81e9-1cbddbd75aed",
+    "user_id": "f2d04b40-b75c-4145-b5d3-d78a57fff5cc",
+    "name": "Cybex Kabel",
+    "model": "Cybex",
+    "notes": "2,5 7,5 12,5 17,5 22,5 27,5 32,5",
+    "is_archived": false,
+    "created_at": "2026-09-08 17:22:47.232434+00:00",
+    "updated_at": null,
+    "loading_system": "unknown",
+    "load_basis": "unknown",
+    "available_weights_kg": []
+  },
+  {
+    "id": "7a3d7b4b-5517-4306-846a-bf89532330c3",
+    "user_id": "f2d04b40-b75c-4145-b5d3-d78a57fff5cc",
+    "name": "Life Fitness Kabel Lat Pulldown",
+    "model": "Life Fitness",
+    "notes": "5 12,5 20 27,5 35 42,5 50 60 70 80 90 100",
+    "is_archived": false,
+    "created_at": "2026-09-09 18:09:02.538291+00:00",
+    "updated_at": null,
+    "loading_system": "unknown",
+    "load_basis": "unknown",
+    "available_weights_kg": []
+  },
+  {
+    "id": "956548ae-7b45-42e8-8bcd-d0c6a5211e88",
+    "user_id": "f2d04b40-b75c-4145-b5d3-d78a57fff5cc",
+    "name": "Cybex Kabel innen",
+    "model": "Cybex",
+    "notes": "2,5  10 15 20 25 30 35 42,5 50",
+    "is_archived": false,
+    "created_at": "2026-09-10 17:29:26.311295+00:00",
+    "updated_at": null,
+    "loading_system": "unknown",
+    "load_basis": "unknown",
+    "available_weights_kg": []
+  }
+]

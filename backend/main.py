@@ -34,6 +34,7 @@ from migrate_add_forge_plan_images import STATEMENTS as _forge_plan_image_migrat
 from migrate_archive_forge_machine_profiles import STATEMENTS as _forge_machine_profile_archive_migrations
 from migrate_fix_forge_decimal_weights import STATEMENTS as _forge_decimal_weight_migrations
 from migrate_forge_central_machine_profiles import STATEMENTS as _forge_machine_profile_migrations
+from migrate_normalize_forge_machine_profiles import STARTUP_STATEMENTS as _forge_machine_profile_normalization_migrations
 from migrate_forge_rotation_repeatable_routines import STATEMENTS as _forge_rotation_migrations
 
 with engine.connect() as _conn:
@@ -59,6 +60,8 @@ with engine.begin() as _conn:
     for stmt in _forge_machine_profile_migrations:
         _conn.execute(_sql_text(stmt))
     for stmt in _forge_machine_profile_archive_migrations:
+        _conn.execute(_sql_text(stmt))
+    for stmt in _forge_machine_profile_normalization_migrations:
         _conn.execute(_sql_text(stmt))
     for stmt in _forge_rotation_migrations:
         _conn.execute(_sql_text(stmt))

@@ -1,7 +1,8 @@
 """
 Pydantic schemas for request/response validation.
 """
-from pydantic import BaseModel, Field
+from math import isfinite
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Any, Literal
 from uuid import UUID
 from datetime import date
@@ -158,21 +159,51 @@ class BriefingResponse(BaseModel):
 ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "cable", "machine", "other"]
 
 
+ForgeLoadingSystem = Literal["selectorized", "plate_loaded", "fixed", "other", "unknown"]
+ForgeLoadBasis = Literal["displayed_total", "per_side", "unknown"]
+
+
+def _normalize_available_weights(value: object) -> list[float]:
+    if not isinstance(value, list):
+        raise ValueError("available_weights_kg must be a list")
+    if len(value) > 100:
+        raise ValueError("available_weights_kg may contain at most 100 values")
+    normalized: set[float] = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError("Each available weight must be a number")
+        weight = float(item)
+        if not isfinite(weight) or weight <= 0 or weight > 1000:
+            raise ValueError("Each available weight must be finite, greater than 0 and at most 1000 kg")
+        normalized.add(round(weight, 3))
+    return sorted(normalized)
+
+
 class ForgeMachineProfileInput(BaseModel):
     """Legacy embedded profile payload accepted by exercise create/update."""
     id: Optional[UUID] = None
     name: str = Field(..., min_length=1, max_length=100)
     model: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
+    loading_system: ForgeLoadingSystem = "unknown"
+    load_basis: ForgeLoadBasis = "unknown"
+    available_weights_kg: list[float] = Field(default_factory=list, max_length=100)
+
+    _normalize_weights = field_validator("available_weights_kg", mode="before")(_normalize_available_weights)
 
 
 class ForgeMachineProfileResourceInput(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     model: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
+    loading_system: ForgeLoadingSystem = "unknown"
+    load_basis: ForgeLoadBasis = "unknown"
+    available_weights_kg: list[float] = Field(default_factory=list, max_length=100)
     # Profile metadata can be edited independently. Associations are normally
     # managed from the exercise editor and only replaced when explicitly sent.
     exercise_ids: Optional[list[UUID]] = Field(None, max_length=100)
+
+    _normalize_weights = field_validator("available_weights_kg", mode="before")(_normalize_available_weights)
 
 
 class ForgeMachineProfileResponse(ForgeMachineProfileInput):
@@ -370,30 +401,35 @@ class ForgeTodayResponse(BaseModel):
 
 
 class ForgeSessionSetInput(BaseModel):
+    """Client-owned create fields; initial targets are allowed, coach values are not."""
     set_type: Literal["warmup", "working"] = "working"
     target_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
     target_reps: Optional[int] = Field(None, ge=0, le=200)
     actual_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
     actual_reps: Optional[int] = Field(None, ge=0, le=200)
-    coach_suggested_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
-    coach_suggested_reps: Optional[int] = Field(None, ge=0, le=200)
     completed: bool = False
     note: Optional[str] = Field(None, max_length=300)
 
 
-class ForgeSessionSetUpdate(ForgeSessionSetInput):
-    """Live-set update with an optional, session-local position change."""
+class ForgeSessionSetUpdate(BaseModel):
+    """Client-owned live fields; coach suggestions remain server-owned."""
+    set_type: Optional[Literal["warmup", "working"]] = None
+    actual_weight_kg: Optional[float] = Field(None, ge=0, le=1000)
+    actual_reps: Optional[int] = Field(None, ge=0, le=200)
+    completed: Optional[bool] = None
+    note: Optional[str] = Field(None, max_length=300)
     position: Optional[int] = Field(None, ge=0, le=19)
 
 
 class ForgeSessionSetResponse(ForgeSessionSetInput):
     id: UUID
     position: int
+    coach_suggested_weight_kg: Optional[float] = None
+    coach_suggested_reps: Optional[int] = None
 
 
 class ForgeSessionCoachGuidanceResponse(BaseModel):
     progression_status: Literal["INCREASE_WEIGHT", "KEEP_PROGRESSING", "STAGNATED", "REGRESSED", "FIRST_SESSION"]
-    rep_range: str
     rationale: str
 
 
@@ -402,6 +438,7 @@ class ForgeSessionCoachExerciseDecisionResponse(BaseModel):
     recommendation: str = Field(..., max_length=360)
     first_set_focus: str = Field(..., max_length=220)
     effort_hint: str = Field(..., max_length=220)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ForgeSessionStartCoachingResponse(BaseModel):
@@ -409,12 +446,15 @@ class ForgeSessionStartCoachingResponse(BaseModel):
     headline: str = Field(..., max_length=160)
     session_focus: str = Field(..., max_length=420)
     exercise_decisions: list[ForgeSessionCoachExerciseDecisionResponse] = Field(default_factory=list, max_length=30)
+    coach_evidence: dict = Field(default_factory=dict)
 
 
 class ForgeSessionAdditionCoachingResponse(BaseModel):
     recommendation: str = Field(..., max_length=360)
     first_set_focus: str = Field(..., max_length=220)
     effort_hint: str = Field(..., max_length=220)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    coach_evidence: dict = Field(default_factory=dict)
 
 
 class ForgeSessionExerciseInput(BaseModel):
@@ -423,6 +463,17 @@ class ForgeSessionExerciseInput(BaseModel):
     machine_profile_id: Optional[UUID] = None
     notes: Optional[str] = Field(None, max_length=500)
     sets: list[ForgeSessionSetInput] = Field(default_factory=list, max_length=20)
+
+
+class ForgeMachineProfileSnapshotResponse(BaseModel):
+    id: UUID
+    name: str
+    model: Optional[str] = None
+    notes: Optional[str] = None
+    loading_system: ForgeLoadingSystem = "unknown"
+    load_basis: ForgeLoadBasis = "unknown"
+    available_weights_kg: list[float] = Field(default_factory=list)
+    snapshot_quality: Optional[Literal["best_available_current"]] = None
 
 
 class ForgeSessionExerciseResponse(BaseModel):
@@ -436,6 +487,7 @@ class ForgeSessionExerciseResponse(BaseModel):
     secondary_muscle_groups: list[str]
     machine_profile_id: Optional[UUID] = None
     machine_profile_name: Optional[str] = None
+    machine_profile_snapshot: Optional[ForgeMachineProfileSnapshotResponse] = None
     notes: Optional[str] = None
     coach_guidance: Optional[ForgeSessionCoachGuidanceResponse] = None
     addition_coaching: Optional[ForgeSessionAdditionCoachingResponse] = None

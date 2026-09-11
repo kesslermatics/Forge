@@ -486,3 +486,77 @@ async def resolve_yazio_goal_context(
         "profile": profile,
         "nutrition": nutrition,
     }
+
+
+async def fetch_yazio_coaching_trends(
+    email: str,
+    password: str,
+    *,
+    end_date: Optional[date] = None,
+    days: int = 14,
+    concurrency: int = 5,
+) -> Optional[dict]:
+    """Fetch lightweight rolling coaching context with one login.
+
+    Uses only daily-summary and the user profile; product resolution is omitted.
+    Partial provider failures reduce coverage instead of blocking Forge.
+    """
+    through_date = end_date or date.today()
+    window_days = max(1, min(days, 14))
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        token = await _yazio_login(client, email, password)
+        if not token:
+            return None
+        semaphore = asyncio.Semaphore(max(1, min(concurrency, 5)))
+
+        async def load_day(day: date) -> tuple[date, Optional[dict]]:
+            async with semaphore:
+                return day, await _fetch_daily_summary(client, token, day.isoformat())
+
+        dates = [through_date - timedelta(days=offset) for offset in range(window_days)]
+        profile_task = asyncio.create_task(_fetch_user_profile(client, token))
+        rows = await asyncio.gather(*(load_day(day) for day in dates))
+        raw_profile = await profile_task
+
+    parsed_days: list[dict] = []
+    newest_summary_user: dict = {}
+    for day, raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        newest_summary_user = newest_summary_user or (raw.get("user") if isinstance(raw.get("user"), dict) else {})
+        parsed = _parse_summary(raw)
+        totals = parsed.get("totals") or {}
+        goals = parsed.get("goals") or {}
+        calories = totals.get("calories")
+        protein = totals.get("protein")
+        logged = isinstance(calories, (int, float)) and calories > 0
+        parsed_days.append({
+            "date": day.isoformat(), "logged": logged,
+            "calories": float(calories) if logged else None,
+            "protein": float(protein) if logged and isinstance(protein, (int, float)) else None,
+            "calorie_goal": float(goals["calories"]) if isinstance(goals.get("calories"), (int, float)) and goals["calories"] > 0 else None,
+            "protein_goal": float(goals["protein"]) if isinstance(goals.get("protein"), (int, float)) and goals["protein"] > 0 else None,
+        })
+
+    def aggregate(length: int) -> dict:
+        cutoff = through_date - timedelta(days=length - 1)
+        available = [row for row in parsed_days if date.fromisoformat(row["date"]) >= cutoff]
+        logged = [row for row in available if row["logged"]]
+
+        def average(key: str) -> Optional[float]:
+            values = [row[key] for row in logged if isinstance(row.get(key), (int, float))]
+            return round(sum(values) / len(values), 1) if values else None
+
+        calorie_attainment = [row["calories"] / row["calorie_goal"] for row in logged if row.get("calories") is not None and row.get("calorie_goal")]
+        protein_attainment = [row["protein"] / row["protein_goal"] for row in logged if row.get("protein") is not None and row.get("protein_goal")]
+        return {
+            "window_days": length, "coverage_days": len(available), "logged_days": len(logged),
+            "coverage_ratio": round(len(available) / length, 3),
+            "average_calories": average("calories"), "average_protein_g": average("protein"),
+            "average_calorie_goal": average("calorie_goal"), "average_protein_goal_g": average("protein_goal"),
+            "average_calorie_goal_attainment": round(sum(calorie_attainment) / len(calorie_attainment), 3) if calorie_attainment else None,
+            "average_protein_goal_attainment": round(sum(protein_attainment) / len(protein_attainment), 3) if protein_attainment else None,
+        }
+
+    profile = _parse_profile(raw_profile or {}, newest_summary_user) if raw_profile or newest_summary_user else {}
+    return {"source": "yazio_daily_summary", "as_of": through_date.isoformat(), "profile": profile, "rolling": {"7d": aggregate(7), "14d": aggregate(14)}}

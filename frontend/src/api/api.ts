@@ -723,11 +723,17 @@ export const getNutritionAnalysis = () =>
 export type ForgeEquipment = 'none' | 'barbell' | 'dumbbell' | 'kettlebell' | 'cable' | 'machine' | 'other';
 export type ForgeSetType = 'warmup' | 'working';
 
+export type ForgeLoadingSystem = 'selectorized' | 'plate_loaded' | 'fixed' | 'other' | 'unknown';
+export type ForgeLoadBasis = 'displayed_total' | 'per_side' | 'unknown';
+
 export interface ForgeMachineProfile {
   id: string;
   name: string;
   model: string | null;
   notes: string | null;
+  loading_system: ForgeLoadingSystem;
+  load_basis: ForgeLoadBasis;
+  available_weights_kg: number[];
   exercise_ids: string[];
 }
 
@@ -736,6 +742,9 @@ export interface ForgeMachineProfileInput {
   name: string;
   model?: string | null;
   notes?: string | null;
+  loading_system?: ForgeLoadingSystem;
+  load_basis?: ForgeLoadBasis;
+  available_weights_kg?: number[];
   exercise_ids?: string[];
 }
 
@@ -956,17 +965,69 @@ export interface ForgeSessionSetInput {
   target_reps?: number | null;
   actual_weight_kg?: number | null;
   actual_reps?: number | null;
-  coach_suggested_weight_kg?: number | null;
-  coach_suggested_reps?: number | null;
   completed: boolean;
   note?: string | null;
 }
 
-export type ForgeSessionSetUpdateInput = ForgeSessionSetInput & { position?: number };
+export interface ForgeSessionSetUpdateInput {
+  set_type?: ForgeSetType;
+  actual_weight_kg?: number | null;
+  actual_reps?: number | null;
+  completed?: boolean;
+  note?: string | null;
+  position?: number;
+}
+
+export interface ForgeMuscleEvidence {
+  direct_sets: Record<'7d' | '14d' | '28d', number>;
+  indirect_sets: Record<'7d' | '14d' | '28d', number>;
+  sessions: Record<string, number>;
+  days_since_direct: number | null;
+  days_since_indirect: number | null;
+}
+
+export interface ForgeExposureSetEvidence {
+  set_index: number;
+  actual_weight_kg: number | null;
+  actual_reps: number;
+  coach_suggested_weight_kg: number | null;
+  coach_suggested_reps: number | null;
+  forecast_weight_delta_kg: number | null;
+  forecast_reps_delta: number | null;
+  set_drop_percent: number | null;
+}
+
+export interface ForgeExerciseEvidence {
+  session_exercise_id: string;
+  progression_key: string | null;
+  position: number;
+  history_count: number;
+  days_since_same_exposure: number | null;
+  recent_exposures: Array<{ completed_at: string; days_ago: number; exercise_position: number; sets: ForgeExposureSetEvidence[] }>;
+  current_prefatigue: { direct_working_sets: number; indirect_working_sets: number };
+  primary_muscle: string;
+  secondary_muscles: string[];
+  allowed_evidence_refs: string[];
+}
+
+export interface ForgeCoachEvidence {
+  version: 'v1';
+  generated_at: string;
+  training_goal: 'hypertrophy';
+  working_set_semantics: 'momentary_muscular_failure';
+  warmup_semantics: 'not_failure_not_stimulus';
+  muscles: Record<string, ForgeMuscleEvidence>;
+  exercises: ForgeExerciseEvidence[];
+  nutrition: {
+    training_goal: 'hypertrophy';
+    nutrition_role: 'background_confidence_only';
+    yazio?: { source?: string; rolling?: Record<string, Record<string, number | null>> };
+    bodyweight?: Record<string, unknown>;
+  };
+}
 
 export interface ForgeSessionCoachGuidance {
   progression_status: 'INCREASE_WEIGHT' | 'KEEP_PROGRESSING' | 'STAGNATED' | 'REGRESSED' | 'FIRST_SESSION';
-  rep_range: string;
   rationale: string;
 }
 
@@ -975,6 +1036,7 @@ export interface ForgeSessionCoachDecision {
   recommendation: string;
   first_set_focus: string;
   effort_hint: string;
+  evidence_refs: string[];
 }
 
 export interface ForgeSessionStartCoaching {
@@ -982,12 +1044,15 @@ export interface ForgeSessionStartCoaching {
   headline: string;
   session_focus: string;
   exercise_decisions: ForgeSessionCoachDecision[];
+  coach_evidence: ForgeCoachEvidence;
 }
 
 export interface ForgeSessionAdditionCoaching {
   recommendation: string;
   first_set_focus: string;
   effort_hint: string;
+  evidence_refs: string[];
+  coach_evidence: ForgeCoachEvidence;
 }
 
 export interface ForgeSessionExercise {
@@ -1001,6 +1066,7 @@ export interface ForgeSessionExercise {
   primary_muscle_group: string;
   secondary_muscle_groups: string[];
   machine_profile_name: string | null;
+  machine_profile_snapshot: (Omit<ForgeMachineProfile, 'exercise_ids'> & { snapshot_quality?: 'best_available_current' }) | null;
   notes: string | null;
   coach_guidance: ForgeSessionCoachGuidance | null;
   addition_coaching: ForgeSessionAdditionCoaching | null;

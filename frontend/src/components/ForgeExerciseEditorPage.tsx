@@ -49,7 +49,7 @@ export default function ForgeExerciseEditorPage() {
           exercise_id: saved.id,
           machine_profile_id: null,
           notes: '',
-          sets: [{ set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null, coach_suggested_weight_kg: null, coach_suggested_reps: null, completed: false, note: '' }],
+          sets: [{ set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null, completed: false, note: '' }],
         });
         const added = updatedSession.exercises.at(-1);
         if (added) await generateForgeSessionExerciseAdditionCoaching(updatedSession.id, added.id).catch(() => updatedSession);

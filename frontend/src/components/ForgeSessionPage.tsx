@@ -7,7 +7,7 @@ import {
   dismissForgeSessionAction, generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
   getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
-import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
+import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput, ForgeSessionSetUpdateInput } from '../api/api';
 import ForgeSessionLoader from './ForgeSessionLoader';
 import ForgeExercisePicker from './ForgeExercisePicker';
 import ForgeSheet from './ForgeSheet';
@@ -18,14 +18,21 @@ const TEXT = '#f2ece0';
 const DIM = 'rgba(242,236,226,0.48)';
 const BORDER = 'rgba(232,197,138,0.11)';
 
-const toInput = (set: ForgeSessionSet, overrides: Partial<ForgeSessionSetInput> = {}): ForgeSessionSetInput => ({
+const toCreateInput = (set: ForgeSessionSet, overrides: Partial<ForgeSessionSetInput> = {}): ForgeSessionSetInput => ({
   set_type: set.set_type,
   target_weight_kg: set.target_weight_kg,
   target_reps: set.target_reps,
   actual_weight_kg: set.actual_weight_kg,
   actual_reps: set.actual_reps,
-  coach_suggested_weight_kg: set.coach_suggested_weight_kg,
-  coach_suggested_reps: set.coach_suggested_reps,
+  completed: set.completed,
+  note: set.note,
+  ...overrides,
+});
+
+const toUpdateInput = (set: ForgeSessionSet, overrides: ForgeSessionSetUpdateInput = {}): ForgeSessionSetUpdateInput => ({
+  set_type: set.set_type,
+  actual_weight_kg: set.actual_weight_kg,
+  actual_reps: set.actual_reps,
   completed: set.completed,
   note: set.note,
   ...overrides,
@@ -75,6 +82,7 @@ export default function ForgeSessionPage() {
   const [checkedSetId, setCheckedSetId] = useState<string | null>(null);
   const [openSetMenuId, setOpenSetMenuId] = useState<string | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [whyOpen, setWhyOpen] = useState(false);
   const [analyzingProfileId, setAnalyzingProfileId] = useState<string | null>(null);
   const [celebratingCompletion, setCelebratingCompletion] = useState(false);
   const [sessionActionConfirm, setSessionActionConfirm] = useState<'complete' | 'discard' | null>(null);
@@ -97,9 +105,17 @@ export default function ForgeSessionPage() {
   const activeCoachDecision = useMemo(() => {
     if (!activeExercise) return null;
     if (activeExercise.addition_coaching) return activeExercise.addition_coaching;
-    if (session?.start_coaching?.coaching_source !== 'ai') return null;
+    if (!session?.start_coaching) return null;
     return session.start_coaching.exercise_decisions.find((decision) => decision.session_exercise_id === activeExercise.id) ?? null;
   }, [session, activeExercise]);
+  const activeEvidence = useMemo(() => {
+    if (!activeExercise || !activeCoachDecision) return null;
+    const catalog = activeExercise.addition_coaching?.coach_evidence ?? session?.start_coaching?.coach_evidence;
+    if (!catalog || catalog.version !== 'v1') return null;
+    const exercise = catalog.exercises.find((item) => item.session_exercise_id === activeExercise.id);
+    if (!exercise) return null;
+    return { catalog, exercise, muscle: catalog.muscles[exercise.primary_muscle] ?? null };
+  }, [session, activeExercise, activeCoachDecision]);
   const setSessionSafe = (next: ForgeSession) => {
     sessionRef.current = next;
     setSession(next);
@@ -120,7 +136,7 @@ export default function ForgeSessionPage() {
     }
     const request = (async () => {
       try {
-        const savedSession = await enqueueSessionMutation(() => updateForgeSessionSet(currentSession.id, setId, toInput(liveSet, changes)));
+        const savedSession = await enqueueSessionMutation(() => updateForgeSessionSet(currentSession.id, setId, toUpdateInput(liveSet, changes)));
         setSessionSafe(savedSession);
       } catch (caught: unknown) {
         setError(caught instanceof Error ? caught.message : 'Satz konnte nicht gespeichert werden.');
@@ -190,14 +206,11 @@ export default function ForgeSessionPage() {
           setLibrary(loadedLibrary);
           setMachineProfiles(loadedMachineProfiles);
         }
-        const storedFocus = loadedSession.start_coaching?.session_focus || '';
-        const hasLegacyDetailedFocus = storedFocus.length > 180 || /(?:\bkg\b|\bwdh\.?\b|×|target_weight_kg|session_set_id)/i.test(storedFocus);
-        const hasMissingWarmupTarget = loadedSession.exercises.some((exercise) => exercise.sets.some((set) => set.set_type === 'warmup' && (set.target_weight_kg == null || set.target_reps == null)));
-        const needsRealAi = !loadedSession.start_coaching || loadedSession.start_coaching.coaching_source !== 'ai' || hasLegacyDetailedFocus || hasMissingWarmupTarget;
-        if (loadedSession.status === 'active' && needsRealAi) {
+        const needsCoaching = !loadedSession.start_coaching;
+        if (loadedSession.status === 'active' && needsCoaching) {
           setPreparingSession(true);
           try {
-            const preparedSession = await generateForgeSessionStartCoaching(sessionId, Boolean(loadedSession.start_coaching));
+            const preparedSession = await generateForgeSessionStartCoaching(sessionId, false);
             if (!cancelled) setSessionSafe(preparedSession);
           } catch (caught: unknown) {
             if (!cancelled) setError(caught instanceof Error ? caught.message : 'Die Forge KI-Prognose konnte nicht erstellt werden.');
@@ -256,7 +269,7 @@ export default function ForgeSessionPage() {
       setCheckedSetId(liveSet.id);
       window.setTimeout(() => setCheckedSetId((current) => current === liveSet.id ? null : current), 650);
     }
-    await mutate(() => updateForgeSessionSet(session.id, liveSet.id, toInput(liveSet, {
+    await mutate(() => updateForgeSessionSet(session.id, liveSet.id, toUpdateInput(liveSet, {
       completed: nextCompleted,
     })));
   };
@@ -266,15 +279,15 @@ export default function ForgeSessionPage() {
     await flushSetAutosave(set.id);
     const liveSet = sessionRef.current?.exercises.flatMap((exercise) => exercise.sets).find((item) => item.id === set.id) ?? set;
     setOpenSetMenuId(null);
-    await mutate(() => updateForgeSessionSet(session.id, liveSet.id, { ...toInput(liveSet, { set_type: setType }), position }));
+    await mutate(() => updateForgeSessionSet(session.id, liveSet.id, { ...toUpdateInput(liveSet, { set_type: setType }), position }));
   };
 
   const addSet = () => {
     if (!session || !activeExercise) return;
     const last = activeExercise.sets[activeExercise.sets.length - 1];
-    const draft: ForgeSessionSetInput = last ? toInput(last, { completed: false, actual_weight_kg: null, actual_reps: null }) : {
+    const draft: ForgeSessionSetInput = last ? toCreateInput(last, { completed: false, actual_weight_kg: null, actual_reps: null }) : {
       set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null,
-      coach_suggested_weight_kg: null, coach_suggested_reps: null, completed: false, note: '',
+      completed: false, note: '',
     };
     void mutate(() => addForgeSessionSet(session.id, activeExercise.id, draft));
   };
@@ -288,7 +301,7 @@ export default function ForgeSessionPage() {
         exercise_id: exercise.id,
         machine_profile_id: null,
         notes: '',
-        sets: [{ set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null, coach_suggested_weight_kg: null, coach_suggested_reps: null, completed: false, note: '' }],
+        sets: [{ set_type: 'working', target_weight_kg: null, target_reps: 10, actual_weight_kg: null, actual_reps: null, completed: false, note: '' }],
       }));
       const addedExercise = addedSession.exercises.at(-1);
       let coachedSession = addedSession;
@@ -377,7 +390,7 @@ export default function ForgeSessionPage() {
   const canSelectMachineProfile = Boolean(activeExercise?.source_exercise_id && (activeEquipment === 'machine' || activeEquipment === 'cable'));
   const allMachineProfiles = [...machineProfiles, ...(activeLibraryExercise?.available_machine_profiles ?? []), ...(activeLibraryExercise?.machine_profiles ?? [])];
   const selectableMachineProfiles = allMachineProfiles.filter((profile, index) => allMachineProfiles.findIndex((candidate) => candidate.id === profile.id) === index);
-  const selectedMachineProfile = selectableMachineProfiles.find((profile) => profile.id === activeExercise?.machine_profile_id) ?? null;
+  const selectedMachineProfile = selectableMachineProfiles.find((profile) => profile.id === activeExercise?.machine_profile_id) ?? activeExercise?.machine_profile_snapshot ?? null;
   const analyzingMachineProfile = selectableMachineProfiles.find((profile) => profile.id === analyzingProfileId) ?? null;
   const duration = formatDuration(session.started_at, session.completed_at);
 
@@ -404,6 +417,18 @@ export default function ForgeSessionPage() {
             <div className="min-w-0 flex-1">
               <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Coach-Ansage</p>
               <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
+              <p className="mt-2 text-[11px] leading-relaxed" style={{ color: TEXT }}><span style={{ color: SAND }}>Erster Satz:</span> {activeCoachDecision.first_set_focus}</p>
+              <p className="mt-2 text-[11px] font-semibold" style={{ color: SAND }}>Alle Arbeitssätze bis zum Muskelversagen. Warm-ups nicht.</p>
+              {activeEvidence && <div className="mt-3 border-t pt-3" style={{ borderColor: 'rgba(232,197,138,0.16)' }}>
+                <button type="button" onClick={() => setWhyOpen((open) => !open)} aria-expanded={whyOpen} className="tap flex w-full items-center justify-between text-left text-[11px] font-medium cursor-pointer" style={{ color: SAND }}><span>Warum diese Prognose?</span><ChevronDown size={13} className={whyOpen ? 'rotate-180' : ''} /></button>
+                {whyOpen && <div className="mt-2 space-y-1.5 text-[10px] leading-relaxed" style={{ color: DIM }}>
+                  {activeEvidence.exercise.recent_exposures[0]?.sets[0] && <p>Letzter vergleichbarer Satz: {displayLoad(activeEvidence.exercise.recent_exposures[0].sets[0].actual_weight_kg, activeEvidence.exercise.recent_exposures[0].sets[0].actual_reps, activeExercise.equipment)} tatsächlich{activeEvidence.exercise.recent_exposures[0].sets[0].coach_suggested_reps != null ? ` vs. KI-Prognose ${displayLoad(activeEvidence.exercise.recent_exposures[0].sets[0].coach_suggested_weight_kg, activeEvidence.exercise.recent_exposures[0].sets[0].coach_suggested_reps, activeExercise.equipment)}` : ''}.</p>}
+                  {activeEvidence.exercise.days_since_same_exposure != null && <p>Exakt gleiche Übung und Profil zuletzt vor {activeEvidence.exercise.days_since_same_exposure} Tagen.</p>}
+                  {activeEvidence.muscle && <p>{activeEvidence.exercise.primary_muscle}: {activeEvidence.muscle.direct_sets['7d']} direkte und {activeEvidence.muscle.indirect_sets['7d']} indirekte Arbeitssätze in 7 Tagen · heute die {activeEvidence.muscle.sessions.current_session_ordinal_7d}. Exposition.</p>}
+                  <p>Übungsposition {activeEvidence.exercise.position}; Vorermüdung: {activeEvidence.exercise.current_prefatigue.direct_working_sets} direkte und {activeEvidence.exercise.current_prefatigue.indirect_working_sets} indirekte Arbeitssätze davor.</p>
+                  {(() => { const trend = activeEvidence.catalog.nutrition.yazio?.rolling?.['14d']; return trend && Number(trend.logged_days ?? 0) >= 4 ? <p>Yazio 14 Tage: {trend.logged_days} protokollierte Tage{trend.average_calories != null ? ` · Ø ${trend.average_calories} kcal` : ''}{trend.average_protein_g != null ? ` · Ø ${trend.average_protein_g} g Protein` : ''}. Nur Hintergrundsignal.</p> : null; })()}
+                </div>}
+              </div>}
             </div>
           </div>
         </aside>}

@@ -290,6 +290,9 @@ class ForgeMachineProfile(Base):
     name = Column(String(100), nullable=False)
     model = Column(String(100), nullable=True)
     notes = Column(String(500), nullable=True)
+    loading_system = Column(String(16), nullable=False, default="unknown", server_default="unknown")
+    load_basis = Column(String(16), nullable=False, default="unknown", server_default="unknown")
+    available_weights_kg = Column(JSON, nullable=False, default=list, server_default="[]")
     # Historical sessions retain this profile's ID; archived profiles are hidden from new selections.
     is_archived = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -479,6 +482,7 @@ class ForgeSessionExercise(Base):
     primary_muscle_group = Column(String(64), nullable=False)
     secondary_muscle_groups = Column(JSON, nullable=False, default=list)
     machine_profile_name = Column(String(100), nullable=True)
+    machine_profile_snapshot = Column(JSON, nullable=True)
     notes = Column(String(500), nullable=True)
     coach_guidance = Column(JSON, nullable=True)
     # Coaching generated after this exercise was deliberately added live.

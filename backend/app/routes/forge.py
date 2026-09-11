@@ -76,24 +76,26 @@ from app.services.ai_service import (
     generate_forge_session_chat,
     generate_forge_session_start_coaching,
 )
-from app.services.yazio_service import resolve_yazio_goal_context
+from app.services.yazio_service import fetch_yazio_coaching_trends
 from app.services.google_health_service import export_completed_session
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
 
 
-async def _yazio_goal_context(user: User) -> dict:
-    """Resolve coaching goals only from Yazio; never fall back to Forge profile data."""
+async def _yazio_coaching_context(user: User) -> dict:
+    """Resolve optional rolling nutrition context without blocking coaching."""
+    unavailable = {"source": "unavailable", "profile": {}, "rolling": {"7d": {}, "14d": {}}}
     if not user.yazio_email or not user.yazio_password:
-        return {"available": False, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
+        return unavailable
     try:
-        return await resolve_yazio_goal_context(
+        result = await fetch_yazio_coaching_trends(
             decrypt_value(user.yazio_email),
             decrypt_value(user.yazio_password),
-            target_date=date.today(),
+            end_date=date.today(),
         )
+        return result if isinstance(result, dict) else unavailable
     except Exception:
-        return {"available": False, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
+        return unavailable
 
 
 def _not_found(detail: str = "Not found") -> HTTPException:
@@ -153,6 +155,27 @@ def _validate_note(note: str | None) -> str | None:
     return note.strip() if note and note.strip() else None
 
 
+def _machine_profile_snapshot(
+    profile: ForgeMachineProfile | None,
+    *,
+    best_available_current: bool = False,
+) -> dict | None:
+    if profile is None:
+        return None
+    snapshot = {
+        "id": str(profile.id),
+        "name": profile.name,
+        "model": profile.model,
+        "notes": profile.notes,
+        "loading_system": profile.loading_system or "unknown",
+        "load_basis": profile.load_basis or "unknown",
+        "available_weights_kg": list(profile.available_weights_kg or []),
+    }
+    if best_available_current:
+        snapshot["snapshot_quality"] = "best_available_current"
+    return snapshot
+
+
 def _serialize_profile(profile: ForgeMachineProfile | None) -> dict | None:
     if profile is None:
         return None
@@ -161,6 +184,9 @@ def _serialize_profile(profile: ForgeMachineProfile | None) -> dict | None:
         "name": profile.name,
         "model": profile.model,
         "notes": profile.notes,
+        "loading_system": profile.loading_system or "unknown",
+        "load_basis": profile.load_basis or "unknown",
+        "available_weights_kg": list(profile.available_weights_kg or []),
         "exercise_ids": [exercise.id for exercise in profile.exercises],
     }
 
@@ -323,6 +349,7 @@ def _apply_last_used_profiles_to_session(
         and exercise.source_machine_profile_id is None
         and exercise.equipment in {"machine", "cable"}
     ]
+    had_coaching = session.start_coaching is not None
     last_used = _last_used_machine_profiles(db, user_id, candidates)
     changed = False
     for exercise in session.exercises:
@@ -331,17 +358,17 @@ def _apply_last_used_profiles_to_session(
             continue
         exercise.source_machine_profile_id = profile.id
         exercise.machine_profile_name = profile.name
-        for set_data in exercise.sets:
-            set_data.target_weight_kg = None
-            set_data.target_reps = None
-            set_data.coach_suggested_weight_kg = None
-            set_data.coach_suggested_reps = None
-        exercise.coach_guidance = None
-        exercise.addition_coaching = None
+        exercise.machine_profile_snapshot = _machine_profile_snapshot(profile, best_available_current=True)
+        if not had_coaching:
+            for set_data in exercise.sets:
+                set_data.target_weight_kg = None
+                set_data.target_reps = None
+                set_data.coach_suggested_weight_kg = None
+                set_data.coach_suggested_reps = None
+            exercise.coach_guidance = None
+            exercise.addition_coaching = None
         changed = True
-    if changed:
-        # The previous briefing was generated without the profile identity and
-        # must not survive the profile backfill.
+    if changed and not had_coaching:
         session.start_coaching = None
     return changed
 
@@ -496,6 +523,9 @@ def _apply_exercise_input(db: Session, exercise: ForgeExercise, data: ForgeExerc
             profile.name = profile_input.name.strip()
             profile.model = profile_input.model.strip() if profile_input.model and profile_input.model.strip() else None
             profile.notes = profile_input.notes.strip() if profile_input.notes and profile_input.notes.strip() else None
+            profile.loading_system = profile_input.loading_system
+            profile.load_basis = profile_input.load_basis
+            profile.available_weights_kg = profile_input.available_weights_kg
             linked_profiles.append(profile)
         exercise.machine_profiles = linked_profiles
     elif data.equipment not in {"machine", "cable"}:
@@ -598,6 +628,9 @@ def _apply_profile_resource_input(
     profile.name = name
     profile.model = data.model.strip() if data.model and data.model.strip() else None
     profile.notes = data.notes.strip() if data.notes and data.notes.strip() else None
+    profile.loading_system = data.loading_system
+    profile.load_basis = data.load_basis
+    profile.available_weights_kg = data.available_weights_kg
 
 
 @router.get("/machine-profiles", response_model=list[ForgeMachineProfileResponse])
@@ -1063,6 +1096,7 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
                 "secondary_muscle_groups": exercise.secondary_muscle_groups or [],
                 "machine_profile_id": exercise.source_machine_profile_id,
                 "machine_profile_name": exercise.machine_profile_name,
+                "machine_profile_snapshot": exercise.machine_profile_snapshot,
                 "notes": exercise.notes,
                 "coach_guidance": exercise.coach_guidance,
                 "addition_coaching": exercise.addition_coaching,
@@ -1100,32 +1134,40 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
     }
 
 
-async def _forge_coaching_profile(user: User) -> dict:
-    """Build Forge coaching context exclusively from the live Yazio profile."""
-    yazio_context = await _yazio_goal_context(user)
-    yazio_profile = yazio_context["profile"]
-    nutrition = yazio_context["nutrition"] or {}
-    totals = nutrition.get("totals") or {}
-    goals = nutrition.get("goals") or {}
-    profile = {
-        "goal": yazio_context["goal"],
-        "goal_source": yazio_context["source"],
-        "current_weight_kg": None,
-        "start_weight_kg": None,
-        "weight_change_per_week_kg": None,
-        "nutrition": None,
-    }
-    for key in ("current_weight_kg", "start_weight_kg", "weight_change_per_week_kg"):
-        value = yazio_profile.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
-            profile[key] = float(value)
-    if nutrition:
-        profile["nutrition"] = {
-            "date": nutrition.get("date"),
-            "totals": {key: totals.get(key) for key in ("calories", "protein", "carbs", "fat")},
-            "goals": {key: goals.get(key) for key in ("calories", "protein", "carbs", "fat")},
+def _local_weight_trends(db: Session, user_id: UUID) -> dict:
+    """Compute sparse local 14/28-day bodyweight context without interpolation."""
+    today = date.today()
+    entries = db.query(WeightEntry).filter(
+        WeightEntry.user_id == user_id,
+        WeightEntry.date >= today - timedelta(days=27),
+    ).order_by(WeightEntry.date).all()
+
+    def window(days: int) -> dict:
+        cutoff = today - timedelta(days=days - 1)
+        values = [float(entry.weight_kg) for entry in entries if entry.date >= cutoff and isfinite(entry.weight_kg) and entry.weight_kg > 0]
+        matching = [entry for entry in entries if entry.date >= cutoff and isfinite(entry.weight_kg) and entry.weight_kg > 0]
+        return {
+            "window_days": days,
+            "sample_count": len(values),
+            "average_weight_kg": round(sum(values) / len(values), 2) if values else None,
+            "first_weight_kg": round(float(values[0]), 2) if values else None,
+            "latest_weight_kg": round(float(values[-1]), 2) if values else None,
+            "change_kg": round(values[-1] - values[0], 2) if len(values) >= 2 else None,
+            "first_date": matching[0].date.isoformat() if matching else None,
+            "latest_date": matching[-1].date.isoformat() if matching else None,
         }
-    return profile
+    return {"source": "local_weight_entries", "14d": window(14), "28d": window(28)}
+
+
+async def _forge_coaching_profile(db: Session, user: User) -> dict:
+    """Build optional nutrition/background confidence data for hypertrophy coaching."""
+    yazio = await _yazio_coaching_context(user)
+    return {
+        "training_goal": "hypertrophy",
+        "nutrition_role": "background_confidence_only",
+        "yazio": {"source": yazio.get("source", "unavailable"), "rolling": yazio.get("rolling") or {}},
+        "bodyweight": _local_weight_trends(db, user.id),
+    }
 
 
 def _session_coaching_context(
@@ -1135,91 +1177,200 @@ def _session_coaching_context(
     coaching_profile: dict,
     only_exercise_id: UUID | None = None,
 ) -> dict:
-    """Project only relevant, server-owned history and set constraints for the AI coach."""
-    selected = [exercise for exercise in session.exercises if only_exercise_id is None or exercise.id == only_exercise_id]
-    selected_keys = {
-        _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
-        for exercise in selected
-    }
-    selected_keys.discard(None)
-    selected_profile_ids = {
-        exercise.source_machine_profile_id
-        for exercise in selected
-        if exercise.source_machine_profile_id is not None
-    }
+    """Build versioned, deterministic evidence and the AI's constrained view."""
+    selected = [item for item in session.exercises if only_exercise_id is None or item.id == only_exercise_id]
+    selected_profile_ids = {item.source_machine_profile_id for item in selected if item.source_machine_profile_id and not item.machine_profile_snapshot}
     selected_profiles = db.query(ForgeMachineProfile).filter(
         ForgeMachineProfile.user_id == user.id,
-        ForgeMachineProfile.is_archived.is_(False),
         ForgeMachineProfile.id.in_(selected_profile_ids),
     ).all() if selected_profile_ids else []
-    profiles_by_id = {profile.id: profile for profile in selected_profiles}
-    profile_notes_by_exercise: dict[UUID, str] = {}
+    profiles_by_id = {item.id: item for item in selected_profiles}
+    profile_by_exercise: dict[UUID, dict] = {}
     for exercise in selected:
-        profile = profiles_by_id.get(exercise.source_machine_profile_id)
-        profile_notes_by_exercise[exercise.id] = profile.notes if profile else ""
-    history = []
-    for completed in _native_completed_sessions(db, user.id, session.name)[:6]:
-        matching = [
-            {
-                "exercise": exercise.get("title"),
-                "progression_key": exercise.get("progression_key"),
-                "working_sets": [
-                    set_data for set_data in exercise.get("sets", [])
-                    if set_data.get("type") == "working"
-                ],
-            }
-            for exercise in completed.get("exercises", [])
-            if exercise.get("progression_key") in selected_keys
-        ]
-        if matching:
-            history.append({"completed_at": completed.get("start_time"), "exercises": matching})
+        snapshot = exercise.machine_profile_snapshot if isinstance(exercise.machine_profile_snapshot, dict) else None
+        profile_by_exercise[exercise.id] = snapshot or _machine_profile_snapshot(
+            profiles_by_id.get(exercise.source_machine_profile_id), best_available_current=True,
+        ) or {}
 
-    def _rep_bounds(exercise: ForgeSessionExercise) -> tuple[int, int]:
-        rep_range = str((exercise.coach_guidance or {}).get("rep_range") or "8-12").replace("–", "-")
-        lower, separator, upper = rep_range.partition("-")
-        if separator and lower.strip().isdigit() and upper.strip().isdigit():
-            minimum, maximum = int(lower), int(upper)
-            if 1 <= minimum <= maximum <= 200:
-                return minimum, maximum
-        return 8, 12
+    completed_sessions = db.query(ForgeWorkoutSession).filter(
+        ForgeWorkoutSession.user_id == user.id,
+        ForgeWorkoutSession.status == "completed",
+    ).order_by(ForgeWorkoutSession.completed_at.desc().nullslast(), ForgeWorkoutSession.started_at.desc()).all()
+    today = date.today()
 
-    def _target_context(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
-        minimum, maximum = _rep_bounds(exercise)
-        if set_data.set_type == "warmup":
-            minimum, maximum = 6, 15
+    def session_day(value: ForgeWorkoutSession) -> date:
+        return (value.completed_at or value.started_at).date()
+
+    muscle_names = {item.primary_muscle_group for item in selected}
+    for item in selected:
+        muscle_names.update(item.secondary_muscle_groups or [])
+    muscle_evidence: dict[str, dict] = {}
+    for muscle in sorted(name for name in muscle_names if name):
+        direct_rows: list[tuple[date, UUID, int]] = []
+        indirect_rows: list[tuple[date, UUID, int]] = []
+        for completed in completed_sessions:
+            day = session_day(completed)
+            for historical_exercise in completed.exercises:
+                valid_sets = [set_data for set_data in historical_exercise.sets if set_data.set_type == "working" and set_data.completed and isinstance(set_data.actual_reps, int) and set_data.actual_reps >= 1 and (historical_exercise.equipment == "none" or isinstance(set_data.actual_weight_kg, (int, float)) and set_data.actual_weight_kg > 0)]
+                if not valid_sets:
+                    continue
+                if historical_exercise.primary_muscle_group == muscle:
+                    direct_rows.append((day, completed.id, len(valid_sets)))
+                elif muscle in (historical_exercise.secondary_muscle_groups or []):
+                    indirect_rows.append((day, completed.id, len(valid_sets)))
+
+        def volume(rows: list[tuple[date, UUID, int]], days: int) -> tuple[int, int]:
+            cutoff = today - timedelta(days=days - 1)
+            active = [row for row in rows if row[0] >= cutoff]
+            return sum(row[2] for row in active), len({row[1] for row in active})
+
+        direct_7, sessions_7 = volume(direct_rows, 7)
+        indirect_7, indirect_sessions_7 = volume(indirect_rows, 7)
+        direct_14, sessions_14 = volume(direct_rows, 14)
+        indirect_14, indirect_sessions_14 = volume(indirect_rows, 14)
+        direct_28, sessions_28 = volume(direct_rows, 28)
+        indirect_28, indirect_sessions_28 = volume(indirect_rows, 28)
+        muscle_evidence[muscle] = {
+            "direct_sets": {"7d": direct_7, "14d": direct_14, "28d": direct_28},
+            "indirect_sets": {"7d": indirect_7, "14d": indirect_14, "28d": indirect_28},
+            "sessions": {
+                "7d": len({row[1] for row in direct_rows + indirect_rows if row[0] >= today - timedelta(days=6)}),
+                "14d": len({row[1] for row in direct_rows + indirect_rows if row[0] >= today - timedelta(days=13)}),
+                "28d": len({row[1] for row in direct_rows + indirect_rows if row[0] >= today - timedelta(days=27)}),
+                "direct_7d": sessions_7, "indirect_7d": indirect_sessions_7,
+                "direct_14d": sessions_14, "indirect_14d": indirect_sessions_14,
+                "direct_28d": sessions_28, "indirect_28d": indirect_sessions_28,
+                "current_session_ordinal_7d": len({row[1] for row in direct_rows + indirect_rows if row[0] >= today - timedelta(days=6)}) + 1,
+            },
+            "days_since_direct": (today - max(row[0] for row in direct_rows)).days if direct_rows else None,
+            "days_since_indirect": (today - max(row[0] for row in indirect_rows)).days if indirect_rows else None,
+        }
+
+    exercise_evidence: list[dict] = []
+    for exercise in selected:
+        progression_key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
+        exposures: list[dict] = []
+        matching_history_count = 0
+        for completed in completed_sessions:
+            matching = next((item for item in completed.exercises if _native_progression_key(item.source_exercise_id, item.source_machine_profile_id) == progression_key), None)
+            if matching is None:
+                continue
+            sets = []
+            previous_comparable: dict | None = None
+            for set_data in matching.sets:
+                if set_data.set_type != "working" or not set_data.completed or not isinstance(set_data.actual_reps, int) or set_data.actual_reps < 1:
+                    continue
+                if matching.equipment != "none" and (not isinstance(set_data.actual_weight_kg, (int, float)) or set_data.actual_weight_kg <= 0):
+                    continue
+                actual_weight = float(set_data.actual_weight_kg) if isinstance(set_data.actual_weight_kg, (int, float)) else None
+                suggested_weight = float(set_data.coach_suggested_weight_kg) if isinstance(set_data.coach_suggested_weight_kg, (int, float)) else None
+                row = {
+                    "set_index": set_data.position + 1,
+                    "actual_weight_kg": actual_weight,
+                    "actual_reps": set_data.actual_reps,
+                    "coach_suggested_weight_kg": suggested_weight,
+                    "coach_suggested_reps": set_data.coach_suggested_reps,
+                    "forecast_weight_delta_kg": round(actual_weight - suggested_weight, 3) if actual_weight is not None and suggested_weight is not None else None,
+                    "forecast_reps_delta": set_data.actual_reps - set_data.coach_suggested_reps if isinstance(set_data.coach_suggested_reps, int) else None,
+                    "set_drop_percent": None,
+                }
+                if previous_comparable and previous_comparable["actual_weight_kg"] == actual_weight and previous_comparable["actual_reps"] > 0:
+                    row["set_drop_percent"] = round((previous_comparable["actual_reps"] - set_data.actual_reps) / previous_comparable["actual_reps"] * 100, 1)
+                previous_comparable = row
+                sets.append(row)
+            if sets:
+                matching_history_count += 1
+                if len(exposures) < 6:
+                    exposures.append({
+                        "completed_at": (completed.completed_at or completed.started_at).isoformat(),
+                        "days_ago": (today - session_day(completed)).days,
+                        "exercise_position": matching.position + 1,
+                        "sets": sets,
+                    })
+
+        prior_exercises = [item for item in session.exercises if item.position < exercise.position]
+        prefatigue_direct = 0
+        prefatigue_indirect = 0
+        for prior in prior_exercises:
+            count = sum(
+                1 for set_data in prior.sets
+                if set_data.set_type == "working"
+                and set_data.completed
+                and isinstance(set_data.actual_reps, int)
+                and set_data.actual_reps >= 1
+                and (
+                    prior.equipment == "none"
+                    or isinstance(set_data.actual_weight_kg, (int, float)) and set_data.actual_weight_kg > 0
+                )
+            )
+            if prior.primary_muscle_group == exercise.primary_muscle_group:
+                prefatigue_direct += count
+            elif exercise.primary_muscle_group in (prior.secondary_muscle_groups or []):
+                prefatigue_indirect += count
+        ref_prefix = f"exercise:{exercise.id}"
+        refs = [f"{ref_prefix}:position", f"muscle:{exercise.primary_muscle_group}:7d"]
+        if exposures:
+            refs.extend([f"{ref_prefix}:history", f"{ref_prefix}:forecast_actual"])
+        if prefatigue_direct or prefatigue_indirect:
+            refs.append(f"{ref_prefix}:prefatigue")
+        rolling_14 = ((coaching_profile.get("yazio") or {}).get("rolling") or {}).get("14d") or {}
+        if rolling_14.get("logged_days", 0) >= 4:
+            refs.append("nutrition:yazio:14d")
+        exercise_evidence.append({
+            "session_exercise_id": str(exercise.id),
+            "progression_key": progression_key,
+            "position": exercise.position + 1,
+            "history_count": matching_history_count,
+            "days_since_same_exposure": exposures[0]["days_ago"] if exposures else None,
+            "recent_exposures": exposures,
+            "current_prefatigue": {"direct_working_sets": prefatigue_direct, "indirect_working_sets": prefatigue_indirect},
+            "primary_muscle": exercise.primary_muscle_group,
+            "secondary_muscles": list(exercise.secondary_muscle_groups or []),
+            "allowed_evidence_refs": refs,
+        })
+
+    evidence = {
+        "version": "v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "training_goal": "hypertrophy",
+        "working_set_semantics": "momentary_muscular_failure",
+        "warmup_semantics": "not_failure_not_stimulus",
+        "muscles": muscle_evidence,
+        "exercises": exercise_evidence,
+        "nutrition": coaching_profile,
+    }
+    evidence_by_id = {item["session_exercise_id"]: item for item in exercise_evidence}
+
+    def guidance(exercise: ForgeSessionExercise) -> dict:
+        stored = exercise.coach_guidance if isinstance(exercise.coach_guidance, dict) else {}
+        status_value = stored.get("progression_status")
+        if status_value not in {"KEEP_PROGRESSING", "STAGNATED", "REGRESSED", "FIRST_SESSION"}:
+            status_value = "KEEP_PROGRESSING" if status_value == "INCREASE_WEIGHT" else "FIRST_SESSION"
+        return {"progression_status": status_value, "rationale": str(stored.get("rationale") or "")}
+
+    def target(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
         return {
-            "session_set_id": str(set_data.id),
-            "type": set_data.set_type,
-            # These are references, not deterministic constraints. Gemini chooses
-            # the actual proposal from profile description and matching history.
-            "reference_weight_kg": set_data.target_weight_kg,
-            "reference_reps": set_data.target_reps,
-            "min_reps": minimum,
-            "max_reps": maximum,
+            "session_set_id": str(set_data.id), "type": set_data.set_type,
+            "set_index": set_data.position + 1,
+            "reference_weight_kg": set_data.target_weight_kg, "reference_reps": set_data.target_reps,
             "requires_weight": exercise.equipment != "none",
         }
 
     return {
         "profile": coaching_profile,
-        "session": {
-            "name": session.name,
-            "exercises": [
-                {
-                    "session_exercise_id": str(exercise.id),
-                    "name": exercise.name,
-                    "equipment": exercise.equipment,
-                    "muscle_group": exercise.primary_muscle_group,
-                    "machine_profile": exercise.machine_profile_name,
-                    "machine_profile_notes": profile_notes_by_exercise.get(exercise.id, ""),
-                    "notes": "\n".join(part for part in [exercise.notes or "", profile_notes_by_exercise.get(exercise.id, "")] if part),
-                    "deterministic_guidance": exercise.coach_guidance or {},
-                    "working_set_count": sum(1 for set_data in exercise.sets if set_data.set_type == "working"),
-                    "targets": [_target_context(exercise, set_data) for set_data in exercise.sets],
-                }
-                for exercise in selected
-            ],
-        },
-        "recent_matching_history": history,
+        "coach_evidence": evidence,
+        "session": {"name": session.name, "exercises": [{
+            "session_exercise_id": str(exercise.id), "name": exercise.name, "equipment": exercise.equipment,
+            "muscle_group": exercise.primary_muscle_group,
+            "machine_profile": profile_by_exercise.get(exercise.id) or None,
+            "machine_profile_name": exercise.machine_profile_name,
+            "machine_profile_notes": str(profile_by_exercise.get(exercise.id, {}).get("notes") or ""),
+            "notes": "\n".join(part for part in [exercise.notes or "", str(profile_by_exercise.get(exercise.id, {}).get("notes") or "")] if part),
+            "deterministic_guidance": guidance(exercise),
+            "evidence": evidence_by_id[str(exercise.id)],
+            "working_set_count": sum(1 for item in exercise.sets if item.set_type == "working"),
+            "targets": [target(exercise, item) for item in exercise.sets],
+        } for exercise in selected]},
     }
 
 
@@ -1624,26 +1775,23 @@ async def get_today_routine(current_user: User = Depends(get_current_user), db: 
 
 
 def _native_session_rationale(progression_data: dict, progression_status: str) -> str:
-    """Explain a deterministic native target in German without inventing training data."""
-    rep_range = progression_data.get("rep_range", "8–12")
+    """Explain a history-based native target in German without invented rails."""
     current_weight = progression_data.get("current_weight_kg")
     latest_reps = progression_data.get("latest_reps") or []
     latest_reps_text = "/".join(str(reps) for reps in latest_reps)
-
-    if progression_status == "INCREASE_WEIGHT":
-        next_weight = progression_data.get("suggested_weight_kg")
-        weight_text = f" auf die bestätigte nächste Last von {next_weight:g} kg" if isinstance(next_weight, (int, float)) else " auf die bestätigte nächste Last"
-        return f"Alle vergleichbaren Arbeitssätze lagen am oberen Ende des {rep_range}-Bereichs. Nach dem Prinzip der doppelten Progression geht es deshalb{weight_text}; die Wiederholungen starten wieder am unteren Bereich."
-    if progression_status == "STAGNATED":
-        return f"Das Wiederholungsvolumen war über drei vergleichbare Sessions bei gleicher Last stabil. Halte Gewicht und Satzanzahl im {rep_range}-Bereich und prüfe Technik, Pausen und Erholung, bevor du mehr Last oder Volumen erzwingst."
-    if progression_status == "REGRESSED":
-        return f"Die vergleichbare Gesamtwiederholungszahl ist zuletzt gesunken. Das Ziel bleibt bewusst im {rep_range}-Bereich bei gleicher Last, damit du erst die vorherige Leistung sauber stabilisierst statt vorschnell zu erhöhen."
-    if progression_status == "FIRST_SESSION":
-        return f"Es gibt noch keinen vergleichbaren Verlauf. Starte kontrolliert im {rep_range}-Bereich; bei sauberer Technik werden zuerst Wiederholungen aufgebaut, bevor das Gewicht steigt."
-
     weight_text = f" bei {current_weight:g} kg" if isinstance(current_weight, (int, float)) else ""
     previous_text = f" (zuletzt {latest_reps_text} Wdh.)" if latest_reps_text else ""
-    return f"Du hast im {rep_range}-Bereich noch Wiederholungen aufzubauen{weight_text}{previous_text}. Die Last bleibt deshalb konstant; das nächste messbare Ziel ist eine saubere zusätzliche Wiederholung, bevor das Gewicht erhöht wird."
+
+    if progression_status == "INCREASE_WEIGHT":
+        return "Dieser gespeicherte Status stammt aus einer älteren Prognose. Ohne aktuelles historisches Kriterium wird daraus kein automatischer Lastsprung abgeleitet."
+    if progression_status == "STAGNATED":
+        return f"Die Gesamtwiederholungen waren über drei vergleichbare Sessions{weight_text} stabil. Halte Last und Satzanzahl und prüfe Technik, Pausen und Erholung, bevor du Änderungen erzwingst."
+    if progression_status == "REGRESSED":
+        return f"Die vergleichbare Gesamtwiederholungszahl ist zuletzt gesunken{weight_text}{previous_text}. Stabilisiere zunächst die vorherige Satzleistung, statt Gewicht oder Wiederholungen deutlich anzuheben."
+    if progression_status == "FIRST_SESSION":
+        return "Es gibt noch keinen vergleichbaren Verlauf. Nutze die positiven Templatewerte als ersten Referenzpunkt und ändere sie nur konservativ."
+
+    return f"Die Last bleibt konstant{weight_text}{previous_text}. Das nächste Ziel weicht nur konservativ von der letzten passenden Satzleistung ab; höchstens eine zusätzliche Gesamtwiederholung wird eingeplant."
 
 
 def _session_guidance_by_plan_exercise(
@@ -1663,7 +1811,6 @@ def _session_guidance_by_plan_exercise(
         progression_status = target.get("progression_status") or progression_data.get("signal") or "FIRST_SESSION"
         guidance[plan_exercise.id] = {
             "progression_status": progression_status,
-            "rep_range": progression_data.get("rep_range", "8–12"),
             "rationale": _native_session_rationale(progression_data, progression_status),
         }
     return guidance
@@ -1690,6 +1837,7 @@ def _snapshot_plan_into_session(
             secondary_muscle_groups=exercise.secondary_muscle_groups or [],
             source_machine_profile_id=machine_profile.id if machine_profile else None,
             machine_profile_name=machine_profile.name if machine_profile else None,
+            machine_profile_snapshot=_machine_profile_snapshot(machine_profile),
             notes=plan_exercise.notes,
             coach_guidance=guidance_by_plan_exercise.get(plan_exercise.id),
             position=exercise_position,
@@ -1762,16 +1910,9 @@ async def generate_session_start_coaching(
     session = _owned_session(db, current_user.id, session_id)
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")
-    profiles_backfilled = _apply_last_used_profiles_to_session(db, current_user.id, session)
-    missing_warmup_targets = any(
-        set_data.set_type == "warmup"
-        and set_data.target_weight_kg is None
-        and set_data.coach_suggested_weight_kg is None
-        for exercise in session.exercises
-        for set_data in exercise.sets
-    )
-    if session.start_coaching is None or force or profiles_backfilled or missing_warmup_targets:
-        coaching_profile = await _forge_coaching_profile(current_user)
+    _apply_last_used_profiles_to_session(db, current_user.id, session)
+    if session.start_coaching is None or force:
+        coaching_profile = await _forge_coaching_profile(db, current_user)
         context = _session_coaching_context(db, current_user, session, coaching_profile)
         try:
             coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
@@ -2028,11 +2169,14 @@ async def add_session_exercise(session_id: UUID, data: ForgeSessionExerciseInput
         primary_muscle_group=exercise.primary_muscle_group if exercise else "Other",
         secondary_muscle_groups=exercise.secondary_muscle_groups if exercise else [],
         machine_profile_name=machine_profile.name if machine_profile else None,
+        machine_profile_snapshot=_machine_profile_snapshot(machine_profile),
         notes=data.notes,
         position=len(session.exercises),
     )
     for position, set_data in enumerate(data.sets):
-        session_exercise.sets.append(ForgeSessionSet(position=position, **set_data.model_dump()))
+        created_set = ForgeSessionSet(position=position, **set_data.model_dump())
+        _validate_completed_working_set(session_exercise, created_set)
+        session_exercise.sets.append(created_set)
     if exercise is not None:
         _apply_live_session_exercise_guidance(db, current_user.id, session_exercise, exercise, machine_profile)
     session.exercises.append(session_exercise)
@@ -2048,7 +2192,7 @@ async def _apply_isolated_session_exercise_coaching(
     exercise: ForgeSessionExercise,
 ) -> None:
     """Generate and persist coaching only for one session exercise/profile identity."""
-    coaching_profile = await _forge_coaching_profile(user)
+    coaching_profile = await _forge_coaching_profile(db, user)
     context = _session_coaching_context(
         db, user, session, coaching_profile, only_exercise_id=exercise.id,
     )
@@ -2067,6 +2211,8 @@ async def _apply_isolated_session_exercise_coaching(
         "recommendation": decision["recommendation"],
         "first_set_focus": decision["first_set_focus"],
         "effort_hint": decision["effort_hint"],
+        "evidence_refs": decision.get("evidence_refs") or [],
+        "coach_evidence": generated.get("coach_evidence") or {},
     }
 
 
@@ -2108,6 +2254,7 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
         profile_changed = previous_profile_id != (machine_profile.id if machine_profile else None)
         exercise.source_machine_profile_id = machine_profile.id if machine_profile else None
         exercise.machine_profile_name = machine_profile.name if machine_profile else None
+        exercise.machine_profile_snapshot = _machine_profile_snapshot(machine_profile)
         library_exercise = db.query(ForgeExercise).filter(
             ForgeExercise.id == exercise.source_exercise_id,
             ForgeExercise.user_id == current_user.id,
@@ -2142,6 +2289,39 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
     return _serialize_session(session)
 
 
+def _validate_completed_working_set(
+    exercise: ForgeSessionExercise,
+    set_data: ForgeSessionSet,
+    updates: dict | None = None,
+) -> None:
+    """Validate only completed working sets; warm-ups stay frictionless."""
+    values = updates or {}
+    set_type = values.get("set_type", set_data.set_type)
+    completed = values.get("completed", set_data.completed)
+    actual_reps = values.get("actual_reps", set_data.actual_reps)
+    actual_weight = values.get("actual_weight_kg", set_data.actual_weight_kg)
+    if set_type != "working" or not completed:
+        return
+    if not isinstance(actual_reps, int) or isinstance(actual_reps, bool) or actual_reps < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Arbeitssatz {set_data.position + 1} bei {exercise.name}: Trage mindestens eine tatsächlich ausgeführte Wiederholung ein, bevor du den Satz abschließt.",
+        )
+    if exercise.equipment != "none" and (
+        isinstance(actual_weight, bool) or not isinstance(actual_weight, (int, float)) or not isfinite(actual_weight) or actual_weight <= 0
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Arbeitssatz {set_data.position + 1} bei {exercise.name}: Trage ein tatsächliches Gewicht größer als 0 kg ein, bevor du den Satz abschließt.",
+        )
+
+
+def _validate_session_completion(session: ForgeWorkoutSession) -> None:
+    for exercise in session.exercises:
+        for set_data in exercise.sets:
+            _validate_completed_working_set(exercise, set_data)
+
+
 @router.patch("/sessions/{session_id}/sets/{set_id}", response_model=ForgeSessionResponse)
 async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionSetUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
@@ -2154,8 +2334,9 @@ async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionS
     if set_data is None:
         raise _not_found("Set not found")
 
-    updates = data.model_dump(exclude={"position"})
+    updates = data.model_dump(exclude={"position"}, exclude_unset=True)
     requested_position = data.position
+    _validate_completed_working_set(set_data.session_exercise, set_data, updates)
     for key, value in updates.items():
         setattr(set_data, key, value)
 
@@ -2187,7 +2368,9 @@ async def add_session_set(session_id: UUID, session_exercise_id: UUID, data: For
     exercise = next((item for item in session.exercises if item.id == session_exercise_id), None)
     if exercise is None:
         raise _not_found("Session exercise not found")
-    exercise.sets.append(ForgeSessionSet(position=len(exercise.sets), **data.model_dump()))
+    created_set = ForgeSessionSet(position=len(exercise.sets), **data.model_dump())
+    _validate_completed_working_set(exercise, created_set)
+    exercise.sets.append(created_set)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -2326,6 +2509,8 @@ async def complete_session(
     db: Session = Depends(get_db),
 ):
     session = _owned_session(db, current_user.id, session_id)
+    if session.status != "completed":
+        _validate_session_completion(session)
     applied_plan_id = None
     if session.status != "completed" and data is not None and data.apply_plan_changes:
         _apply_session_plan_changes(db, current_user.id, session)
@@ -2566,8 +2751,12 @@ def _native_completed_sessions(db: Session, user_id: UUID, routine_name: str) ->
                         for set_data in exercise.sets
                         if set_data.completed
                         and set_data.set_type == "working"
-                        and set_data.actual_weight_kg is not None
                         and set_data.actual_reps is not None
+                        and set_data.actual_reps >= 1
+                        and (
+                            exercise.equipment == "none"
+                            or set_data.actual_weight_kg is not None and set_data.actual_weight_kg > 0
+                        )
                     ],
                 }
                 for exercise in session.exercises
@@ -2608,7 +2797,6 @@ def _apply_live_session_exercise_guidance(
     progression_status = target.get("progression_status") or progression_data.get("signal") or "FIRST_SESSION"
     session_exercise.coach_guidance = {
         "progression_status": progression_status,
-        "rep_range": progression_data.get("rep_range", "8–12"),
         "rationale": _native_session_rationale(progression_data, progression_status),
     }
     for set_data, target_set in zip(session_exercise.sets, target.get("set_targets", [])):
