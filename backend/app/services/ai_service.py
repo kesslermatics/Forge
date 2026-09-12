@@ -2057,29 +2057,75 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
         session_focus = f"{session_name} ist bereit. Heute wird fokussiert gearbeitet, sauber durchgezogen und abgeliefert."
 
     decisions = []
-    for exercise in exercises:
+    for exercise_index, exercise in enumerate(exercises):
         exercise_name = str(exercise.get("name") or "Diese Übung")
         first_target = next(
             (target for target in exercise.get("targets", []) if target.get("type") == "working"),
             {},
         )
-        target_label = format_load(first_target.get("reference_weight_kg"), first_target.get("reference_reps"))
+        target_weight = _forge_finite_weight(first_target.get("reference_weight_kg"))
+        target_reps = first_target.get("reference_reps")
+        target_label = format_load(target_weight, target_reps)
         evidence = exercise.get("evidence") if isinstance(exercise.get("evidence"), dict) else {}
         recent = (evidence.get("recent_exposures") or [])
         latest_set = ((recent[0].get("sets") or [None])[0]) if recent else None
         evidence_refs: list[str] = []
         if isinstance(latest_set, dict):
-            actual_label = format_load(latest_set.get("actual_weight_kg"), latest_set.get("actual_reps"))
-            suggested_label = format_load(latest_set.get("coach_suggested_weight_kg"), latest_set.get("coach_suggested_reps"))
-            recommendation = f"Letztes Mal hast du bei {exercise_name} {actual_label} geschafft"
+            actual_weight = _forge_finite_weight(latest_set.get("actual_weight_kg"))
+            actual_reps = latest_set.get("actual_reps")
+            actual_label = format_load(actual_weight, actual_reps)
+            suggested_weight = _forge_finite_weight(latest_set.get("coach_suggested_weight_kg"))
+            suggested_reps = latest_set.get("coach_suggested_reps")
+            same_prior_load = (
+                (actual_weight is None and suggested_weight is None)
+                or actual_weight is not None and suggested_weight is not None
+                and math.isclose(actual_weight, suggested_weight, rel_tol=1e-9, abs_tol=1e-6)
+            )
+            prior_target_met = (
+                same_prior_load
+                and isinstance(actual_reps, int)
+                and isinstance(suggested_reps, int)
+                and actual_reps >= suggested_reps
+            )
             evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:history")
-            if latest_set.get("coach_suggested_reps") is not None:
-                recommendation += f" – geplant waren {suggested_label}. Gute Grundlage"
+            if isinstance(suggested_reps, int):
                 evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:forecast_actual")
-            recommendation += f". Deshalb peilen wir heute {target_label} an und führen die Progression kontrolliert weiter."
+
+            if target_weight is not None and actual_weight is not None and target_weight > actual_weight:
+                choice = f"Ich gebe dir heute mit {target_label} den nächsten Lastschritt."
+            elif (
+                target_weight is not None and actual_weight is not None
+                and math.isclose(target_weight, actual_weight, rel_tol=1e-9, abs_tol=1e-6)
+                and isinstance(target_reps, int) and isinstance(actual_reps, int) and target_reps > actual_reps
+            ):
+                choice = f"Das Gewicht bleibt stehen, ich setze heute {target_label}."
+            elif target_weight is not None and actual_weight is not None and target_weight < actual_weight:
+                choice = f"Ich nehme heute bewusst auf {target_label} zurück, damit die Leistung wieder stabil wird."
+            else:
+                choice = f"Heute bestätigst du {target_label}, bevor ich den nächsten Schritt freigebe."
+
+            if prior_target_met:
+                history = f"{actual_label} bei {exercise_name} waren zuletzt stark; mein damaliges Ziel hast du erreicht."
+            elif isinstance(suggested_reps, int):
+                history = f"Bei {exercise_name} kamen zuletzt {actual_label}; daran richte ich den nächsten Schritt aus."
+            else:
+                history = f"Deine letzte vergleichbare Leistung bei {exercise_name} lag bei {actual_label}."
+            variants = [
+                f"{history} {choice}",
+                f"{choice} {history}",
+                f"Die letzte Leistung bei {exercise_name} gibt die Richtung vor: {actual_label}. {choice}",
+                f"Bei {exercise_name} baue ich auf deinen {actual_label} auf. {choice}",
+            ]
+            recommendation = variants[exercise_index % len(variants)]
         else:
-            recommendation = f"Für {exercise_name} fehlt noch ein exakt vergleichbarer Verlauf. Deshalb setzen wir heute mit {target_label} einen sauberen Ausgangspunkt für die nächste Progression."
             evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:position")
+            variants = [
+                f"Ich setze bei {exercise_name} heute {target_label} als Ausgangspunkt. Für diese genaue Übungs-/Gerätekombi fehlt noch ein Vergleich.",
+                f"Heute bekommst du bei {exercise_name} {target_label}. Damit schaffen wir eine belastbare Basis für den nächsten Schritt.",
+                f"Bei {exercise_name} starte ich bewusst mit {target_label}; danach kann ich deine Entwicklung exakt an dieser Variante ausrichten.",
+                f"Für {exercise_name} wähle ich {target_label}. Das ist unser sauberer Referenzpunkt für die kommenden Einheiten.",
+            ]
+            recommendation = variants[exercise_index % len(variants)]
         allowed_refs = set(evidence.get("allowed_evidence_refs") or [])
         evidence_refs = [ref for ref in evidence_refs if ref in allowed_refs]
         effort_hint = f"Alle Arbeitssätze bei {exercise_name} gehen bis zum momentanen Muskelversagen; Warm-ups enden bewusst davor."
@@ -2111,11 +2157,24 @@ _FORBIDDEN_FORGE_COACHING = re.compile(
 )
 
 
-def _validate_forge_coaching_language(text: str, *, forbid_minimum: bool = False) -> None:
+_FORBIDDEN_FORGE_VISIBLE_META = re.compile(r"\b(?:prognos\w*|forecast\w*)\b", re.IGNORECASE)
+_FORGE_COACH_VOICE = re.compile(r"\b(?:ich|wir|mein(?:e|en|em|er|es)?)\b", re.IGNORECASE)
+
+
+def _validate_forge_coaching_language(
+    text: str,
+    *,
+    forbid_minimum: bool = False,
+    visible_coach_text: bool = False,
+) -> None:
     if _FORBIDDEN_FORGE_COACHING.search(text):
         raise ValueError("Forge AI used forbidden effort-reserve language")
     if forbid_minimum and re.search(r"\bmindestens\b", text, re.IGNORECASE):
         raise ValueError("Forge AI framed forecast repetitions as a guaranteed minimum")
+    if visible_coach_text and _FORBIDDEN_FORGE_VISIBLE_META.search(text):
+        raise ValueError("Forge AI used analysis terminology in visible coach copy")
+    if visible_coach_text and not _FORGE_COACH_VOICE.search(text):
+        raise ValueError("Forge AI did not speak in a personal coach voice")
 
 
 def _forge_exercise_evidence(session_context: dict, exercise_id: str) -> dict:
@@ -2188,7 +2247,12 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         effort_hint = _forge_coaching_text(item.get("effort_hint"), 160, "")
         if not recommendation or not first_set_focus or not effort_hint:
             raise ValueError("Forge AI returned an incomplete exercise decision")
-        for text in (recommendation, first_set_focus, effort_hint):
+        _validate_forge_coaching_language(
+            recommendation,
+            forbid_minimum=True,
+            visible_coach_text=True,
+        )
+        for text in (first_set_focus, effort_hint):
             _validate_forge_coaching_language(text, forbid_minimum=True)
         evidence = _forge_exercise_evidence(session_context, exercise_id)
         allowed_refs = set(evidence.get("allowed_evidence_refs") or [])
@@ -2321,14 +2385,19 @@ and profile facts. Never invent an ID, add a set or remove a set.
 
 Write fresh, natural German. headline: energetic and at most 8 words. session_focus: 2–3 motivating sentences, roughly
 200–320 characters, explaining today's hypertrophy focus and what can improve versus matching history. recommendation is
-the only exercise-coaching text shown to the user: write one compact, natural paragraph of 2–4 short sentences and at most
-300 characters. It must say what you chose and why, using concrete personal evidence such as the last comparable session,
-time since exposure, achieved versus forecast performance, frequency or justified load progression. Sound like a concise
-coach: acknowledge good prior work where supported, then state today's target and the reason to continue, hold or progress.
-Do not use headings, bullet points, labels, meta-analysis, or repeat the general failure rule in recommendation. Keep
-first_set_focus and effort_hint valid for the internal contract at most 160 characters each; they are not user-facing.
-effort_hint must still state that working sets reach momentary muscular failure and distinguish warm-ups. Be specific without
-generic safety disclaimers.""" + _language_instruction(language)
+the only exercise-coaching text shown to the user: write one compact paragraph of 1–4 short sentences and at most 300
+characters. Speak as the user's coach in first person when describing your choice: for example "ich setze", "ich lasse",
+"ich erhöhe" or "ich nehme zurück". Never call it a prediction, forecast, prognosis or analysis; it is your coaching decision.
+
+You have editorial freedom. For each exercise independently choose the most decision-relevant one or two facts from its
+allowed evidence and decide how to explain them. You may lead with today's load, prior performance, time since exposure,
+frequency, exercise position, fatigue, achieved versus prior coach target, or another supplied fact. Vary openings, rhythm,
+sentence count and emphasis across exercises in the same response. Do not force every exercise into a "last time ...
+therefore today ..." template, do not inventory all available data, and do not praise unless the evidence supports it.
+Be concise, direct and human. Do not use headings, bullet points, labels, meta-analysis, or repeat the general failure rule in
+recommendation. Keep first_set_focus and effort_hint valid for the internal contract at most 160 characters each; they are
+not user-facing. effort_hint must still state that working sets reach momentary muscular failure and distinguish warm-ups.
+Be specific without generic safety disclaimers.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         exercises = session_context.get("session", {}).get("exercises", [])
