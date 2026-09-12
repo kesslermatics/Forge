@@ -2,6 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -1750,7 +1751,7 @@ async def get_today_routine(current_user: User = Depends(get_current_user), db: 
     )
     routines = list(program.routines)
     if program.mode == "weekly":
-        weekday = datetime.now(timezone.utc).astimezone().weekday()
+        weekday = datetime.now(ZoneInfo("Europe/Berlin")).weekday()
         options = [routine.plan for routine in routines if weekday in (routine.weekdays or [])]
         if not options:
             return {"mode": "weekly", "program": _serialize_program(program, db, last_performances), "message": "Heute ist kein Training geplant."}

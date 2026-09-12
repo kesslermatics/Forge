@@ -1121,7 +1121,7 @@ export const updateForgeProgram = (id: string, data: ForgeProgramInput) =>
   apiRequest<ForgeProgram>(`/api/forge/programs/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteForgeProgram = (id: string) =>
   apiRequest<void>(`/api/forge/programs/${id}`, { method: 'DELETE' });
-export const getForgeToday = () => apiRequest<ForgeToday>('/api/forge/today');
+export const getForgeToday = () => apiRequest<ForgeToday>('/api/forge/today', { cache: 'no-store' });
 
 export const startForgeSession = (plan_id: string, program_id?: string | null) =>
   apiRequest<ForgeSession>('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ plan_id, program_id: program_id ?? null }) });

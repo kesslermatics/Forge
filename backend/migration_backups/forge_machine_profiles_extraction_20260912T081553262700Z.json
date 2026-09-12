@@ -1,0 +1,30 @@
+[
+  {
+    "profile_id": "40b8dd25-58f4-4b90-b104-00ea079eff7d",
+    "original_notes": "5 7,5 10 12,5 15 17,5 21,25 25 28,75 32,5 36,25 40 43,75 47,5",
+    "extraction_status": "existing_preserved",
+    "extracted_list": null,
+    "reason": "structured list already exists"
+  },
+  {
+    "profile_id": "c77415d6-cba4-4d54-9027-094a4f64c666",
+    "original_notes": "5 10 12,5 15 17,5 21,25 25 28,75 32,5 36,25",
+    "extraction_status": "existing_preserved",
+    "extracted_list": null,
+    "reason": "structured list already exists"
+  },
+  {
+    "profile_id": "45dafa6e-cd1d-4d85-81e9-1cbddbd75aed",
+    "original_notes": "2,5 7,5 12,5 17,5 22,5 27,5 32,5",
+    "extraction_status": "existing_preserved",
+    "extracted_list": null,
+    "reason": "structured list already exists"
+  },
+  {
+    "profile_id": "7a3d7b4b-5517-4306-846a-bf89532330c3",
+    "original_notes": "5 12,5 20 27,5 35 42,5 50 60 70 80 90 100",
+    "extraction_status": "existing_preserved",
+    "extracted_list": null,
+    "reason": "structured list already exists"
+  }
+]

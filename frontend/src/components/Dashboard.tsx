@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
@@ -124,13 +124,38 @@ export default function Dashboard() {
         } else { load(null); }
     }, []); // eslint-disable-line
 
+    const refreshForgeDashboard = useCallback(() => {
+        getForgeToday().then(setForgeToday).catch(() => { });
+        getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
+    }, []);
+
     useEffect(() => {
         getWeightHistory(90).then(d => setWeightHistory(d.entries)).catch(() => { });
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
         getConsistency().then(setConsistency).catch(() => { });
-        getForgeToday().then(setForgeToday).catch(() => { });
-        getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
-    }, []);
+        refreshForgeDashboard();
+
+        const berlinDay = () => new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date());
+        let observedDay = berlinDay();
+        const refreshOnReturn = () => refreshForgeDashboard();
+        const refreshOnVisible = () => { if (document.visibilityState === 'visible') refreshForgeDashboard(); };
+        const dayCheck = window.setInterval(() => {
+            const currentDay = berlinDay();
+            if (currentDay !== observedDay) {
+                observedDay = currentDay;
+                refreshForgeDashboard();
+            }
+        }, 60_000);
+        window.addEventListener('focus', refreshOnReturn);
+        document.addEventListener('visibilitychange', refreshOnVisible);
+        return () => {
+            window.clearInterval(dayCheck);
+            window.removeEventListener('focus', refreshOnReturn);
+            document.removeEventListener('visibilitychange', refreshOnVisible);
+        };
+    }, [refreshForgeDashboard]);
 
     const handleRegenerate = async () => {
         setRegenerating(true); setError(null);
@@ -181,6 +206,7 @@ export default function Dashboard() {
         try {
             await deleteForgeSession(activeForgeSession.id);
             setActiveForgeSession(null);
+            refreshForgeDashboard();
         } catch (caught: unknown) {
             setForgeError(caught instanceof Error ? caught.message : 'Session konnte nicht verworfen werden.');
         } finally { setStartingSession(false); }
