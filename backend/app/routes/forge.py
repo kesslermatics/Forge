@@ -1350,11 +1350,37 @@ def _session_coaching_context(
         return {"progression_status": status_value, "rationale": str(stored.get("rationale") or "")}
 
     def target(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
+        low_rep_signal = None
+        if set_data.set_type == "working" and exercise.equipment != "none":
+            exercise_data = evidence_by_id[str(exercise.id)]
+            latest_comparable = next((
+                historical_set
+                for exposure in exercise_data.get("recent_exposures", [])
+                for historical_set in exposure.get("sets", [])
+                if historical_set.get("set_index") == set_data.position + 1
+            ), None)
+            actual_weight = latest_comparable.get("actual_weight_kg") if isinstance(latest_comparable, dict) else None
+            actual_reps = latest_comparable.get("actual_reps") if isinstance(latest_comparable, dict) else None
+            raw_weights = (profile_by_exercise.get(exercise.id) or {}).get("available_weights_kg") or []
+            lower_weights = sorted({
+                float(weight) for weight in raw_weights
+                if isinstance(weight, (int, float)) and not isinstance(weight, bool)
+                and isinstance(actual_weight, (int, float)) and 0 < float(weight) < float(actual_weight)
+            })
+            if isinstance(actual_reps, int) and 1 <= actual_reps <= 3 and isinstance(actual_weight, (int, float)) and actual_weight > 0 and lower_weights:
+                low_rep_signal = {
+                    "source_weight_kg": float(actual_weight),
+                    "source_reps": actual_reps,
+                    "available_lower_weights_kg": lower_weights,
+                    "same_or_higher_load_allowed": False,
+                    "reason": "latest comparable working set reached momentary muscular failure after at most 3 repetitions",
+                }
         return {
             "session_set_id": str(set_data.id), "type": set_data.set_type,
             "set_index": set_data.position + 1,
             "reference_weight_kg": set_data.target_weight_kg, "reference_reps": set_data.target_reps,
             "requires_weight": exercise.equipment != "none",
+            "low_rep_signal": low_rep_signal,
         }
 
     return {
@@ -1363,6 +1389,13 @@ def _session_coaching_context(
         "session": {"name": session.name, "exercises": [{
             "session_exercise_id": str(exercise.id), "name": exercise.name, "equipment": exercise.equipment,
             "muscle_group": exercise.primary_muscle_group,
+            "exercise_identity": {
+                "name": exercise.name,
+                "equipment": exercise.equipment,
+                "primary_muscle_group": exercise.primary_muscle_group,
+                "secondary_muscle_groups": list(exercise.secondary_muscle_groups or []),
+                "exercise_notes": exercise.notes,
+            },
             "machine_profile": profile_by_exercise.get(exercise.id) or None,
             "machine_profile_name": exercise.machine_profile_name,
             "machine_profile_notes": str(profile_by_exercise.get(exercise.id, {}).get("notes") or ""),

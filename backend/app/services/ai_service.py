@@ -2011,141 +2011,6 @@ def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
     return defaults
 
 
-def _forge_coaching_fallback(session_context: dict) -> dict:
-    session = session_context.get("session") or {}
-    session_name = str(session.get("name") or "Dein Training").strip()
-    exercises = session.get("exercises", [])
-    recent_history = [
-        exposure
-        for item in (session_context.get("coach_evidence", {}).get("exercises") or [])
-        for exposure in (item.get("recent_exposures") or [])[:1]
-    ]
-
-    def format_load(weight: object, reps: object) -> str:
-        normalized_weight = _forge_finite_weight(weight)
-        if normalized_weight is not None and isinstance(reps, int):
-            return f"{normalized_weight:g} kg × {reps} Wdh."
-        if isinstance(reps, int):
-            return f"{reps} kontrollierte Wdh."
-        return "ein konkretes Arbeitsziel"
-
-    planned_exercise_count = len(exercises)
-    planned_working_set_count = sum(
-        1 for exercise in exercises for target in exercise.get("targets", []) if target.get("type") == "working"
-    )
-    planned_warmup_set_count = sum(
-        1 for exercise in exercises for target in exercise.get("targets", []) if target.get("type") == "warmup"
-    )
-    previous_working_set_count = sum(len(exposure.get("sets") or []) for exposure in recent_history)
-
-    if recent_history:
-        session_focus = (
-            f"Letztes Mal hast du diese Einheit mit {previous_working_set_count} Arbeitssätzen als Grundlage gelegt und gezeigt, wo heute mehr drin ist. "
-            f"Heute greifen wir genau diese Punkte an: verdiente Progression, stabile Lasten dort, wo noch Qualität fehlt, "
-            f"und volle Konzentration durch die gesamte Einheit. {planned_exercise_count} Übungen mit "
-            f"{planned_working_set_count} Arbeitssätzen stehen an"
-            f"{f' – davor {planned_warmup_set_count} Warm-ups zum Reinkommen' if planned_warmup_set_count else ''}; "
-            "heute wird nicht verwaltet, sondern abgeliefert."
-        )
-    elif planned_exercise_count:
-        session_focus = (
-            f"Heute bauen wir in {session_name} deinen Referenzpunkt auf: erst Spannung und Technik finden, "
-            f"dann jeden der {planned_working_set_count} Arbeitssätze mit klarer Absicht durchziehen. "
-            "Kein blindes Mehrgewicht – eine fokussierte Einheit, nach der du weißt, dass du abgeliefert hast."
-        )
-    else:
-        session_focus = f"{session_name} ist bereit. Heute wird fokussiert gearbeitet, sauber durchgezogen und abgeliefert."
-
-    decisions = []
-    for exercise_index, exercise in enumerate(exercises):
-        exercise_name = str(exercise.get("name") or "Diese Übung")
-        first_target = next(
-            (target for target in exercise.get("targets", []) if target.get("type") == "working"),
-            {},
-        )
-        target_weight = _forge_finite_weight(first_target.get("reference_weight_kg"))
-        target_reps = first_target.get("reference_reps")
-        target_label = format_load(target_weight, target_reps)
-        evidence = exercise.get("evidence") if isinstance(exercise.get("evidence"), dict) else {}
-        recent = (evidence.get("recent_exposures") or [])
-        latest_set = ((recent[0].get("sets") or [None])[0]) if recent else None
-        evidence_refs: list[str] = []
-        if isinstance(latest_set, dict):
-            actual_weight = _forge_finite_weight(latest_set.get("actual_weight_kg"))
-            actual_reps = latest_set.get("actual_reps")
-            actual_label = format_load(actual_weight, actual_reps)
-            suggested_weight = _forge_finite_weight(latest_set.get("coach_suggested_weight_kg"))
-            suggested_reps = latest_set.get("coach_suggested_reps")
-            same_prior_load = (
-                (actual_weight is None and suggested_weight is None)
-                or actual_weight is not None and suggested_weight is not None
-                and math.isclose(actual_weight, suggested_weight, rel_tol=1e-9, abs_tol=1e-6)
-            )
-            prior_target_met = (
-                same_prior_load
-                and isinstance(actual_reps, int)
-                and isinstance(suggested_reps, int)
-                and actual_reps >= suggested_reps
-            )
-            evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:history")
-            if isinstance(suggested_reps, int):
-                evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:forecast_actual")
-
-            if target_weight is not None and actual_weight is not None and target_weight > actual_weight:
-                choice = f"Ich gebe dir heute mit {target_label} den nächsten Lastschritt."
-            elif (
-                target_weight is not None and actual_weight is not None
-                and math.isclose(target_weight, actual_weight, rel_tol=1e-9, abs_tol=1e-6)
-                and isinstance(target_reps, int) and isinstance(actual_reps, int) and target_reps > actual_reps
-            ):
-                choice = f"Das Gewicht bleibt stehen, ich setze heute {target_label}."
-            elif target_weight is not None and actual_weight is not None and target_weight < actual_weight:
-                choice = f"Ich nehme heute bewusst auf {target_label} zurück, damit die Leistung wieder stabil wird."
-            else:
-                choice = f"Heute bestätigst du {target_label}, bevor ich den nächsten Schritt freigebe."
-
-            if prior_target_met:
-                history = f"{actual_label} bei {exercise_name} waren zuletzt stark; mein damaliges Ziel hast du erreicht."
-            elif isinstance(suggested_reps, int):
-                history = f"Bei {exercise_name} kamen zuletzt {actual_label}; daran richte ich den nächsten Schritt aus."
-            else:
-                history = f"Deine letzte vergleichbare Leistung bei {exercise_name} lag bei {actual_label}."
-            variants = [
-                f"{history} {choice}",
-                f"{choice} {history}",
-                f"Die letzte Leistung bei {exercise_name} gibt die Richtung vor: {actual_label}. {choice}",
-                f"Bei {exercise_name} baue ich auf deinen {actual_label} auf. {choice}",
-            ]
-            recommendation = variants[exercise_index % len(variants)]
-        else:
-            evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:position")
-            variants = [
-                f"Ich setze bei {exercise_name} heute {target_label} als Ausgangspunkt. Für diese genaue Übungs-/Gerätekombi fehlt noch ein Vergleich.",
-                f"Heute bekommst du bei {exercise_name} {target_label}. Damit schaffen wir eine belastbare Basis für den nächsten Schritt.",
-                f"Bei {exercise_name} starte ich bewusst mit {target_label}; danach kann ich deine Entwicklung exakt an dieser Variante ausrichten.",
-                f"Für {exercise_name} wähle ich {target_label}. Das ist unser sauberer Referenzpunkt für die kommenden Einheiten.",
-            ]
-            recommendation = variants[exercise_index % len(variants)]
-        allowed_refs = set(evidence.get("allowed_evidence_refs") or [])
-        evidence_refs = [ref for ref in evidence_refs if ref in allowed_refs]
-        effort_hint = f"Alle Arbeitssätze bei {exercise_name} gehen bis zum momentanen Muskelversagen; Warm-ups enden bewusst davor."
-        decisions.append({
-            "session_exercise_id": exercise.get("session_exercise_id"),
-            "recommendation": recommendation,
-            "first_set_focus": f"Erster Arbeitssatz bei {exercise_name}: {target_label} kontrolliert beginnen und direkt Spannung aufbauen.",
-            "effort_hint": effort_hint,
-            "evidence_refs": evidence_refs,
-        })
-    return {
-        "coaching_source": "fallback",
-        "headline": f"{session_name}: heute wird abgeliefert",
-        "session_focus": session_focus,
-        "exercise_decisions": decisions,
-        "coach_evidence": session_context.get("coach_evidence") or {},
-        "set_proposals": list(_forge_set_proposal_defaults(session_context).values()),
-    }
-
-
 _FORBIDDEN_FORGE_COACHING = re.compile(
     r"(?:\bRIR\b|\bRPE\b|reps?\s+in\s+reserve|(?:wiederholung(?:en)?|reps?)\s+im\s+tank|"
     r"(?:stoppe?n?|aufhören|beenden)[^.]{0,80}vor\s+(?:dem\s+)?(?:muskel)?versagen|"
@@ -2185,6 +2050,21 @@ def _forge_validate_rep_forecast(target: dict, proposed_weight: float | None, pr
     """Enforce personalized set-index/load rails from server-owned actuals only."""
     if target.get("type") != "working":
         return
+    low_rep_signal = target.get("low_rep_signal")
+    if isinstance(low_rep_signal, dict):
+        source_weight = _forge_finite_weight(low_rep_signal.get("source_weight_kg"))
+        lower_weights = [
+            float(weight) for weight in (low_rep_signal.get("available_lower_weights_kg") or [])
+            if _forge_finite_weight(weight) is not None
+        ]
+        if (
+            source_weight is None or proposed_weight is None or proposed_weight >= source_weight
+            or not any(math.isclose(proposed_weight, weight, rel_tol=1e-9, abs_tol=1e-6) for weight in lower_weights)
+        ):
+            raise ValueError("Forge AI kept or increased load after an extreme low-rep failure set")
+        # The server only enforces the necessary load direction and real machine
+        # availability. The AI owns the lower load and repetition target.
+        return
     set_index = target.get("set_index")
     historical = [
         set_data
@@ -2223,13 +2103,11 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
     if not isinstance(candidate, dict):
         raise ValueError("Forge AI returned no JSON object")
 
-    fallback = _forge_coaching_fallback(session_context)
     allowed_ids = {
         str(exercise.get("session_exercise_id"))
         for exercise in session_context.get("session", {}).get("exercises", [])
         if exercise.get("session_exercise_id")
     }
-    defaults = {item["session_exercise_id"]: item for item in fallback["exercise_decisions"]}
     decisions: list[dict] = []
     seen: set[str] = set()
     raw_decisions = candidate.get("exercise_decisions")
@@ -2241,7 +2119,6 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         exercise_id = str(item.get("session_exercise_id") or "")
         if exercise_id not in allowed_ids or exercise_id in seen:
             continue
-        default = defaults[exercise_id]
         recommendation = _forge_coaching_text(item.get("recommendation"), 300, "")
         first_set_focus = _forge_coaching_text(item.get("first_set_focus"), 160, "")
         effort_hint = _forge_coaching_text(item.get("effort_hint"), 160, "")
@@ -2272,6 +2149,13 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         seen.add(exercise_id)
     if seen != allowed_ids:
         raise ValueError("Forge AI did not analyze every exercise")
+    if len(decisions) >= 3:
+        non_history_decisions = sum(
+            any(not ref.endswith(":history") and not ref.endswith(":forecast_actual") for ref in decision["evidence_refs"])
+            for decision in decisions
+        )
+        if non_history_decisions < (len(decisions) + 1) // 2:
+            raise ValueError("Forge AI over-anchored exercise explanations on latest-set history")
 
     proposal_defaults = _forge_set_proposal_defaults(session_context)
     available_weights_by_set: dict[str, list[float]] = {}
@@ -2304,11 +2188,12 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         if default is None or set_id in proposals:
             continue
         proposed_reps = item.get("target_reps")
-        if isinstance(proposed_reps, int) and not isinstance(proposed_reps, bool):
-            # Gemini owns the proposal; the server applies technical bounds only.
-            proposed_reps = max(1, min(200, proposed_reps))
-        else:
-            proposed_reps = default["target_reps"]
+        if (
+            not isinstance(proposed_reps, int)
+            or isinstance(proposed_reps, bool)
+            or not 1 <= proposed_reps <= 200
+        ):
+            raise ValueError("Forge AI returned an invalid repetition proposal")
         proposed_weight = _forge_finite_weight(item.get("target_weight_kg"))
         if default["requires_weight"] and proposed_weight is None:
             raise ValueError("Forge AI omitted a required weight proposal")
@@ -2355,7 +2240,7 @@ class ForgeCoachingGenerationError(RuntimeError):
 async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
     """Generate complete AI coaching for every warm-up and working set."""
     if not settings.gemini_api_key:
-        return _forge_coaching_fallback(session_context)
+        raise ForgeCoachingGenerationError("Forge KI-Coaching ist ohne konfigurierten Gemini API-Key nicht verfügbar.")
     system_prompt = """You are Forge, a motivating evidence-informed hypertrophy coach. Hypertrophy is always the training goal.
 Every completed working set is interpreted as performed to momentary muscular failure. Warm-ups do not go to failure and
 never count as stimulus or progression sets. Never use RIR, RPE, reps-in-reserve, repetitions-in-the-tank language, or advise
@@ -2364,20 +2249,31 @@ Every exercise_decisions item must contain evidence_refs citing one or more allo
 server-owned coach_evidence, and its recommendation must concretely explain those cited facts. Return exactly one
 exercise_decisions item for every provided session_exercise_id and exactly one set_proposals item for every provided
 session_set_id, including every warm-up. Each set proposal contains target_weight_kg and an integer target_reps from 1 to
-200. Those are forecasts/targets, never guaranteed minimums. Never use "mindestens" in recommendation, first_set_focus or
+200. Those are coaching targets, never guaranteed minimums. Never use "mindestens" in recommendation, first_set_focus or
 effort_hint. Bounds are technical validation only; never infer fixed exercise-, equipment- or muscle-specific rep ranges.
 
 Use only server-owned coach_evidence for personalized claims. Compare unchanged coach_suggested values with actual values
-to say whether a prior forecast was met, missed or exceeded; never substitute target values. Consider exact exercise/profile
+to say whether a prior coach target was met, missed or exceeded; never substitute target values. Consider exact exercise/profile
 identity, set index, exercise position, direct versus indirect muscle exposure, frequency and current prefatigue. One poor
 session is not regression; stagnation or regression requires a trend across comparable exposures. Nutrition and bodyweight
 rolling trends are optional background/confidence signals only. A single nutrition day, or nutrition alone, must never force
 set weight, repetitions or progression status.
 
-YOU choose every weight and repetition target inside the server rails. Base the forecast on the full selected machine_profile
+Apply your general exercise-science knowledge to the supplied exercise_identity. Interpret the movement from its name,
+equipment, primary and secondary muscles, notes and machine profile. Account for exercise-specific stability, skill demand,
+systemic fatigue, technical sensitivity, muscle isolation and loading granularity: a biceps curl is not coached like a deadlift,
+and a stable machine movement is not coached like a technically demanding free-weight compound. This scientific reasoning
+may guide your decision, but never invent user history, pain, technique quality or equipment facts. Do not apply one universal
+rep target and do not rely on fixed exercise-category rep ranges; choose the concrete target from this exercise and this user.
+
+YOU choose every weight and repetition target inside the server rails. Base the decision on the full selected machine_profile
 and evidence for that exact identity. Treat loading_system, load_basis and available_weights_kg as authoritative. When
-available_weights_kg is non-empty, choose one exact listed weight. When it is empty, notes may describe increments. At the
-same load and set index, stay close to the newest comparable actual. A jump such as 6 to 10 is allowed only if recent
+available_weights_kg is non-empty, choose one exact listed weight. When it is empty, notes may describe increments. If a
+working-set target contains low_rep_signal, the latest comparable failure set ended after at most 3 repetitions. You MUST
+choose one weight from low_rep_signal.available_lower_weights_kg; you decide which lower weight and the repetition target
+using exercise science, the concrete exercise identity and the user's full evidence. The server has not calculated a target
+for you. Treat this as a necessary load-direction rail, not as a fixed rep range.
+At the same load and set index otherwise, stay close to the newest comparable actual. A jump such as 6 to 10 is allowed only if recent
 server-owned evidence shows that same user, identity, load and set index already achieved at least 10. At a higher load, do
 not unrealistically exceed the latest reps; use personal load-change evidence when present, otherwise be conservative. Do
 not transfer history between profiles. With no matching history, make a conservative first forecast from supplied references
@@ -2391,8 +2287,10 @@ characters. Speak as the user's coach in first person when describing your choic
 
 You have editorial freedom. For each exercise independently choose the most decision-relevant one or two facts from its
 allowed evidence and decide how to explain them. You may lead with today's load, prior performance, time since exposure,
-frequency, exercise position, fatigue, achieved versus prior coach target, or another supplied fact. Vary openings, rhythm,
-sentence count and emphasis across exercises in the same response. Do not force every exercise into a "last time ...
+frequency, exercise position, fatigue, achieved versus prior coach target, or another supplied fact. Latest-set history is one
+signal, not the default explanation. When the session contains at least three exercises, at least half of exercise_decisions
+must cite and concretely discuss a non-history evidence_ref such as muscle load/frequency, position or current prefatigue.
+Vary openings, rhythm, sentence count and emphasis across exercises in the same response. Do not force every exercise into a "last time ...
 therefore today ..." template, do not inventory all available data, and do not praise unless the evidence supports it.
 Be concise, direct and human. Do not use headings, bullet points, labels, meta-analysis, or repeat the general failure rule in
 recommendation. Keep first_set_focus and effort_hint valid for the internal contract at most 160 characters each; they are
@@ -2458,8 +2356,10 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
             raise last_error
         raise ValueError("Gemini returned no response")
     except Exception as exc:
-        logger.exception("Forge AI coaching generation failed after retries; using validated fallback: %s", exc)
-        return _forge_coaching_fallback(session_context)
+        logger.exception("Forge AI coaching generation failed after retries: %s", exc)
+        raise ForgeCoachingGenerationError(
+            "Forge konnte gerade keine sichere KI-Entscheidung erzeugen. Bitte versuche es erneut."
+        ) from exc
 
 
 async def generate_forge_session_chat(
