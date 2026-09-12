@@ -1309,7 +1309,11 @@ def _session_coaching_context(
             elif exercise.primary_muscle_group in (prior.secondary_muscle_groups or []):
                 prefatigue_indirect += count
         ref_prefix = f"exercise:{exercise.id}"
-        refs = [f"{ref_prefix}:position", f"muscle:{exercise.primary_muscle_group}:7d"]
+        refs = [
+            f"{ref_prefix}:identity",
+            f"{ref_prefix}:position",
+            f"muscle:{exercise.primary_muscle_group}:load",
+        ]
         if exposures:
             refs.extend([f"{ref_prefix}:history", f"{ref_prefix}:forecast_actual"])
         if prefatigue_direct or prefatigue_indirect:
@@ -1342,45 +1346,12 @@ def _session_coaching_context(
     }
     evidence_by_id = {item["session_exercise_id"]: item for item in exercise_evidence}
 
-    def guidance(exercise: ForgeSessionExercise) -> dict:
-        stored = exercise.coach_guidance if isinstance(exercise.coach_guidance, dict) else {}
-        status_value = stored.get("progression_status")
-        if status_value not in {"KEEP_PROGRESSING", "STAGNATED", "REGRESSED", "FIRST_SESSION"}:
-            status_value = "KEEP_PROGRESSING" if status_value == "INCREASE_WEIGHT" else "FIRST_SESSION"
-        return {"progression_status": status_value, "rationale": str(stored.get("rationale") or "")}
-
     def target(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
-        low_rep_signal = None
-        if set_data.set_type == "working" and exercise.equipment != "none":
-            exercise_data = evidence_by_id[str(exercise.id)]
-            latest_comparable = next((
-                historical_set
-                for exposure in exercise_data.get("recent_exposures", [])
-                for historical_set in exposure.get("sets", [])
-                if historical_set.get("set_index") == set_data.position + 1
-            ), None)
-            actual_weight = latest_comparable.get("actual_weight_kg") if isinstance(latest_comparable, dict) else None
-            actual_reps = latest_comparable.get("actual_reps") if isinstance(latest_comparable, dict) else None
-            raw_weights = (profile_by_exercise.get(exercise.id) or {}).get("available_weights_kg") or []
-            lower_weights = sorted({
-                float(weight) for weight in raw_weights
-                if isinstance(weight, (int, float)) and not isinstance(weight, bool)
-                and isinstance(actual_weight, (int, float)) and 0 < float(weight) < float(actual_weight)
-            })
-            if isinstance(actual_reps, int) and 1 <= actual_reps <= 3 and isinstance(actual_weight, (int, float)) and actual_weight > 0 and lower_weights:
-                low_rep_signal = {
-                    "source_weight_kg": float(actual_weight),
-                    "source_reps": actual_reps,
-                    "available_lower_weights_kg": lower_weights,
-                    "same_or_higher_load_allowed": False,
-                    "reason": "latest comparable working set reached momentary muscular failure after at most 3 repetitions",
-                }
         return {
             "session_set_id": str(set_data.id), "type": set_data.set_type,
             "set_index": set_data.position + 1,
             "reference_weight_kg": set_data.target_weight_kg, "reference_reps": set_data.target_reps,
             "requires_weight": exercise.equipment != "none",
-            "low_rep_signal": low_rep_signal,
         }
 
     return {
@@ -1400,7 +1371,6 @@ def _session_coaching_context(
             "machine_profile_name": exercise.machine_profile_name,
             "machine_profile_notes": str(profile_by_exercise.get(exercise.id, {}).get("notes") or ""),
             "notes": "\n".join(part for part in [exercise.notes or "", str(profile_by_exercise.get(exercise.id, {}).get("notes") or "")] if part),
-            "deterministic_guidance": guidance(exercise),
             "evidence": evidence_by_id[str(exercise.id)],
             "working_set_count": sum(1 for item in exercise.sets if item.set_type == "working"),
             "targets": [target(exercise, item) for item in exercise.sets],
@@ -2243,8 +2213,6 @@ async def _apply_isolated_session_exercise_coaching(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Exercise coaching could not be prepared safely.")
     exercise.addition_coaching = {
         "recommendation": decision["recommendation"],
-        "first_set_focus": decision["first_set_focus"],
-        "effort_hint": decision["effort_hint"],
         "evidence_refs": decision.get("evidence_refs") or [],
         "coach_evidence": generated.get("coach_evidence") or {},
     }

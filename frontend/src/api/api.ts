@@ -1034,8 +1034,6 @@ export interface ForgeSessionCoachGuidance {
 export interface ForgeSessionCoachDecision {
   session_exercise_id: string;
   recommendation: string;
-  first_set_focus: string;
-  effort_hint: string;
   evidence_refs: string[];
 }
 
@@ -1049,8 +1047,6 @@ export interface ForgeSessionStartCoaching {
 
 export interface ForgeSessionAdditionCoaching {
   recommendation: string;
-  first_set_focus: string;
-  effort_hint: string;
   evidence_refs: string[];
   coach_evidence: ForgeCoachEvidence;
 }

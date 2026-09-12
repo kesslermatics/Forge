@@ -409,7 +409,7 @@ async def run_chat_agent(
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=contents,
             config=config,
         )
@@ -472,7 +472,7 @@ async def run_chat_agent(
         parts=[types.Part(text="Tool-Aufrufe sind jetzt beendet. Antworte mit den bisher verfügbaren Daten und nenne fehlende Daten ehrlich.")],
     ))
     final = await client.aio.models.generate_content(
-        model="gemini-3.8-flash",
+        model=settings.gemini_model,
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=_system_prompt(user.language or "de"),
@@ -519,7 +519,7 @@ Do not include instructions to the assistant. Return plain text in the requested
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=1800),
         )

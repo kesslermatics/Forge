@@ -1,7 +1,7 @@
 """
-Google Gemini integration – generates the daily morning briefing.
+Google Gemini integration for coaching, planning, briefings and analysis.
 
-Uses gemini-3.8-flash for fast, cost-effective structured output.
+The production model is configured centrally via settings.gemini_model.
 """
 import asyncio
 import json
@@ -381,7 +381,7 @@ async def generate_daily_briefing(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -638,7 +638,7 @@ async def generate_session_review(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1209,7 +1209,7 @@ async def generate_workout_tips(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1601,7 +1601,7 @@ async def generate_chat_response(
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1718,7 +1718,7 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=system_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,
@@ -1838,7 +1838,7 @@ Do not claim the draft has been saved and do not include instructions outside th
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=f"Create an exercise draft from this request:\n{instructions}",
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -1909,7 +1909,7 @@ Do not claim the draft was saved.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=(f"Current Yazio goal: {yazio_goal or 'unavailable'}\nRequest: {instructions}\n"
                       f"Allowed exercise catalog: {catalog}"),
             config=types.GenerateContentConfig(
@@ -1976,14 +1976,8 @@ def _forge_coaching_text(value: object, limit: int, fallback: str) -> str:
 
 
 def _forge_meta_session_focus(value: object, fallback: str) -> str:
-    """Accept only a compact high-level briefing, never a set-by-set load list."""
-    if not isinstance(value, str):
-        return fallback
-    normalized = " ".join(value.split())
-    lower = normalized.lower()
-    if not normalized or any(token in lower for token in ("kg", "wdh", "×", "target_weight_kg", "session_set_id")):
-        return fallback
-    return normalized[:320]
+    """Normalize the high-level briefing without rejecting an otherwise valid plan."""
+    return _forge_coaching_text(value, 320, fallback)
 
 
 def _forge_finite_weight(value: object) -> float | None:
@@ -2011,91 +2005,8 @@ def _forge_set_proposal_defaults(session_context: dict) -> dict[str, dict]:
     return defaults
 
 
-_FORBIDDEN_FORGE_COACHING = re.compile(
-    r"(?:\bRIR\b|\bRPE\b|reps?\s+in\s+reserve|(?:wiederholung(?:en)?|reps?)\s+im\s+tank|"
-    r"(?:stoppe?n?|aufhören|beenden)[^.]{0,80}vor\s+(?:dem\s+)?(?:muskel)?versagen|"
-    r"vor\s+(?:dem\s+)?(?:muskel)?versagen[^.]{0,80}(?:stop|aufhör|beend)|"
-    r"(?:arbeitss(?:atz|ätze)|working\s+sets?)[^.]{0,80}nicht\s+bis\s+(?:zum\s+)?(?:muskel)?versagen|"
-    r"nicht\s+bis\s+(?:zum\s+)?(?:muskel)?versagen[^.]{0,80}(?:arbeitss(?:atz|ätze)|working\s+sets?)|"
-    r"(?:leave|keep)[^.]{0,40}reps?[^.]{0,20}reserve)",
-    re.IGNORECASE,
-)
-
-
-_FORBIDDEN_FORGE_VISIBLE_META = re.compile(r"\b(?:prognos\w*|forecast\w*)\b", re.IGNORECASE)
-_FORGE_COACH_VOICE = re.compile(r"\b(?:ich|wir|mein(?:e|en|em|er|es)?)\b", re.IGNORECASE)
-
-
-def _validate_forge_coaching_language(
-    text: str,
-    *,
-    forbid_minimum: bool = False,
-    visible_coach_text: bool = False,
-) -> None:
-    if _FORBIDDEN_FORGE_COACHING.search(text):
-        raise ValueError("Forge AI used forbidden effort-reserve language")
-    if forbid_minimum and re.search(r"\bmindestens\b", text, re.IGNORECASE):
-        raise ValueError("Forge AI framed forecast repetitions as a guaranteed minimum")
-    if visible_coach_text and _FORBIDDEN_FORGE_VISIBLE_META.search(text):
-        raise ValueError("Forge AI used analysis terminology in visible coach copy")
-    if visible_coach_text and not _FORGE_COACH_VOICE.search(text):
-        raise ValueError("Forge AI did not speak in a personal coach voice")
-
-
 def _forge_exercise_evidence(session_context: dict, exercise_id: str) -> dict:
     return next((item for item in (session_context.get("coach_evidence", {}).get("exercises") or []) if str(item.get("session_exercise_id")) == exercise_id), {})
-
-
-def _forge_validate_rep_forecast(target: dict, proposed_weight: float | None, proposed_reps: int, evidence: dict) -> None:
-    """Enforce personalized set-index/load rails from server-owned actuals only."""
-    if target.get("type") != "working":
-        return
-    low_rep_signal = target.get("low_rep_signal")
-    if isinstance(low_rep_signal, dict):
-        source_weight = _forge_finite_weight(low_rep_signal.get("source_weight_kg"))
-        lower_weights = [
-            float(weight) for weight in (low_rep_signal.get("available_lower_weights_kg") or [])
-            if _forge_finite_weight(weight) is not None
-        ]
-        if (
-            source_weight is None or proposed_weight is None or proposed_weight >= source_weight
-            or not any(math.isclose(proposed_weight, weight, rel_tol=1e-9, abs_tol=1e-6) for weight in lower_weights)
-        ):
-            raise ValueError("Forge AI kept or increased load after an extreme low-rep failure set")
-        # The server only enforces the necessary load direction and real machine
-        # availability. The AI owns the lower load and repetition target.
-        return
-    set_index = target.get("set_index")
-    historical = [
-        set_data
-        for exposure in (evidence.get("recent_exposures") or [])
-        for set_data in (exposure.get("sets") or [])
-        if set_data.get("set_index") == set_index and isinstance(set_data.get("actual_reps"), int)
-    ]
-    if not historical:
-        return
-    latest = historical[0]
-    latest_weight = latest.get("actual_weight_kg")
-    same_load = [item for item in historical if (item.get("actual_weight_kg") is None and proposed_weight is None) or (
-        isinstance(item.get("actual_weight_kg"), (int, float)) and proposed_weight is not None and math.isclose(float(item["actual_weight_kg"]), proposed_weight, rel_tol=1e-9, abs_tol=1e-6)
-    )]
-    if same_load:
-        newest_same = same_load[0]
-        allowed = int(newest_same["actual_reps"]) + 2
-        # A larger jump is only supported when this user has already achieved it
-        # at the same load, identity and set index in retained recent evidence.
-        allowed = max(allowed, max(int(item["actual_reps"]) for item in same_load))
-        if proposed_reps > allowed:
-            raise ValueError("Forge AI proposed an unsupported same-load repetition jump")
-        return
-    if isinstance(latest_weight, (int, float)) and proposed_weight is not None:
-        if proposed_weight > float(latest_weight) and proposed_reps > int(latest["actual_reps"]):
-            raise ValueError("Forge AI proposed more load and more repetitions without personal evidence")
-        if proposed_weight < float(latest_weight) and proposed_reps > int(latest["actual_reps"]) + 2:
-            raise ValueError("Forge AI proposed an unsupported repetition jump at an untested lower load")
-        return
-    if proposed_reps > int(latest["actual_reps"]) + 2:
-        raise ValueError("Forge AI proposed an unsupported repetition jump without comparable load evidence")
 
 
 def _validate_forge_session_coaching(candidate: object, session_context: dict) -> dict:
@@ -2120,50 +2031,28 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
         if exercise_id not in allowed_ids or exercise_id in seen:
             continue
         recommendation = _forge_coaching_text(item.get("recommendation"), 300, "")
-        first_set_focus = _forge_coaching_text(item.get("first_set_focus"), 160, "")
-        effort_hint = _forge_coaching_text(item.get("effort_hint"), 160, "")
-        if not recommendation or not first_set_focus or not effort_hint:
+        if not recommendation:
             raise ValueError("Forge AI returned an incomplete exercise decision")
-        _validate_forge_coaching_language(
-            recommendation,
-            forbid_minimum=True,
-            visible_coach_text=True,
-        )
-        for text in (first_set_focus, effort_hint):
-            _validate_forge_coaching_language(text, forbid_minimum=True)
         evidence = _forge_exercise_evidence(session_context, exercise_id)
         allowed_refs = set(evidence.get("allowed_evidence_refs") or [])
         raw_refs = item.get("evidence_refs")
-        if not isinstance(raw_refs, list):
-            raise ValueError("Forge AI omitted evidence references")
-        evidence_refs = list(dict.fromkeys(str(ref) for ref in raw_refs if str(ref) in allowed_refs))
+        evidence_refs = list(dict.fromkeys(
+            str(ref) for ref in raw_refs if str(ref) in allowed_refs
+        )) if isinstance(raw_refs, list) else []
         if not evidence_refs:
             raise ValueError("Forge AI did not cite valid server-owned evidence")
         decisions.append({
             "session_exercise_id": exercise_id,
             "recommendation": recommendation,
-            "first_set_focus": first_set_focus,
-            "effort_hint": effort_hint,
             "evidence_refs": evidence_refs,
         })
         seen.add(exercise_id)
     if seen != allowed_ids:
         raise ValueError("Forge AI did not analyze every exercise")
-    if len(decisions) >= 3:
-        non_history_decisions = sum(
-            any(not ref.endswith(":history") and not ref.endswith(":forecast_actual") for ref in decision["evidence_refs"])
-            for decision in decisions
-        )
-        if non_history_decisions < (len(decisions) + 1) // 2:
-            raise ValueError("Forge AI over-anchored exercise explanations on latest-set history")
 
     proposal_defaults = _forge_set_proposal_defaults(session_context)
     available_weights_by_set: dict[str, list[float]] = {}
-    target_by_set: dict[str, dict] = {}
-    evidence_by_set: dict[str, dict] = {}
     for exercise in session_context.get("session", {}).get("exercises", []):
-        exercise_id = str(exercise.get("session_exercise_id") or "")
-        exercise_evidence = _forge_exercise_evidence(session_context, exercise_id)
         profile = exercise.get("machine_profile")
         raw_weights = profile.get("available_weights_kg") if isinstance(profile, dict) else None
         available_weights = [
@@ -2174,8 +2063,6 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
             if target.get("session_set_id"):
                 target_id = str(target["session_set_id"])
                 available_weights_by_set[target_id] = available_weights
-                target_by_set[target_id] = target
-                evidence_by_set[target_id] = exercise_evidence
     proposals: dict[str, dict] = {}
     raw_proposals = candidate.get("set_proposals")
     if not isinstance(raw_proposals, list):
@@ -2206,9 +2093,6 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
             if matched_weight is None:
                 raise ValueError("Forge AI proposed a weight unavailable on the selected machine profile")
             proposed_weight = matched_weight
-        _forge_validate_rep_forecast(
-            target_by_set.get(set_id, {}), proposed_weight, proposed_reps, evidence_by_set.get(set_id, {}),
-        )
         proposals[set_id] = {
             **default,
             "target_weight_kg": proposed_weight,
@@ -2217,12 +2101,8 @@ def _validate_forge_session_coaching(candidate: object, session_context: dict) -
     if set(proposals) != set(proposal_defaults):
         raise ValueError("Forge AI did not propose every warm-up and working set")
 
-    headline = _forge_coaching_text(candidate.get("headline"), 80, "")
-    session_focus = _forge_meta_session_focus(candidate.get("session_focus"), "")
-    if not headline or not session_focus:
-        raise ValueError("Forge AI returned an invalid briefing")
-    _validate_forge_coaching_language(headline)
-    _validate_forge_coaching_language(session_focus)
+    headline = _forge_coaching_text(candidate.get("headline"), 80, "Dein Training heute")
+    session_focus = _forge_meta_session_focus(candidate.get("session_focus"), "Hypertrophie im Fokus: Setze die gewählten Ziele kontrolliert und konsequent um.")
     return {
         "coaching_source": "ai",
         "headline": headline,
@@ -2245,12 +2125,14 @@ async def generate_forge_session_start_coaching(session_context: dict, language:
 Every completed working set is interpreted as performed to momentary muscular failure. Warm-ups do not go to failure and
 never count as stimulus or progression sets. Never use RIR, RPE, reps-in-reserve, repetitions-in-the-tank language, or advise
 stopping a working set before failure. Return JSON only with {headline, session_focus, exercise_decisions, set_proposals}.
-Every exercise_decisions item must contain evidence_refs citing one or more allowed_evidence_refs from that exercise's
-server-owned coach_evidence, and its recommendation must concretely explain those cited facts. Return exactly one
-exercise_decisions item for every provided session_exercise_id and exactly one set_proposals item for every provided
-session_set_id, including every warm-up. Each set proposal contains target_weight_kg and an integer target_reps from 1 to
-200. Those are coaching targets, never guaranteed minimums. Never use "mindestens" in recommendation, first_set_focus or
-effort_hint. Bounds are technical validation only; never infer fixed exercise-, equipment- or muscle-specific rep ranges.
+Return exactly one exercise_decisions item with {session_exercise_id, recommendation, evidence_refs} for every provided
+session_exercise_id and exactly one set_proposals item for every provided session_set_id, including every warm-up.
+Every decision must cite one or more supplied allowed_evidence_refs that genuinely support the load/rep choice, and the
+recommendation must explain the relevant fact naturally. The exercise identity itself is valid evidence when biomechanics,
+stability, skill demand, isolation or loading granularity drive the choice. Do not cite position, volume, nutrition or latest
+history merely to fill a quota; omit irrelevant facts and choose the strongest basis for this exercise. Each set proposal
+contains target_weight_kg and an integer target_reps from 1 to 200. Those are coaching targets, never guaranteed minimums.
+Bounds are technical validation only; never infer fixed exercise-, equipment- or muscle-specific rep ranges.
 
 Use only server-owned coach_evidence for personalized claims. Compare unchanged coach_suggested values with actual values
 to say whether a prior coach target was met, missed or exceeded; never substitute target values. Consider exact exercise/profile
@@ -2266,18 +2148,14 @@ and a stable machine movement is not coached like a technically demanding free-w
 may guide your decision, but never invent user history, pain, technique quality or equipment facts. Do not apply one universal
 rep target and do not rely on fixed exercise-category rep ranges; choose the concrete target from this exercise and this user.
 
-YOU choose every weight and repetition target inside the server rails. Base the decision on the full selected machine_profile
-and evidence for that exact identity. Treat loading_system, load_basis and available_weights_kg as authoritative. When
-available_weights_kg is non-empty, choose one exact listed weight. When it is empty, notes may describe increments. If a
-working-set target contains low_rep_signal, the latest comparable failure set ended after at most 3 repetitions. You MUST
-choose one weight from low_rep_signal.available_lower_weights_kg; you decide which lower weight and the repetition target
-using exercise science, the concrete exercise identity and the user's full evidence. The server has not calculated a target
-for you. Treat this as a necessary load-direction rail, not as a fixed rep range.
-At the same load and set index otherwise, stay close to the newest comparable actual. A jump such as 6 to 10 is allowed only if recent
-server-owned evidence shows that same user, identity, load and set index already achieved at least 10. At a higher load, do
-not unrealistically exceed the latest reps; use personal load-change evidence when present, otherwise be conservative. Do
-not transfer history between profiles. With no matching history, make a conservative first forecast from supplied references
-and profile facts. Never invent an ID, add a set or remove a set.
+YOU choose every weight and repetition target using your exercise-science judgment and the complete supplied context.
+Base the decision on the selected machine_profile and evidence for that exact identity. Treat loading_system, load_basis and
+available_weights_kg as authoritative technical facts. When available_weights_kg is non-empty, choose one exact listed
+weight. When it is empty, notes may describe increments. You may increase, hold or reduce load and may change repetitions
+in either direction whenever that is the best hypertrophy decision for this concrete exercise and user. Interpret very low
+or high repetitions scientifically rather than applying a universal rule. Do not transfer history between profiles. With no
+matching history, make a reasoned first decision from supplied references and profile facts. Never invent an ID, add a set
+or remove a set.
 
 Write fresh, natural German. headline: energetic and at most 8 words. session_focus: 2–3 motivating sentences, roughly
 200–320 characters, explaining today's hypertrophy focus and what can improve versus matching history. recommendation is
@@ -2285,16 +2163,20 @@ the only exercise-coaching text shown to the user: write one compact paragraph o
 characters. Speak as the user's coach in first person when describing your choice: for example "ich setze", "ich lasse",
 "ich erhöhe" or "ich nehme zurück". Never call it a prediction, forecast, prognosis or analysis; it is your coaching decision.
 
-You have editorial freedom. For each exercise independently choose the most decision-relevant one or two facts from its
-allowed evidence and decide how to explain them. You may lead with today's load, prior performance, time since exposure,
-frequency, exercise position, fatigue, achieved versus prior coach target, or another supplied fact. Latest-set history is one
-signal, not the default explanation. When the session contains at least three exercises, at least half of exercise_decisions
-must cite and concretely discuss a non-history evidence_ref such as muscle load/frequency, position or current prefatigue.
-Vary openings, rhythm, sentence count and emphasis across exercises in the same response. Do not force every exercise into a "last time ...
-therefore today ..." template, do not inventory all available data, and do not praise unless the evidence supports it.
+You have editorial freedom. For each exercise independently choose the facts that genuinely matter to the decision and
+explain only those. Position, recent frequency, rolling muscle volume, prefatigue, nutrition and latest-set history are optional
+signals, never mandatory talking points. Ignore them when they do not materially change the coaching decision. Latest-set
+history is one signal, not the default explanation. Vary openings, rhythm, sentence count and emphasis across exercises in
+the same response. Do not force every exercise into a "last time ... therefore today ..." template and do not inventory all
+available data. Separate substance from style: first ground the choice in the cited user fact or exercise-science reason,
+then you may deliver it with bold, playful bro-science energy. Phrases such as "wir sprengen heute die Wiederholungsgrenze",
+"die Brust wird brennen" or "wir zwingen den Rücken zum Wachstum" are welcome as motivational rhetoric. Never present that
+rhetoric as measured physiology, and never turn it into invented user history, pain, technique or equipment facts.
 Be concise, direct and human. Do not use headings, bullet points, labels, meta-analysis, or repeat the general failure rule in
-recommendation. Keep first_set_focus and effort_hint valid for the internal contract at most 160 characters each; they are
-not user-facing. effort_hint must still state that working sets reach momentary muscular failure and distinguish warm-ups.
+recommendation. Before returning JSON, silently perform a second scientific quality pass: verify each load/rep choice against
+the concrete exercise identity, cited evidence and full user context; confirm that the cited facts truly support the decision;
+check that no universal progression heuristic drove the choice; remove invented personal facts; and ensure every ID and
+machine weight is technically valid. Return only the final reviewed JSON.
 Be specific without generic safety disclaimers.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
@@ -2331,7 +2213,7 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                 )
             try:
                 response = await client.aio.models.generate_content(
-                    model="gemini-3.8-flash",
+                    model=settings.gemini_model,
                     contents=json.dumps(request_payload, ensure_ascii=False),
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
@@ -2392,7 +2274,7 @@ Use IDs that appear exactly in the supplied session or catalog. Give at most one
             "recent_chat": history[-12:],
         }, ensure_ascii=False)
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -2441,7 +2323,7 @@ async def select_monthly_challenge_categories(
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=300),
         )
@@ -2495,7 +2377,7 @@ async def generate_monthly_challenge_checkin(
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.5, max_output_tokens=500),
         )

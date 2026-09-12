@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Google Gemini
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
 
     # Google Health API OAuth (optional until the integration is enabled in Google Cloud)
     google_health_client_id: str = os.getenv("GOOGLE_HEALTH_CLIENT_ID", "")

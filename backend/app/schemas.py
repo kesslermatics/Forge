@@ -436,8 +436,6 @@ class ForgeSessionCoachGuidanceResponse(BaseModel):
 class ForgeSessionCoachExerciseDecisionResponse(BaseModel):
     session_exercise_id: UUID
     recommendation: str = Field(..., max_length=360)
-    first_set_focus: str = Field(..., max_length=220)
-    effort_hint: str = Field(..., max_length=220)
     evidence_refs: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -451,8 +449,6 @@ class ForgeSessionStartCoachingResponse(BaseModel):
 
 class ForgeSessionAdditionCoachingResponse(BaseModel):
     recommendation: str = Field(..., max_length=360)
-    first_set_focus: str = Field(..., max_length=220)
-    effort_hint: str = Field(..., max_length=220)
     evidence_refs: list[str] = Field(default_factory=list, max_length=20)
     coach_evidence: dict = Field(default_factory=dict)
 
