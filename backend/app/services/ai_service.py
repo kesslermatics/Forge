@@ -2071,22 +2071,15 @@ def _forge_coaching_fallback(session_context: dict) -> dict:
         if isinstance(latest_set, dict):
             actual_label = format_load(latest_set.get("actual_weight_kg"), latest_set.get("actual_reps"))
             suggested_label = format_load(latest_set.get("coach_suggested_weight_kg"), latest_set.get("coach_suggested_reps"))
-            recommendation = f"Bei {exercise_name} bleibt die Prognose nah an der letzten vergleichbaren Leistung: tatsächlich {actual_label}"
+            recommendation = f"Letztes Mal hast du bei {exercise_name} {actual_label} geschafft"
             evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:history")
             if latest_set.get("coach_suggested_reps") is not None:
-                recommendation += f" gegenüber der damaligen KI-Prognose {suggested_label}"
+                recommendation += f" – geplant waren {suggested_label}. Gute Grundlage"
                 evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:forecast_actual")
-            recommendation += f". Heutiges Startziel: {target_label}."
+            recommendation += f". Deshalb peilen wir heute {target_label} an und führen die Progression kontrolliert weiter."
         else:
-            recommendation = f"Für {exercise_name} ist dies der erste exakte Übungs-/Profilvergleich an Position {evidence.get('position') or 1}. Heutiges Startziel: {target_label}."
+            recommendation = f"Für {exercise_name} fehlt noch ein exakt vergleichbarer Verlauf. Deshalb setzen wir heute mit {target_label} einen sauberen Ausgangspunkt für die nächste Progression."
             evidence_refs.append(f"exercise:{exercise.get('session_exercise_id')}:position")
-        muscle_name = evidence.get("primary_muscle")
-        muscle = (session_context.get("coach_evidence", {}).get("muscles") or {}).get(muscle_name, {})
-        direct_7 = (muscle.get("direct_sets") or {}).get("7d")
-        indirect_7 = (muscle.get("indirect_sets") or {}).get("7d")
-        if direct_7 is not None and indirect_7 is not None:
-            recommendation += f" In 7 Tagen: {direct_7} direkte und {indirect_7} indirekte Arbeitssätze."
-            evidence_refs.append(f"muscle:{muscle_name}:7d")
         allowed_refs = set(evidence.get("allowed_evidence_refs") or [])
         evidence_refs = [ref for ref in evidence_refs if ref in allowed_refs]
         effort_hint = f"Alle Arbeitssätze bei {exercise_name} gehen bis zum momentanen Muskelversagen; Warm-ups enden bewusst davor."
@@ -2327,10 +2320,15 @@ not transfer history between profiles. With no matching history, make a conserva
 and profile facts. Never invent an ID, add a set or remove a set.
 
 Write fresh, natural German. headline: energetic and at most 8 words. session_focus: 2–3 motivating sentences, roughly
-200–320 characters, explaining today's hypertrophy focus and what can improve versus matching history. recommendation:
-2–3 compact sentences, at most 300 characters, naming the exercise, forecast and concrete evidence. first_set_focus and
-effort_hint: one useful sentence each, at most 160 characters. effort_hint must state that working sets reach momentary
-muscular failure and must distinguish warm-ups. Be specific without generic safety disclaimers.""" + _language_instruction(language)
+200–320 characters, explaining today's hypertrophy focus and what can improve versus matching history. recommendation is
+the only exercise-coaching text shown to the user: write one compact, natural paragraph of 2–4 short sentences and at most
+300 characters. It must say what you chose and why, using concrete personal evidence such as the last comparable session,
+time since exposure, achieved versus forecast performance, frequency or justified load progression. Sound like a concise
+coach: acknowledge good prior work where supported, then state today's target and the reason to continue, hold or progress.
+Do not use headings, bullet points, labels, meta-analysis, or repeat the general failure rule in recommendation. Keep
+first_set_focus and effort_hint valid for the internal contract at most 160 characters each; they are not user-facing.
+effort_hint must still state that working sets reach momentary muscular failure and distinguish warm-ups. Be specific without
+generic safety disclaimers.""" + _language_instruction(language)
     try:
         client = genai.Client(api_key=settings.gemini_api_key)
         exercises = session_context.get("session", {}).get("exercises", [])

@@ -82,7 +82,6 @@ export default function ForgeSessionPage() {
   const [checkedSetId, setCheckedSetId] = useState<string | null>(null);
   const [openSetMenuId, setOpenSetMenuId] = useState<string | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [whyOpen, setWhyOpen] = useState(false);
   const [analyzingProfileId, setAnalyzingProfileId] = useState<string | null>(null);
   const [celebratingCompletion, setCelebratingCompletion] = useState(false);
   const [sessionActionConfirm, setSessionActionConfirm] = useState<'complete' | 'discard' | null>(null);
@@ -108,14 +107,6 @@ export default function ForgeSessionPage() {
     if (!session?.start_coaching) return null;
     return session.start_coaching.exercise_decisions.find((decision) => decision.session_exercise_id === activeExercise.id) ?? null;
   }, [session, activeExercise]);
-  const activeEvidence = useMemo(() => {
-    if (!activeExercise || !activeCoachDecision) return null;
-    const catalog = activeExercise.addition_coaching?.coach_evidence ?? session?.start_coaching?.coach_evidence;
-    if (!catalog || catalog.version !== 'v1') return null;
-    const exercise = catalog.exercises.find((item) => item.session_exercise_id === activeExercise.id);
-    if (!exercise) return null;
-    return { catalog, exercise, muscle: catalog.muscles[exercise.primary_muscle] ?? null };
-  }, [session, activeExercise, activeCoachDecision]);
   const setSessionSafe = (next: ForgeSession) => {
     sessionRef.current = next;
     setSession(next);
@@ -415,20 +406,7 @@ export default function ForgeSessionPage() {
           <div className="flex items-start gap-2.5">
             <BrainCircuit className="mt-0.5 shrink-0" size={16} style={{ color: SAND }} />
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-semibold" style={{ color: TEXT }}>Coach-Ansage</p>
-              <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{activeCoachDecision.recommendation}</p>
-              <p className="mt-2 text-[11px] leading-relaxed" style={{ color: TEXT }}><span style={{ color: SAND }}>Erster Satz:</span> {activeCoachDecision.first_set_focus}</p>
-              <p className="mt-2 text-[11px] font-semibold" style={{ color: SAND }}>Alle Arbeitssätze bis zum Muskelversagen. Warm-ups nicht.</p>
-              {activeEvidence && <div className="mt-3 border-t pt-3" style={{ borderColor: 'rgba(232,197,138,0.16)' }}>
-                <button type="button" onClick={() => setWhyOpen((open) => !open)} aria-expanded={whyOpen} className="tap flex w-full items-center justify-between text-left text-[11px] font-medium cursor-pointer" style={{ color: SAND }}><span>Warum diese Prognose?</span><ChevronDown size={13} className={whyOpen ? 'rotate-180' : ''} /></button>
-                {whyOpen && <div className="mt-2 space-y-1.5 text-[10px] leading-relaxed" style={{ color: DIM }}>
-                  {activeEvidence.exercise.recent_exposures[0]?.sets[0] && <p>Letzter vergleichbarer Satz: {displayLoad(activeEvidence.exercise.recent_exposures[0].sets[0].actual_weight_kg, activeEvidence.exercise.recent_exposures[0].sets[0].actual_reps, activeExercise.equipment)} tatsächlich{activeEvidence.exercise.recent_exposures[0].sets[0].coach_suggested_reps != null ? ` vs. KI-Prognose ${displayLoad(activeEvidence.exercise.recent_exposures[0].sets[0].coach_suggested_weight_kg, activeEvidence.exercise.recent_exposures[0].sets[0].coach_suggested_reps, activeExercise.equipment)}` : ''}.</p>}
-                  {activeEvidence.exercise.days_since_same_exposure != null && <p>Exakt gleiche Übung und Profil zuletzt vor {activeEvidence.exercise.days_since_same_exposure} Tagen.</p>}
-                  {activeEvidence.muscle && <p>{activeEvidence.exercise.primary_muscle}: {activeEvidence.muscle.direct_sets['7d']} direkte und {activeEvidence.muscle.indirect_sets['7d']} indirekte Arbeitssätze in 7 Tagen · heute die {activeEvidence.muscle.sessions.current_session_ordinal_7d}. Exposition.</p>}
-                  <p>Übungsposition {activeEvidence.exercise.position}; Vorermüdung: {activeEvidence.exercise.current_prefatigue.direct_working_sets} direkte und {activeEvidence.exercise.current_prefatigue.indirect_working_sets} indirekte Arbeitssätze davor.</p>
-                  {(() => { const trend = activeEvidence.catalog.nutrition.yazio?.rolling?.['14d']; return trend && Number(trend.logged_days ?? 0) >= 4 ? <p>Yazio 14 Tage: {trend.logged_days} protokollierte Tage{trend.average_calories != null ? ` · Ø ${trend.average_calories} kcal` : ''}{trend.average_protein_g != null ? ` · Ø ${trend.average_protein_g} g Protein` : ''}. Nur Hintergrundsignal.</p> : null; })()}
-                </div>}
-              </div>}
+              <p className="text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.82)' }}>{activeCoachDecision.recommendation}</p>
             </div>
           </div>
         </aside>}
