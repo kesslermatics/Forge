@@ -10,9 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 from app.routes import auth, user
+from app.routes import coach_tools as coach_tools_router
 from app.routes import briefing as briefing_router
 from app.routes import forge as forge_router
 from app.routes import monthly_challenges as monthly_challenges_router
+from app.mcp_server import mcp, mcp_http_app
 from app.scheduler import start_scheduler, stop_scheduler
 
 # Configure logging
@@ -29,6 +31,7 @@ Base.metadata.create_all(bind=engine)
 # statements keep production constraints and indexes aligned without manual shell work.
 from sqlalchemy import text as _sql_text
 from migrate_add_google_health import STATEMENTS as _google_health_migrations
+from migrate_add_api_keys import STATEMENTS as _api_key_migrations
 from migrate_add_forge_course_plans import STATEMENTS as _forge_course_plan_migrations
 from migrate_add_forge_plan_images import STATEMENTS as _forge_plan_image_migrations
 from migrate_archive_forge_machine_profiles import STATEMENTS as _forge_machine_profile_archive_migrations
@@ -75,15 +78,20 @@ with engine.connect() as _conn:
         _conn.execute(_sql_text(stmt))
     for stmt in _google_health_migrations:
         _conn.execute(_sql_text(stmt))
+    for stmt in _api_key_migrations:
+        _conn.execute(_sql_text(stmt))
     _conn.commit()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown lifecycle – manages the APScheduler."""
-    start_scheduler()
-    yield
-    stop_scheduler()
+    """Manage the shared MCP transport and the background scheduler."""
+    async with mcp.session_manager.run():
+        start_scheduler()
+        try:
+            yield
+        finally:
+            stop_scheduler()
 
 
 # Initialize FastAPI app
@@ -114,9 +122,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Remote Streamable HTTP MCP endpoint. The mounted app authenticates every
+# request with a personal Forge API key sent as Authorization: Bearer <key>.
+app.mount("/mcp", mcp_http_app, name="mcp")
+
 # Include routers
 app.include_router(auth.router)
 app.include_router(user.router)
+app.include_router(coach_tools_router.router)
 app.include_router(briefing_router.router)
 app.include_router(forge_router.router)
 app.include_router(monthly_challenges_router.router)

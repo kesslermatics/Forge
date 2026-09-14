@@ -4,15 +4,18 @@ User routes for profile and API key management.
 from datetime import datetime, timedelta, timezone
 import secrets
 from urllib.parse import urlencode
+from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
-from app.models import GoogleHealthConnection, GoogleHealthOAuthState, GoogleHealthWorkoutExport, User
+from app.models import ApiKey, GoogleHealthConnection, GoogleHealthOAuthState, GoogleHealthWorkoutExport, User
 from app.schemas import (
+    ApiKeyCreate, ApiKeyCreatedResponse, ApiKeyListResponse, ApiKeyResponse,
     GoogleHealthConnectResponse, GoogleHealthStatusResponse,
     UserResponse,
     YazioCredentialsUpdate, YazioCredentialsResponse,
@@ -21,6 +24,7 @@ from app.schemas import (
     ProfileUpdate, ProfileResponse,
 )
 from app.dependencies import get_current_user
+from app.security import API_KEY_PREFIX, generate_api_key
 from app.encryption import encrypt_value
 from app.services.google_health_service import (
     GOOGLE_HEALTH_WRITE_SCOPE,
@@ -51,6 +55,67 @@ async def get_current_user_info(current_user: User = Depends(get_current_user), 
         language=current_user.language or "de",
         training_plan=current_user.training_plan,
     )
+
+
+def _api_key_response(api_key: ApiKey) -> ApiKeyResponse:
+    return ApiKeyResponse(
+        id=api_key.id,
+        name=api_key.name,
+        prefix=f"{API_KEY_PREFIX}{api_key.key_id}",
+        created_at=api_key.created_at,
+        last_used_at=api_key.last_used_at,
+        revoked_at=api_key.revoked_at,
+    )
+
+
+@router.get("/api-keys", response_model=ApiKeyListResponse)
+async def list_api_keys(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List key metadata. Plaintext secrets are never persisted or returned here."""
+    keys = db.query(ApiKey).filter(ApiKey.user_id == current_user.id).order_by(ApiKey.created_at.desc()).all()
+    return ApiKeyListResponse(items=[_api_key_response(item) for item in keys])
+
+
+@router.post("/api-keys", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
+async def create_api_key(
+    data: ApiKeyCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a non-expiring key and return its plaintext exactly once."""
+    for _ in range(3):
+        plaintext, key_id, secret_hash = generate_api_key()
+        stored_key = ApiKey(user_id=current_user.id, name=data.name, key_id=key_id, secret_hash=secret_hash)
+        db.add(stored_key)
+        try:
+            db.commit()
+            db.refresh(stored_key)
+            summary = _api_key_response(stored_key)
+            return ApiKeyCreatedResponse(**summary.model_dump(), api_key=plaintext)
+        except IntegrityError:
+            db.rollback()
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key could not be generated")
+
+
+@router.delete("/api-keys/{api_key_uuid}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_api_key(
+    api_key_uuid: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently revoke one current-user key. Revoked metadata remains auditable."""
+    stored_key = db.query(ApiKey).filter(
+        ApiKey.id == api_key_uuid,
+        ApiKey.user_id == current_user.id,
+    ).first()
+    if stored_key is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+    if stored_key.revoked_at is None:
+        stored_key.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/yazio", response_model=YazioCredentialsResponse)

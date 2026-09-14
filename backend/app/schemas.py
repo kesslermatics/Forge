@@ -5,7 +5,7 @@ from math import isfinite
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Any, Literal
 from uuid import UUID
-from datetime import date
+from datetime import date, datetime
 
 
 # ============ User Schemas ============
@@ -32,7 +32,7 @@ class UserResponse(BaseModel):
     height_cm: Optional[float] = None
     language: str = "de"
     training_plan: Optional[list[str]] = None
-    
+
     class Config:
         from_attributes = True
 
@@ -45,9 +45,40 @@ class UserInDB(BaseModel):
     hevy_api_key: Optional[str] = None
     yazio_email: Optional[str] = None
     yazio_password: Optional[str] = None
-    
+
     class Config:
         from_attributes = True
+
+
+class ApiKeyCreate(BaseModel):
+    """Create a named, non-expiring personal key."""
+    name: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("API key name must not be blank")
+        return normalized
+
+
+class ApiKeyResponse(BaseModel):
+    id: UUID
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+
+class ApiKeyCreatedResponse(ApiKeyResponse):
+    """Creation response; api_key is intentionally returned exactly once."""
+    api_key: str
+
+
+class ApiKeyListResponse(BaseModel):
+    items: list[ApiKeyResponse]
 
 
 # ============ Yazio Schemas ============

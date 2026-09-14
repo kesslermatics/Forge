@@ -12,15 +12,15 @@ load_dotenv()
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
+
     # Database
     database_url: str = os.getenv("DATABASE_URL", "")
-    
+
     # JWT Settings
     jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "")
     jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
-    access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
-    
+    access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
+
     # Encryption key for API credentials (Fernet key, 32 bytes base64)
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "")
 
@@ -34,10 +34,28 @@ class Settings(BaseSettings):
     google_health_redirect_uri: str = os.getenv("GOOGLE_HEALTH_REDIRECT_URI", "")
     frontend_url: str = os.getenv("FRONTEND_URL", "https://coach.kesslermatics.com")
 
+    # Public Streamable HTTP MCP endpoint and transport allowlists.
+    mcp_server_url: str = os.getenv(
+        "MCP_SERVER_URL",
+        "https://hevy-ai-coach-production.up.railway.app/mcp",
+    )
+    mcp_issuer_url: str = os.getenv(
+        "MCP_ISSUER_URL",
+        "https://hevy-ai-coach-production.up.railway.app",
+    )
+    mcp_allowed_hosts: str = os.getenv(
+        "MCP_ALLOWED_HOSTS",
+        "hevy-ai-coach-production.up.railway.app,localhost:*,127.0.0.1:*",
+    )
+    mcp_allowed_origins: str = os.getenv(
+        "MCP_ALLOWED_ORIGINS",
+        "https://coach.kesslermatics.com,http://localhost:*,http://127.0.0.1:*",
+    )
+
     # Private Forge progress-photo storage. In production this must be a mounted persistent volume.
     # Keep empty by default so uploads never silently use ephemeral container storage.
     photo_storage_dir: str = os.getenv("PHOTO_STORAGE_DIR", "")
-    
+
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -47,7 +65,7 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get application settings singleton."""
     settings = Settings()
-    
+
     # Validate critical settings
     if not settings.database_url:
         raise ValueError("DATABASE_URL environment variable is not set!")
@@ -57,7 +75,7 @@ def get_settings() -> Settings:
         raise ValueError("ENCRYPTION_KEY environment variable is not set!")
     if not settings.gemini_api_key:
         raise ValueError("GEMINI_API_KEY environment variable is not set!")
-    
+
     return settings
 
 

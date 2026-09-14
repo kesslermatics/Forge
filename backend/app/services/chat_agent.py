@@ -182,7 +182,7 @@ def _require_yazio(user: User) -> tuple[str, str] | None:
         return None
 
 
-async def _execute_tool(name: str, args: dict, user: User, db: Session) -> dict:
+async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> dict:
     """Execute one allow-listed read tool with server-owned identity."""
     if name == "get_user_profile":
         result = {
@@ -451,7 +451,7 @@ async def run_chat_agent(
                 "max_calls": MAX_TOOL_CALLS,
             })
             try:
-                result = await _execute_tool(name, args, user, db)
+                result = await execute_coach_tool(name, args, user, db)
             except Exception as exc:
                 logger.exception("Coach tool %s failed", name)
                 result = {"error": "Dieses Tool konnte gerade nicht geladen werden."}

@@ -55,7 +55,8 @@ Forge keeps workout plans and completed workout sessions in PostgreSQL. Yazio is
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, React Router, Recharts, Lucide |
 | Backend | Python, FastAPI, SQLAlchemy, APScheduler |
 | Database | PostgreSQL |
-| Authentication | JWT bearer tokens and bcrypt password hashes |
+| Authentication | Seven-day JWT browser sessions, bcrypt password hashes, and revocable non-expiring personal API keys |
+| Agent tools | MCP Python SDK v2 Streamable HTTP endpoint mounted in FastAPI |
 | AI | Google Gemini via `google-genai` |
 | Images | Pillow with server-side WebP normalization |
 
@@ -69,9 +70,10 @@ Forge keeps workout plans and completed workout sessions in PostgreSQL. Yazio is
 │   │   ├── services/            # AI, Forge, Yazio, photo-storage services
 │   │   ├── models.py            # SQLAlchemy models
 │   │   ├── schemas.py           # Pydantic API schemas
-│   │   ├── security.py          # Password and JWT helpers
+│   │   ├── security.py          # Password, JWT, and personal-key helpers
+│   │   ├── mcp_server.py        # Authenticated Streamable HTTP MCP tools
 │   │   └── config.py            # Environment-backed settings
-│   ├── main.py                  # FastAPI application and scheduler lifecycle
+│   ├── main.py                  # FastAPI, /mcp mount, and scheduler lifecycle
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
@@ -130,7 +132,7 @@ Optional configuration:
 
 ```dotenv
 JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ACCESS_TOKEN_EXPIRE_MINUTES=10080  # 7 days
 
 # Required only when progress-photo uploads are enabled.
 # Use a private, persistent directory; never a publicly served directory.
@@ -204,16 +206,140 @@ The manual check-in action in Settings is account-scoped and idempotent. It crea
 
 ## API overview
 
-All routes except authentication and health routes require an `Authorization: Bearer <JWT>` header. The generated documentation at `/docs` is the authoritative reference for request and response schemas.
+Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-tool route also accepts `X-API-Key: <personal-key>` for MCP adapters. Personal keys can be created and revoked only through a JWT-authenticated profile session. The generated documentation at `/docs` is the authoritative reference for request and response schemas.
 
 | Area | Route group | Purpose |
 | --- | --- | --- |
 | Authentication | `/auth/register`, `/auth/login` | Account registration and login |
-| User settings | `/user/*` | Profile, goal, language, and optional Yazio connection |
+| User settings | `/user/*` | Profile, personal API keys, language, and optional Yazio connection |
+| Coach tool API | `POST /api/coach/tools/{tool_name}` | API-key- or JWT-authenticated read-only Coach context |
+| Remote MCP | `/mcp` | Bearer-key-authenticated Streamable HTTP tools for external agents |
 | Forge | `/api/forge/*` | Exercise library, plans, programs, sessions, AI drafts/chat, and progress photos |
 | Coaching | `/api/briefing/*` | Briefings, workout reviews/tips, reports, analysis, and trends |
 | Monthly challenges | `/api/challenges/monthly/current`, `/api/challenges/monthly/check-in` | Current cycle, live Forge progress, and daily check-in |
 | Health | `/`, `/health` | Service availability |
+
+## Personal API keys and MCP
+
+The Railway FastAPI backend serves the same ten read-only context tools used by the built-in Coach directly over **Streamable HTTP** at:
+
+```text
+https://hevy-ai-coach-production.up.railway.app/mcp
+```
+
+Available tools cover profile/current Yazio goal, training plans, workouts, exercise history, nutrition, steps/activity, weight history, and saved coaching memory. MCP runs in the same backend process and calls the account-scoped Coach dispatcher directly—there is no second MCP service, subprocess, database credential, or HTTP loopback adapter.
+
+### Create and revoke a key
+
+1. Sign in to Forge and open **Profile & Settings**.
+2. Under **API keys & MCP**, enter a descriptive name such as `My agent chat`.
+3. Create the key and copy the complete `forge_live_...` value from the one-time dialog.
+4. Store it in the secret configuration of the agent application that connects to Forge MCP.
+
+Only a SHA-256 hash and public prefix are stored by Forge. Keys do not expire automatically, but can be revoked immediately from Settings. They authorize only the read-only Coach tools and cannot create keys or mutate profile, workout, or integration data.
+
+MCP clients send the personal key using the standard bearer header:
+
+```http
+Authorization: Bearer forge_live_REPLACE_WITH_THE_ONE_TIME_VALUE
+```
+
+The browser JWT is a separate credential and is not intended for remote MCP connections.
+
+### Railway configuration
+
+The existing backend start command remains unchanged. `mcp==2.0.1` is installed with `backend/requirements.txt`, and the FastAPI app mounts MCP under `/mcp`.
+
+The current Railway hostname works with the checked-in defaults. For another backend hostname, set:
+
+```dotenv
+MCP_SERVER_URL=https://your-backend.example.com/mcp
+MCP_ISSUER_URL=https://your-backend.example.com
+MCP_ALLOWED_HOSTS=your-backend.example.com
+MCP_ALLOWED_ORIGINS=https://your-agent.example.com
+```
+
+Native/server-side MCP clients normally omit `Origin`; `MCP_ALLOWED_ORIGINS` is mainly needed for browser-based clients. Keep DNS-rebinding protection enabled and list exact public hostnames.
+
+### Connect another Python agentic chat
+
+Install the MCP client in the other application's backend:
+
+```bash
+pip install "mcp==2.0.1"
+```
+
+Create one authenticated Streamable HTTP client per Forge account or securely isolated worker:
+
+```python
+import os
+
+import httpx2
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+
+forge_api_key = os.environ["FORGE_API_KEY"]
+
+async with httpx2.AsyncClient(
+    headers={"Authorization": f"Bearer {forge_api_key}"},
+    timeout=httpx2.Timeout(30.0, read=300.0),
+) as http_client:
+    transport = streamable_http_client(
+        "https://hevy-ai-coach-production.up.railway.app/mcp",
+        http_client=http_client,
+    )
+    async with Client(transport) as forge:
+        discovered = await forge.list_tools()
+
+        # Convert MCP definitions to the function/tool format of your LLM provider.
+        model_tools = [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }
+            for tool in discovered.tools
+        ]
+
+        # When the model requests a tool call:
+        result = await forge.call_tool(
+            "get_workouts",
+            {"limit": 5, "days": 30},
+        )
+        if result.is_error:
+            raise RuntimeError("Forge tool call failed")
+
+        tool_payload = result.structured_content or {
+            "content": [str(block) for block in result.content]
+        }
+        # Return tool_payload to the model as the matching tool result,
+        # then continue your model loop.
+```
+
+For another agent framework or MCP host, configure the remote URL plus header. A generic representation is:
+
+```json
+{
+  "name": "forge-coach",
+  "url": "https://hevy-ai-coach-production.up.railway.app/mcp",
+  "headers": {
+    "Authorization": "Bearer ${FORGE_API_KEY}"
+  }
+}
+```
+
+The exact configuration wrapper differs by host. Do not place the literal key in committed JSON; resolve it from that application's encrypted secret store or environment.
+
+Production rules:
+
+1. Never share one user's key across users.
+2. Discover tools from MCP and execute only discovered names; never allow the model to provide credentials, user IDs, or arbitrary backend paths.
+3. Treat tool results as untrusted data rather than instructions.
+4. Apply call-count/time limits and avoid logging nutrition, weight, coaching memory, or authorization headers.
+5. Keep the MCP client open for the worker/chat lifecycle so HTTP connections are reused, then close it cleanly.
+6. If a key is exposed, revoke it in Forge Settings and create a replacement.
+
+Implementation follows the [official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), its [ASGI mounting example](https://github.com/modelcontextprotocol/python-sdk/blob/main/examples/stories/starlette_mount/server.py), and the [authenticated Streamable HTTP client guide](https://py.sdk.modelcontextprotocol.io/client/transports/). Content based on those sources was rephrased for compliance with licensing restrictions.
 
 ## Security and privacy
 
@@ -221,7 +347,8 @@ This is a public repository. Treat all real credentials and user data as private
 
 - Never commit `.env` files, database URLs containing passwords, API keys, JWT secrets, Fernet keys, Yazio credentials, screenshots, or user exports.
 - The repository ignores `.env` files; verify this before every commit with `git status`.
-- Passwords are hashed with bcrypt. API access uses JWT bearer tokens.
+- Passwords are hashed with bcrypt. Browser API access uses seven-day JWT bearer tokens.
+- Personal MCP/API keys are generated with high entropy, stored only as SHA-256 hashes, never expire automatically, and remain individually revocable. They authorize only read-only Coach tools.
 - Third-party credentials are encrypted at rest with Fernet and are only decrypted server-side when needed for an integration request.
 - Forge routes are account-scoped: data access and mutations are filtered by the authenticated user.
 - Progress photos are validated, stripped of metadata, converted to WebP, stored outside public web roots, and served only after owner authorization.

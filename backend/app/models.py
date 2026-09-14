@@ -2,7 +2,7 @@
 SQLAlchemy database models.
 """
 import uuid
-from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index, Table
+from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index, Table, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -29,9 +29,9 @@ forge_exercise_machine_profiles = Table(
 
 class User(Base):
     """User model for authentication and API key storage."""
-    
+
     __tablename__ = "users"
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username = Column(String(50), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
@@ -61,9 +61,33 @@ class User(Base):
     google_health_connection = relationship("GoogleHealthConnection", back_populates="user", cascade="all, delete-orphan", uselist=False)
     google_health_exports = relationship("GoogleHealthWorkoutExport", back_populates="user", cascade="all, delete-orphan")
     google_health_oauth_states = relationship("GoogleHealthOAuthState", back_populates="user", cascade="all, delete-orphan")
+    api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
+
+
+class ApiKey(Base):
+    """Non-expiring personal API key metadata; only the secret hash is persisted."""
+
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        CheckConstraint("length(btrim(name)) > 0", name="ck_api_keys_name_not_blank"),
+        CheckConstraint("length(secret_hash) = 64", name="ck_api_keys_hash_length"),
+        CheckConstraint("revoked_at IS NULL OR revoked_at >= created_at", name="ck_api_keys_revoked_after_creation"),
+        Index("ix_api_keys_user_created", "user_id", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    key_id = Column(String(16), nullable=False, unique=True, index=True)
+    secret_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="api_keys")
 
 
 class ChatConversation(Base):
@@ -184,7 +208,7 @@ class MonthlyChallengeCheckin(Base):
 
 class MorningBriefing(Base):
     """Stores the AI-generated daily morning briefing per user."""
-    
+
     __tablename__ = "morning_briefings"
     __table_args__ = (
         UniqueConstraint("user_id", "date", name="uq_user_date"),

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { createMonthlyChallengeCheckin, disconnectGoogleHealth, getGoogleHealthStatus, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
-import type { GoogleHealthStatus, UserInfo } from '../api/api';
-import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Sparkles, Dumbbell, Unplug } from 'lucide-react';
+import { createMonthlyChallengeCheckin, createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
+import type { GoogleHealthStatus, PersonalApiKey, UserInfo } from '../api/api';
+import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Sparkles, Dumbbell, KeyRound, Plus, Trash2, Unplug } from 'lucide-react';
+import ApiKeyCreatedDialog from './ApiKeyCreatedDialog';
+import ConfirmDialog from './ConfirmDialog';
 import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
 
@@ -33,6 +35,14 @@ export default function SettingsPage() {
     const [loadingGoogleHealth, setLoadingGoogleHealth] = useState(true);
     const [changingGoogleHealth, setChangingGoogleHealth] = useState(false);
     const [googleHealthMsg, setGoogleHealthMsg] = useState<Feedback>(null);
+    const [apiKeys, setApiKeys] = useState<PersonalApiKey[]>([]);
+    const [apiKeyName, setApiKeyName] = useState('');
+    const [loadingApiKeys, setLoadingApiKeys] = useState(true);
+    const [creatingApiKey, setCreatingApiKey] = useState(false);
+    const [revokingApiKeyId, setRevokingApiKeyId] = useState<string | null>(null);
+    const [createdApiKey, setCreatedApiKey] = useState<string | null>(null);
+    const [pendingRevoke, setPendingRevoke] = useState<PersonalApiKey | null>(null);
+    const [apiKeyMsg, setApiKeyMsg] = useState<Feedback>(null);
 
     useEffect(() => {
         void (async () => {
@@ -52,6 +62,21 @@ export default function SettingsPage() {
             window.history.replaceState({}, '', window.location.pathname);
         }
     }, []);
+
+    useEffect(() => {
+        let active = true;
+        void (async () => {
+            try {
+                const response = await listPersonalApiKeys();
+                if (active) setApiKeys(response.items);
+            } catch (caught: unknown) {
+                if (active) setApiKeyMsg({ type: 'error', text: caught instanceof Error ? caught.message : (lang === 'de' ? 'API-Schlüssel konnten nicht geladen werden.' : 'API keys could not be loaded.') });
+            } finally {
+                if (active) setLoadingApiKeys(false);
+            }
+        })();
+        return () => { active = false; };
+    }, [lang]);
 
     useEffect(() => {
         if (!user) return;
@@ -121,6 +146,36 @@ export default function SettingsPage() {
         } finally { setChangingGoogleHealth(false); }
     };
 
+    const handleCreateApiKey = async (event: React.FormEvent) => {
+        event.preventDefault();
+        const name = apiKeyName.trim();
+        if (!name) return;
+        setApiKeyMsg(null); setCreatingApiKey(true);
+        try {
+            const created = await createPersonalApiKey(name);
+            const { api_key, ...summary } = created;
+            setApiKeys((current) => [summary, ...current]);
+            setApiKeyName('');
+            setCreatedApiKey(api_key);
+            setApiKeyMsg({ type: 'success', text: t('settings.apiKeyCreated') });
+        } catch (caught: unknown) {
+            setApiKeyMsg({ type: 'error', text: caught instanceof Error ? caught.message : t('settings.apiKeyCreateFailed') });
+        } finally { setCreatingApiKey(false); }
+    };
+
+    const handleRevokeApiKey = async () => {
+        if (!pendingRevoke) return;
+        setApiKeyMsg(null); setRevokingApiKeyId(pendingRevoke.id);
+        try {
+            await revokePersonalApiKey(pendingRevoke.id);
+            setApiKeys((current) => current.map((item) => item.id === pendingRevoke.id ? { ...item, revoked_at: new Date().toISOString() } : item));
+            setPendingRevoke(null);
+            setApiKeyMsg({ type: 'success', text: t('settings.apiKeyRevokedSuccess') });
+        } catch (caught: unknown) {
+            setApiKeyMsg({ type: 'error', text: caught instanceof Error ? caught.message : t('settings.apiKeyRevokeFailed') });
+        } finally { setRevokingApiKeyId(null); }
+    };
+
     const logout = () => { logoutUser(); navigate('/login'); };
 
     return <div className="space-y-5">
@@ -146,6 +201,13 @@ export default function SettingsPage() {
 
         <Card icon={<Shield size={15} style={{ color: SAND }} />} title={t('settings.account')}><div className="grid grid-cols-2 gap-4 text-[13px]"><div><p style={{ color: TEXT_DIM }}>{t('settings.username')}</p><p className="mt-0.5 font-medium" style={{ color: '#f2ece0' }}>{user?.username}</p></div><div><p style={{ color: TEXT_DIM }}>Account</p><p className="mt-0.5 font-mono text-[11px] truncate" style={{ color: '#f2ece0' }}>{user?.id}</p></div></div></Card>
 
+        <Card icon={<KeyRound size={15} style={{ color: SAND }} />} title={t('settings.apiKeysTitle')}>
+            <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>{t('settings.apiKeysDesc')}</p>
+            <form onSubmit={handleCreateApiKey} className="flex flex-col gap-2 sm:flex-row"><label className="sr-only" htmlFor="api-key-name">{t('settings.apiKeyName')}</label><input id="api-key-name" value={apiKeyName} onChange={(event) => setApiKeyName(event.target.value)} maxLength={100} required placeholder={t('settings.apiKeyNamePlaceholder')} className="input-forge min-w-0 flex-1 text-[13px]" /><button type="submit" disabled={creatingApiKey || !apiKeyName.trim()} className="btn-forge shrink-0 text-[13px] disabled:opacity-50">{creatingApiKey ? <><Loader2 size={15} className="animate-spin" />{t('settings.apiKeyCreating')}</> : <><Plus size={15} />{t('settings.apiKeyCreate')}</>}</button></form>
+            <FeedMsg msg={apiKeyMsg} />
+            {loadingApiKeys ? <p className="text-[12px]" style={{ color: TEXT_DIM }}>{t('settings.apiKeysLoading')}</p> : apiKeys.length === 0 ? <p className="text-[12px]" style={{ color: TEXT_DIM }}>{t('settings.apiKeysEmpty')}</p> : <div className="space-y-2">{apiKeys.map((item) => <div key={item.id} className="rounded-2xl p-3" style={{ background: 'rgba(255,247,235,0.025)', border: `1px solid ${CARD_BORDER}`, opacity: item.revoked_at ? 0.58 : 1 }}><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="truncate text-[13px] font-medium" style={{ color: '#f2ece0' }}>{item.name}</p><span className="rounded-full px-2 py-0.5 text-[9px]" style={{ color: item.revoked_at ? '#fca5a5' : '#34d399', background: item.revoked_at ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)' }}>{item.revoked_at ? t('settings.apiKeyRevoked') : t('settings.apiKeyNeverExpires')}</span></div><code className="mt-1 block truncate font-mono text-[10px]" style={{ color: TEXT_DIM }}>{item.prefix}…</code><p className="mt-1 text-[10px]" style={{ color: TEXT_DIM }}>{item.last_used_at ? `${t('settings.apiKeyLastUsed')}: ${new Date(item.last_used_at).toLocaleString(lang === 'de' ? 'de-DE' : 'en-GB')}` : t('settings.apiKeyNeverUsed')}</p></div>{!item.revoked_at && <button type="button" onClick={() => setPendingRevoke(item)} disabled={revokingApiKeyId === item.id} className="tap rounded-xl p-2 disabled:opacity-40" aria-label={`${t('settings.apiKeyRevoke')}: ${item.name}`} style={{ color: '#fca5a5', border: '1px solid rgba(248,113,113,0.18)' }}>{revokingApiKeyId === item.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}</button>}</div></div>)}</div>}
+        </Card>
+
         <Card icon={<Globe size={15} style={{ color: SAND }} />} title={t('settings.languageTitle')}><p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>{t('settings.languageDesc')}</p><div className="flex gap-3">{(['de', 'en'] as Lang[]).map((item) => <button key={item} onClick={() => void handleLangChange(item)} className="tap flex-1 py-2.5 px-4 rounded-2xl text-[13px] font-medium cursor-pointer border transition-all" style={{ background: lang === item ? `${SAND}18` : 'rgba(255,247,235,0.04)', borderColor: lang === item ? `${SAND}44` : CARD_BORDER, color: lang === item ? SAND : TEXT_DIM }}>{item === 'de' ? '🇩🇪 Deutsch' : '🇬🇧 English'}</button>)}</div><FeedMsg msg={langMsg} /></Card>
 
         <Card icon={<Dumbbell size={15} style={{ color: SAND }} />} title="Google Health" badge={<ConnBadge connected={!!googleHealth?.connected} />}>
@@ -155,6 +217,8 @@ export default function SettingsPage() {
         <Card icon={<UtensilsCrossed size={15} style={{ color: SAND }} />} title={t('settings.yazioTitle')} badge={<ConnBadge connected={!!user?.has_yazio} />}><p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>{t('settings.yazioDesc')}</p><form onSubmit={handleSaveYazio} className="space-y-3"><input type="email" className="input-forge text-[13px]" placeholder={user?.has_yazio ? t('settings.yazioEmailPlaceholder') : 'email@yazio.com'} value={yazioEmail} onChange={(event) => setYazioEmail(event.target.value)} required /><div className="relative"><input type={showYazioPw ? 'text' : 'password'} className="input-forge text-[13px] pr-11" placeholder={user?.has_yazio ? t('settings.yazioPasswordPlaceholder') : 'Passwort'} value={yazioPassword} onChange={(event) => setYazioPassword(event.target.value)} required /><button type="button" onClick={() => setShowYazioPw((current) => !current)} className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer" style={{ color: TEXT_DIM }}>{showYazioPw ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><FeedMsg msg={yazioMsg} /><button type="submit" disabled={savingYazio} className="btn-forge w-full text-[14px]">{savingYazio ? t('settings.saving') : user?.has_yazio ? t('settings.updateYazio') : t('settings.saveYazio')}</button></form></Card>
 
         <section className="pt-2 pb-3"><button onClick={logout} className="tap w-full rounded-2xl px-4 py-3.5 text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.18)' }}><LogOut size={16} />Abmelden</button></section>
+        <ApiKeyCreatedDialog apiKey={createdApiKey} onClose={() => setCreatedApiKey(null)} />
+        <ConfirmDialog open={pendingRevoke !== null} title={t('settings.apiKeyRevokeTitle')} description={pendingRevoke ? t('settings.apiKeyRevokeDesc', { name: pendingRevoke.name }) : ''} confirmLabel={t('settings.apiKeyRevoke')} onConfirm={() => void handleRevokeApiKey()} onCancel={() => setPendingRevoke(null)} busy={revokingApiKeyId !== null} destructive />
     </div>;
 }
 

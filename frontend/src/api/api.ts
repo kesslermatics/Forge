@@ -91,6 +91,31 @@ export interface UserInfo {
 
 export const getMe = () => apiRequest<UserInfo>('/user/me');
 
+export interface PersonalApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreatedPersonalApiKey extends PersonalApiKey {
+  api_key: string;
+}
+
+export const listPersonalApiKeys = () =>
+  apiRequest<{ items: PersonalApiKey[] }>('/user/api-keys');
+
+export const createPersonalApiKey = (name: string) =>
+  apiRequest<CreatedPersonalApiKey>('/user/api-keys', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+
+export const revokePersonalApiKey = (id: string) =>
+  apiRequest<void>(`/user/api-keys/${id}`, { method: 'DELETE' });
+
 export const saveYazioCredentials = (yazio_email: string, yazio_password: string) =>
   apiRequest<{ message: string; has_yazio: boolean }>('/user/yazio', {
     method: 'POST',
