@@ -1546,12 +1546,50 @@ def _plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> t
                 "label": label,
                 "detail": "Exercise notes differ from the current source plan.",
             })
-        if _session_set_signature(session_exercise) != _plan_set_signature(plan_exercise):
-            changes.append({
-                "kind": "sets_changed",
-                "label": label,
-                "detail": "Set order, type, target repetitions, or notes differ from the current source plan.",
-            })
+        session_sets = sorted(session_exercise.sets, key=lambda item: item.position)
+        plan_sets = sorted(plan_exercise.sets, key=lambda item: item.position)
+        for position in range(max(len(session_sets), len(plan_sets))):
+            session_set = session_sets[position] if position < len(session_sets) else None
+            plan_set = plan_sets[position] if position < len(plan_sets) else None
+            set_type = session_set.set_type if session_set is not None else plan_set.set_type
+            set_name = "Aufwärmsatz" if set_type == "warmup" else "Arbeitssatz"
+            set_label = f"{label} · {set_name} {position + 1}"
+            if session_set is None:
+                changes.append({
+                    "kind": "sets_changed",
+                    "label": set_label,
+                    "detail": "Dieser Satz wird aus dem Plan entfernt.",
+                })
+                continue
+            if plan_set is None:
+                changes.append({
+                    "kind": "sets_changed",
+                    "label": set_label,
+                    "detail": "Dieser Satz wird zum Plan hinzugefügt.",
+                })
+                continue
+
+            details: list[str] = []
+            if session_set.set_type != plan_set.set_type:
+                previous_type = "Aufwärmsatz" if plan_set.set_type == "warmup" else "Arbeitssatz"
+                details.append(f"Satztyp: {previous_type} → {set_name}")
+            plan_reps = plan_set.coach_suggested_reps if plan_set.coach_suggested_reps is not None else plan_set.current_reps
+            if session_set.target_reps != plan_reps:
+                previous_reps = f"{plan_reps} Wdh." if plan_reps is not None else "keine Vorgabe"
+                next_reps = f"{session_set.target_reps} Wdh." if session_set.target_reps is not None else "keine Vorgabe"
+                details.append(f"Ziel-Wdh.: {previous_reps} → {next_reps}")
+            plan_note = (plan_set.note or "").strip()
+            session_note = (session_set.note or "").strip()
+            if session_note != plan_note:
+                previous_note = f"„{plan_note}“" if plan_note else "keine Notiz"
+                next_note = f"„{session_note}“" if session_note else "keine Notiz"
+                details.append(f"Notiz: {previous_note} → {next_note}")
+            if details:
+                changes.append({
+                    "kind": "sets_changed",
+                    "label": set_label,
+                    "detail": " · ".join(details),
+                })
 
     can_apply = session.status == "active"
     for session_exercise in session.exercises:
