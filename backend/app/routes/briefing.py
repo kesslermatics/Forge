@@ -532,28 +532,25 @@ async def get_weight_history(
 ):
     """
     Return the user's weight history (last N days).
-    Data is collected from Yazio on each briefing generation.
-    If no entry for today exists, tries to seed from Yazio on the fly.
+
+    Each dashboard load fetches today's Yazio summary first, so the displayed
+    current weight reflects a same-day entry instead of only the morning sync.
     """
     from datetime import timedelta
     today_date = date.today()
     cutoff = today_date - timedelta(days=days)
 
-    # Try to seed today's weight if missing
-    today_entry = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == current_user.id, WeightEntry.date == today_date)
-        .first()
-    )
-    if not today_entry and current_user.yazio_email and current_user.yazio_password:
+    # Refresh today's weight on demand; _log_weight_entry updates the existing
+    # daily snapshot only when Yazio reports a meaningfully different value.
+    if current_user.yazio_email and current_user.yazio_password:
         try:
             from app.services.yazio_service import fetch_yazio_summary
             email = decrypt_value(current_user.yazio_email)
             password = decrypt_value(current_user.yazio_password)
-            yazio_data = await fetch_yazio_summary(email, password)
+            yazio_data = await fetch_yazio_summary(email, password, target_date=today_date)
             _log_weight_entry(current_user.id, yazio_data, db)
         except Exception as exc:
-            logger.debug("Could not seed weight from Yazio: %s", exc)
+            logger.debug("Could not refresh weight from Yazio: %s", exc)
 
     entries = (
         db.query(WeightEntry)
