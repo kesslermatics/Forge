@@ -13,7 +13,19 @@ from app.models import GoogleHealthConnection, GoogleHealthWorkoutExport, ForgeW
 
 GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_HEALTH_EXERCISE_URL = "https://health.googleapis.com/v4/users/me/dataTypes/exercise/dataPoints"
+GOOGLE_HEALTH_STEPS_URL = "https://health.googleapis.com/v4/users/me/dataTypes/steps/dataPoints"
+GOOGLE_HEALTH_SLEEP_URL = "https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints"
+
+# Legacy constant kept for backwards compat — new connections request all three scopes.
 GOOGLE_HEALTH_WRITE_SCOPE = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.writeonly"
+GOOGLE_HEALTH_READ_ACTIVITY_SCOPE = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly"
+GOOGLE_HEALTH_READ_SLEEP_SCOPE = "https://www.googleapis.com/auth/googlehealth.sleep.readonly"
+
+GOOGLE_HEALTH_SCOPES = " ".join([
+    GOOGLE_HEALTH_WRITE_SCOPE,
+    GOOGLE_HEALTH_READ_ACTIVITY_SCOPE,
+    GOOGLE_HEALTH_READ_SLEEP_SCOPE,
+])
 
 
 class GoogleHealthConfigurationError(RuntimeError):
@@ -176,3 +188,167 @@ async def export_completed_session(db: Session, session: ForgeWorkoutSession) ->
         db.commit()
         db.refresh(export)
     return export
+
+
+# ---------------------------------------------------------------------------
+# Read helpers
+# ---------------------------------------------------------------------------
+
+def connection_has_scope(connection: GoogleHealthConnection, scope: str) -> bool:
+    """Return True when the stored scope string includes the requested scope."""
+    return scope in (connection.scope or "")
+
+
+async def fetch_steps(
+    connection: GoogleHealthConnection,
+    db: Session,
+    target_date: "date | None" = None,
+) -> dict:
+    """Fetch step count and activity calories for *target_date* from Google Health.
+
+    Returns a dict with keys: available, date, steps, activity_kcal.
+    On auth / scope errors returns available=False with a reason string.
+    """
+    from datetime import date as _date  # local import to avoid circular at module level
+    if target_date is None:
+        target_date = _date.today()
+
+    if not connection_has_scope(connection, GOOGLE_HEALTH_READ_ACTIVITY_SCOPE):
+        return {
+            "available": False,
+            "reason": "Dein Google-Konto muss neu verbunden werden, um Schritte lesen zu können.",
+            "needs_reauth": True,
+        }
+
+    try:
+        token = await _access_token(connection, db)
+    except GoogleHealthAuthorizationError as exc:
+        return {"available": False, "reason": str(exc)}
+
+    # Google Health expects RFC 3339 day boundaries in UTC
+    start = f"{target_date.isoformat()}T00:00:00Z"
+    end   = f"{target_date.isoformat()}T23:59:59Z"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            GOOGLE_HEALTH_STEPS_URL,
+            params={"startTime": start, "endTime": end, "pageSize": 100},
+            headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
+        )
+
+    if response.is_error:
+        return {"available": False, "reason": "Google Health hat die Schritt-Anfrage abgelehnt."}
+
+    payload = response.json()
+    data_points = payload.get("dataPoints") or []
+
+    total_steps = 0
+    total_activity_kcal = 0.0
+    for point in data_points:
+        values = point.get("value") or {}
+        total_steps += int(values.get("steps", 0) or 0)
+        total_activity_kcal += float(values.get("activeEnergyBurned", 0) or 0)
+
+    return {
+        "available": True,
+        "source": "google_health",
+        "date": target_date.isoformat(),
+        "steps": total_steps,
+        "activity_kcal": round(total_activity_kcal, 1),
+    }
+
+
+async def fetch_sleep(
+    connection: GoogleHealthConnection,
+    db: Session,
+    target_date: "date | None" = None,
+) -> dict:
+    """Fetch sleep sessions for the night ending on *target_date* from Google Health.
+
+    A sleep night is queried as 18:00 the previous day → 12:00 the target day.
+    Returns a dict with keys: available, date, total_sleep_min, stages (list).
+    """
+    from datetime import date as _date, timedelta  # local import
+
+    if target_date is None:
+        target_date = _date.today()
+
+    if not connection_has_scope(connection, GOOGLE_HEALTH_READ_SLEEP_SCOPE):
+        return {
+            "available": False,
+            "reason": "Dein Google-Konto muss neu verbunden werden, um Schlafdaten lesen zu können.",
+            "needs_reauth": True,
+        }
+
+    try:
+        token = await _access_token(connection, db)
+    except GoogleHealthAuthorizationError as exc:
+        return {"available": False, "reason": str(exc)}
+
+    prev_day = target_date - timedelta(days=1)
+    start = f"{prev_day.isoformat()}T18:00:00Z"
+    end   = f"{target_date.isoformat()}T12:00:00Z"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            GOOGLE_HEALTH_SLEEP_URL,
+            params={"startTime": start, "endTime": end, "pageSize": 50},
+            headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
+        )
+
+    if response.is_error:
+        return {"available": False, "reason": "Google Health hat die Schlaf-Anfrage abgelehnt."}
+
+    payload = response.json()
+    data_points = payload.get("dataPoints") or []
+
+    if not data_points:
+        return {"available": True, "source": "google_health", "date": target_date.isoformat(), "total_sleep_min": 0, "stages": []}
+
+    STAGE_NAMES = {
+        "AWAKE": "awake",
+        "SLEEPING": "sleeping",
+        "OUT_OF_BED": "out_of_bed",
+        "LIGHT_SLEEP": "light",
+        "DEEP_SLEEP": "deep",
+        "REM_SLEEP": "rem",
+        "UNSPECIFIED": "unspecified",
+    }
+
+    stages = []
+    total_sleep_seconds = 0
+
+    for point in data_points:
+        interval = point.get("interval") or {}
+        values   = point.get("value") or {}
+        stage_raw = str(values.get("stage") or "SLEEPING")
+        stage_name = STAGE_NAMES.get(stage_raw, stage_raw.lower())
+
+        start_str = interval.get("startTime") or ""
+        end_str   = interval.get("endTime") or ""
+
+        try:
+            from datetime import datetime, timezone
+            t_start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            t_end   = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            duration_s = max(0, int((t_end - t_start).total_seconds()))
+        except (ValueError, TypeError):
+            duration_s = 0
+
+        if stage_name not in ("awake", "out_of_bed"):
+            total_sleep_seconds += duration_s
+
+        stages.append({
+            "stage": stage_name,
+            "start": start_str,
+            "end": end_str,
+            "duration_min": round(duration_s / 60, 1),
+        })
+
+    return {
+        "available": True,
+        "source": "google_health",
+        "date": target_date.isoformat(),
+        "total_sleep_min": round(total_sleep_seconds / 60, 1),
+        "stages": stages,
+    }

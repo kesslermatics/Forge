@@ -16,9 +16,16 @@ from google.genai import types
 from sqlalchemy.orm import Session
 
 from app.encryption import decrypt_value
-from app.models import ChatConversation, ChatMessage, MorningBriefing, User, WeightEntry, WorkoutReview
+from app.models import ChatConversation, ChatMessage, MorningBriefing, User, WeightEntry, WorkoutReview, GoogleHealthConnection
 from app.services.forge_session_adapter import completed_forge_workouts, forge_training_plan_context
 from app.services.yazio_service import fetch_yazio_summary, resolve_yazio_goal_context
+from app.services.google_health_service import (
+    fetch_steps as google_fetch_steps,
+    fetch_sleep as google_fetch_sleep,
+    connection_has_scope,
+    GOOGLE_HEALTH_READ_ACTIVITY_SCOPE,
+    GOOGLE_HEALTH_READ_SLEEP_SCOPE,
+)
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,6 +45,7 @@ TOOL_STATUS_TEXT = {
     "get_nutrition_day": "Ich lade deine Ernährung für diesen Tag.",
     "get_nutrition_range": "Ich vergleiche deine Ernährung über mehrere Tage.",
     "get_steps": "Ich prüfe deine Schritte und Aktivität.",
+    "get_sleep": "Ich schaue mir deine Schlafdaten an.",
     "get_weight_history": "Ich schaue mir deinen Gewichtsverlauf an.",
     "get_coaching_memory": "Ich rufe frühere Coach-Empfehlungen ab.",
 }
@@ -100,9 +108,16 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="get_steps",
-        description="Read Yazio steps and activity calories for one date in YYYY-MM-DD format.",
+        description="Read steps and activity calories for one date in YYYY-MM-DD format. Uses Google Health when connected (preferred), falls back to Yazio.",
         parameters_json_schema=_schema({
             "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"},
+        }),
+    ),
+    types.FunctionDeclaration(
+        name="get_sleep",
+        description="Read sleep duration and stage breakdown (light, deep, REM, awake) for the night ending on the given date. Requires Google Health connection.",
+        parameters_json_schema=_schema({
+            "date": {"type": "string", "description": "YYYY-MM-DD; omit for today (= last night)"},
         }),
     ),
     types.FunctionDeclaration(
@@ -239,21 +254,47 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
         return {"exercise_name": args.get("exercise_name"), "sessions": matches[:limit]}
 
     credentials = _require_yazio(user)
-    if name in {"get_nutrition_day", "get_steps"}:
+    if name == "get_steps":
+        target = _parse_date(args.get("date"), date.today())
+        # Prefer Google Health (more accurate, no Yazio dependency)
+        google_connection = db.query(GoogleHealthConnection).filter(
+            GoogleHealthConnection.user_id == user.id,
+            GoogleHealthConnection.status == "connected",
+        ).first()
+        if google_connection is not None and connection_has_scope(google_connection, GOOGLE_HEALTH_READ_ACTIVITY_SCOPE):
+            return await google_fetch_steps(google_connection, db, target)
+        # Fallback: Yazio
+        if credentials is None:
+            return {"available": False, "reason": "Weder Google Health (mit Aktivitäts-Scope) noch Yazio sind verbunden."}
+        data = await fetch_yazio_summary(*credentials, target_date=target)
+        if not data:
+            return {"available": False, "date": target.isoformat(), "reason": "Yazio-Daten konnten nicht geladen werden."}
+        return {
+            "available": True,
+            "source": "yazio",
+            "date": data.get("date", target.isoformat()),
+            "steps": data.get("steps", 0),
+            "activity_kcal": data.get("activity_kcal", 0),
+            "water_ml": data.get("water_ml", 0),
+        }
+
+    if name == "get_sleep":
+        target = _parse_date(args.get("date"), date.today())
+        google_connection = db.query(GoogleHealthConnection).filter(
+            GoogleHealthConnection.user_id == user.id,
+            GoogleHealthConnection.status == "connected",
+        ).first()
+        if google_connection is None:
+            return {"available": False, "reason": "Google Health ist nicht verbunden. Verbinde dein Google-Konto in den Einstellungen."}
+        return await google_fetch_sleep(google_connection, db, target)
+
+    if name == "get_nutrition_day":
         if credentials is None:
             return {"available": False, "reason": "Yazio ist nicht verbunden."}
         target = _parse_date(args.get("date"), date.today())
         data = await fetch_yazio_summary(*credentials, target_date=target)
         if not data:
             return {"available": False, "date": target.isoformat(), "reason": "Yazio-Daten konnten nicht geladen werden."}
-        if name == "get_steps":
-            return {
-                "available": True,
-                "date": data.get("date", target.isoformat()),
-                "steps": data.get("steps", 0),
-                "activity_kcal": data.get("activity_kcal", 0),
-                "water_ml": data.get("water_ml", 0),
-            }
         result = {
             "available": True,
             "date": data.get("date", target.isoformat()),

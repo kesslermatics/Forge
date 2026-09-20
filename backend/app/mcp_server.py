@@ -142,8 +142,22 @@ async def get_nutrition_range(
 
 @mcp.tool()
 async def get_steps(date: str | None = None) -> dict[str, Any]:
-    """Read steps, activity calories, and water for YYYY-MM-DD; omit date for today."""
+    """Read steps and activity calories for YYYY-MM-DD; omit date for today.
+
+    Uses Google Health when the account is connected with the activity read scope (preferred).
+    Falls back to Yazio if Google Health is unavailable.
+    """
     return await _call("get_steps", {"date": date} if date is not None else {})
+
+
+@mcp.tool()
+async def get_sleep(date: str | None = None) -> dict[str, Any]:
+    """Read sleep duration and stage breakdown (light, deep, REM, awake) for the night ending on YYYY-MM-DD.
+
+    Omit date for last night. Requires Google Health connection with sleep read scope.
+    Returns total_sleep_min and a list of stages with start/end times and duration_min.
+    """
+    return await _call("get_sleep", {"date": date} if date is not None else {})
 
 
 @mcp.tool()

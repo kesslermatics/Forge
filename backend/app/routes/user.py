@@ -27,6 +27,7 @@ from app.dependencies import get_current_user
 from app.security import API_KEY_PREFIX, generate_api_key
 from app.encryption import encrypt_value
 from app.services.google_health_service import (
+    GOOGLE_HEALTH_SCOPES,
     GOOGLE_HEALTH_WRITE_SCOPE,
     GoogleHealthAuthorizationError,
     GoogleHealthConfigurationError,
@@ -269,7 +270,7 @@ async def start_google_health_connection(current_user: User = Depends(get_curren
         "access_type": "offline",
         "include_granted_scopes": "true",
         "prompt": "consent",
-        "scope": GOOGLE_HEALTH_WRITE_SCOPE,
+        "scope": GOOGLE_HEALTH_SCOPES,
         "state": state,
     })
     return GoogleHealthConnectResponse(authorization_url=authorization_url)
