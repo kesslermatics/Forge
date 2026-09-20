@@ -299,9 +299,10 @@ async def fetch_sleep(
         return {"available": False, "reason": str(exc)}
 
     prev_day = target_date - timedelta(days=1)
-    # Sleep uses end_time filter (sleep-specific per Google Health API docs)
-    start = f"{prev_day.isoformat()}T18:00:00Z"
-    end   = f"{target_date.isoformat()}T12:00:00Z"
+    # Filter by end_time: sleep sessions that ended after prev_day 18:00 and before target_date 14:00 UTC
+    # (covers European nights with UTC+2 offset)
+    start = f"{prev_day.isoformat()}T16:00:00Z"
+    end   = f"{target_date.isoformat()}T14:00:00Z"
     filter_str = f'sleep.interval.end_time >= "{start}" AND sleep.interval.end_time < "{end}"'
 
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -326,44 +327,55 @@ async def fetch_sleep(
     payload = response.json()
     data_points = payload.get("dataPoints") or []
 
-    logger.info("Google Health sleep raw response: %s", payload)
-
     if not data_points:
-        return {"available": True, "source": "google_health", "date": target_date.isoformat(), "total_sleep_min": 0, "stages": []}
+        return {
+            "available": True,
+            "source": "google_health",
+            "date": target_date.isoformat(),
+            "total_sleep_min": 0,
+            "stages": [],
+        }
 
-    STAGE_NAMES = {
+    # Pick the main sleep session (mainSleep=True preferred, otherwise longest)
+    main_point = None
+    for point in data_points:
+        sleep = point.get("sleep") or {}
+        if (sleep.get("metadata") or {}).get("mainSleep"):
+            main_point = point
+            break
+    if main_point is None:
+        main_point = max(
+            data_points,
+            key=lambda p: int(((p.get("sleep") or {}).get("summary") or {}).get("minutesInSleepPeriod") or 0),
+        )
+
+    sleep = main_point.get("sleep") or {}
+    summary = sleep.get("summary") or {}
+    stages_raw = sleep.get("stages") or []
+
+    STAGE_MAP = {
         "AWAKE": "awake",
+        "LIGHT": "light",
+        "DEEP": "deep",
+        "REM": "rem",
         "SLEEPING": "sleeping",
         "OUT_OF_BED": "out_of_bed",
-        "LIGHT_SLEEP": "light",
-        "DEEP_SLEEP": "deep",
-        "REM_SLEEP": "rem",
         "UNSPECIFIED": "unspecified",
     }
 
     stages = []
-    total_sleep_seconds = 0
-
-    for point in data_points:
-        interval = point.get("interval") or {}
-        values   = point.get("value") or {}
-        stage_raw = str(values.get("stage") or "SLEEPING")
-        stage_name = STAGE_NAMES.get(stage_raw, stage_raw.lower())
-
-        start_str = interval.get("startTime") or ""
-        end_str   = interval.get("endTime") or ""
-
+    for s in stages_raw:
+        stage_name = STAGE_MAP.get(s.get("type", ""), s.get("type", "").lower())
+        start_str  = s.get("startTime", "")
+        end_str    = s.get("endTime", "")
         try:
-            from datetime import datetime, timezone
-            t_start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            t_end   = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
-            duration_s = max(0, int((t_end - t_start).total_seconds()))
+            from datetime import datetime as _dt
+            duration_s = max(0, int(
+                (_dt.fromisoformat(end_str.replace("Z", "+00:00")) -
+                 _dt.fromisoformat(start_str.replace("Z", "+00:00"))).total_seconds()
+            ))
         except (ValueError, TypeError):
             duration_s = 0
-
-        if stage_name not in ("awake", "out_of_bed"):
-            total_sleep_seconds += duration_s
-
         stages.append({
             "stage": stage_name,
             "start": start_str,
@@ -371,10 +383,20 @@ async def fetch_sleep(
             "duration_min": round(duration_s / 60, 1),
         })
 
+    # Use Google's pre-computed summary values directly
+    stages_summary = summary.get("stagesSummary") or []
+    stage_minutes = {
+        STAGE_MAP.get(s.get("type", ""), s.get("type", "").lower()): int(s.get("minutes") or 0)
+        for s in stages_summary
+    }
+
     return {
         "available": True,
         "source": "google_health",
         "date": target_date.isoformat(),
-        "total_sleep_min": round(total_sleep_seconds / 60, 1),
+        "total_sleep_min": int(summary.get("minutesAsleep") or 0),
+        "total_in_bed_min": int(summary.get("minutesInSleepPeriod") or 0),
+        "awake_min": int(summary.get("minutesAwake") or 0),
+        "stage_minutes": stage_minutes,
         "stages": stages,
     }
