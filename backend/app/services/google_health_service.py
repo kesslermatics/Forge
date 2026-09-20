@@ -228,14 +228,15 @@ async def fetch_steps(
     except GoogleHealthAuthorizationError as exc:
         return {"available": False, "reason": str(exc)}
 
-    # Google Health expects RFC 3339 day boundaries in UTC
+    # Google Health uses AIP-160 filter strings, not startTime/endTime params
     start = f"{target_date.isoformat()}T00:00:00Z"
     end   = f"{target_date.isoformat()}T23:59:59Z"
+    filter_str = f'steps.interval.start_time >= "{start}" AND steps.interval.start_time < "{end}"'
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.get(
             GOOGLE_HEALTH_STEPS_URL,
-            params={"startTime": start, "endTime": end, "pageSize": 100},
+            params={"filter": filter_str, "pageSize": 100},
             headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
         )
 
@@ -298,13 +299,15 @@ async def fetch_sleep(
         return {"available": False, "reason": str(exc)}
 
     prev_day = target_date - timedelta(days=1)
+    # Sleep uses end_time filter (sleep-specific per Google Health API docs)
     start = f"{prev_day.isoformat()}T18:00:00Z"
     end   = f"{target_date.isoformat()}T12:00:00Z"
+    filter_str = f'sleep.interval.end_time >= "{start}" AND sleep.interval.end_time < "{end}"'
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.get(
             GOOGLE_HEALTH_SLEEP_URL,
-            params={"startTime": start, "endTime": end, "pageSize": 50},
+            params={"filter": filter_str, "pageSize": 25},
             headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
         )
 
