@@ -326,6 +326,8 @@ async def fetch_sleep(
     payload = response.json()
     data_points = payload.get("dataPoints") or []
 
+    logger.info("Google Health sleep raw response: %s", payload)
+
     if not data_points:
         return {"available": True, "source": "google_health", "date": target_date.isoformat(), "total_sleep_min": 0, "stages": []}
 
