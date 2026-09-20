@@ -263,15 +263,14 @@ async def fetch_steps(
 
             payload = response.json()
             data_points_page = payload.get("dataPoints") or []
-            if data_points_page:
-                logger.info(
-                    "Google Health steps page: %d points, first=%s, last=%s",
-                    len(data_points_page),
-                    data_points_page[0].get("steps"),
-                    data_points_page[-1].get("steps"),
-                )
-            for point in data_points_page:
-                total_steps += int((point.get("steps") or {}).get("count") or 0)
+            page_sum = sum(int((p.get("steps") or {}).get("count") or 0) for p in data_points_page)
+            logger.info(
+                "Google Health steps page: %d points, page_sum=%d, running_total=%d",
+                len(data_points_page),
+                page_sum,
+                total_steps + page_sum,
+            )
+            total_steps += page_sum
 
             page_token = payload.get("nextPageToken")
             if not page_token:
