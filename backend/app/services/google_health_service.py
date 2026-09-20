@@ -228,36 +228,46 @@ async def fetch_steps(
     except GoogleHealthAuthorizationError as exc:
         return {"available": False, "reason": str(exc)}
 
-    # Google Health uses AIP-160 filter strings, not startTime/endTime params
-    start = f"{target_date.isoformat()}T00:00:00Z"
-    end   = f"{target_date.isoformat()}T23:59:59Z"
-    filter_str = f'steps.interval.start_time >= "{start}" AND steps.interval.start_time < "{end}"'
-
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.get(
-            GOOGLE_HEALTH_STEPS_URL,
-            params={"filter": filter_str, "pageSize": 100},
-            headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
-        )
-
-    if response.is_error:
-        logger.warning(
-            "Google Health steps request failed: status=%s body=%s",
-            response.status_code,
-            response.text[:500],
-        )
-        return {
-            "available": False,
-            "reason": f"Google Health hat die Schritt-Anfrage abgelehnt (HTTP {response.status_code}).",
-            "_debug": response.text[:300],
-        }
-
-    payload = response.json()
-    data_points = payload.get("dataPoints") or []
+    # Use civil_start_time so the day boundary matches local time (no UTC shift issue)
+    filter_str = (
+        f'steps.interval.civil_start_time >= "{target_date.isoformat()}" AND '
+        f'steps.interval.civil_start_time < "{(target_date + timedelta(days=1)).isoformat()}"'
+    )
 
     total_steps = 0
-    for point in data_points:
-        total_steps += int((point.get("steps") or {}).get("count") or 0)
+    page_token: str | None = None
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        while True:
+            params: dict = {"filter": filter_str, "pageSize": 10000}
+            if page_token:
+                params["pageToken"] = page_token
+
+            response = await client.get(
+                GOOGLE_HEALTH_STEPS_URL,
+                params=params,
+                headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
+            )
+
+            if response.is_error:
+                logger.warning(
+                    "Google Health steps request failed: status=%s body=%s",
+                    response.status_code,
+                    response.text[:500],
+                )
+                return {
+                    "available": False,
+                    "reason": f"Google Health hat die Schritt-Anfrage abgelehnt (HTTP {response.status_code}).",
+                    "_debug": response.text[:300],
+                }
+
+            payload = response.json()
+            for point in payload.get("dataPoints") or []:
+                total_steps += int((point.get("steps") or {}).get("count") or 0)
+
+            page_token = payload.get("nextPageToken")
+            if not page_token:
+                break
 
     return {
         "available": True,

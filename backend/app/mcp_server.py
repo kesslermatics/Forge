@@ -142,10 +142,12 @@ async def get_nutrition_range(
 
 @mcp.tool()
 async def get_steps(date: str | None = None) -> dict[str, Any]:
-    """Read steps and activity calories for YYYY-MM-DD; omit date for today.
+    """Read step count for YYYY-MM-DD; omit date for today.
 
     Uses Google Health when the account is connected with the activity read scope (preferred).
     Falls back to Yazio if Google Health is unavailable.
+    Google Health returns: available, source, date, steps.
+    Yazio fallback also returns: activity_kcal, water_ml.
     """
     return await _call("get_steps", {"date": date} if date is not None else {})
 
