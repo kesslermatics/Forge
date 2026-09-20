@@ -1,6 +1,7 @@
 """Google Health API OAuth token handling and Forge workout export."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,6 +9,8 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 from app.encryption import decrypt_value, encrypt_value
 from app.models import GoogleHealthConnection, GoogleHealthWorkoutExport, ForgeWorkoutSession
 
@@ -237,7 +240,16 @@ async def fetch_steps(
         )
 
     if response.is_error:
-        return {"available": False, "reason": "Google Health hat die Schritt-Anfrage abgelehnt."}
+        logger.warning(
+            "Google Health steps request failed: status=%s body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        return {
+            "available": False,
+            "reason": f"Google Health hat die Schritt-Anfrage abgelehnt (HTTP {response.status_code}).",
+            "_debug": response.text[:300],
+        }
 
     payload = response.json()
     data_points = payload.get("dataPoints") or []
@@ -297,7 +309,16 @@ async def fetch_sleep(
         )
 
     if response.is_error:
-        return {"available": False, "reason": "Google Health hat die Schlaf-Anfrage abgelehnt."}
+        logger.warning(
+            "Google Health sleep request failed: status=%s body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        return {
+            "available": False,
+            "reason": f"Google Health hat die Schlaf-Anfrage abgelehnt (HTTP {response.status_code}).",
+            "_debug": response.text[:300],
+        }
 
     payload = response.json()
     data_points = payload.get("dataPoints") or []
