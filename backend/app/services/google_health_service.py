@@ -255,6 +255,11 @@ async def fetch_steps(
     payload = response.json()
     data_points = payload.get("dataPoints") or []
 
+    if not data_points:
+        logger.info("Google Health steps: no dataPoints for %s. Full payload: %s", target_date, payload)
+    else:
+        logger.info("Google Health steps first dataPoint: %s", data_points[0])
+
     total_steps = 0
     total_activity_kcal = 0.0
     for point in data_points:
