@@ -16,7 +16,7 @@ from app.models import GoogleHealthConnection, GoogleHealthWorkoutExport, ForgeW
 
 GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_HEALTH_EXERCISE_URL = "https://health.googleapis.com/v4/users/me/dataTypes/exercise/dataPoints"
-GOOGLE_HEALTH_STEPS_URL = "https://health.googleapis.com/v4/users/me/dataTypes/steps/dataPoints"
+GOOGLE_HEALTH_STEPS_URL = "https://health.googleapis.com/v4/users/me/dataTypes/steps/dataPoints:dailyRollUp"
 GOOGLE_HEALTH_SLEEP_URL = "https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints"
 
 # Legacy constant kept for backwards compat — new connections request all three scopes.
@@ -228,53 +228,45 @@ async def fetch_steps(
     except GoogleHealthAuthorizationError as exc:
         return {"available": False, "reason": str(exc)}
 
-    # Use civil_start_time so the day boundary matches local time (no UTC shift issue)
-    filter_str = (
-        f'steps.interval.civil_start_time >= "{target_date.isoformat()}" AND '
-        f'steps.interval.civil_start_time < "{(target_date + timedelta(days=1)).isoformat()}"'
-    )
-
-    total_steps = 0
-    page_token: str | None = None
+    # dailyRollUp uses POST with a JSON body and CivilTimeInterval (local date, no UTC shift)
+    body = {
+        "range": {
+            "start": {
+                "date": {"year": target_date.year, "month": target_date.month, "day": target_date.day},
+            },
+            "end": {
+                "date": {
+                    "year": (target_date + timedelta(days=1)).year,
+                    "month": (target_date + timedelta(days=1)).month,
+                    "day": (target_date + timedelta(days=1)).day,
+                },
+            },
+        },
+        "windowSizeDays": 1,
+    }
 
     async with httpx.AsyncClient(timeout=20.0) as client:
-        while True:
-            params: dict = {"filter": filter_str, "pageSize": 10000}
-            if page_token:
-                params["pageToken"] = page_token
+        response = await client.post(
+            GOOGLE_HEALTH_STEPS_URL,
+            json=body,
+            headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
+        )
 
-            response = await client.get(
-                GOOGLE_HEALTH_STEPS_URL,
-                params=params,
-                headers={"Authorization": f"Bearer {token}", "Accept-Language": "de"},
-            )
+    if response.is_error:
+        logger.warning(
+            "Google Health steps dailyRollUp failed: status=%s body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        return {
+            "available": False,
+            "reason": f"Google Health hat die Schritt-Anfrage abgelehnt (HTTP {response.status_code}).",
+            "_debug": response.text[:300],
+        }
 
-            if response.is_error:
-                logger.warning(
-                    "Google Health steps request failed: status=%s body=%s",
-                    response.status_code,
-                    response.text[:500],
-                )
-                return {
-                    "available": False,
-                    "reason": f"Google Health hat die Schritt-Anfrage abgelehnt (HTTP {response.status_code}).",
-                    "_debug": response.text[:300],
-                }
-
-            payload = response.json()
-            data_points_page = payload.get("dataPoints") or []
-            page_sum = sum(int((p.get("steps") or {}).get("count") or 0) for p in data_points_page)
-            logger.info(
-                "Google Health steps page: %d points, page_sum=%d, running_total=%d",
-                len(data_points_page),
-                page_sum,
-                total_steps + page_sum,
-            )
-            total_steps += page_sum
-
-            page_token = payload.get("nextPageToken")
-            if not page_token:
-                break
+    payload = response.json()
+    rollup_points = payload.get("rollupDataPoints") or []
+    total_steps = int(((rollup_points[0].get("steps") or {}).get("countSum") or 0)) if rollup_points else 0
 
     return {
         "available": True,
