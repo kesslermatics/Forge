@@ -357,6 +357,7 @@ async def fetch_sleep(
     sleep = main_point.get("sleep") or {}
     summary = sleep.get("summary") or {}
     stages_raw = sleep.get("stages") or []
+    interval = sleep.get("interval") or {}
 
     STAGE_MAP = {
         "AWAKE": "awake",
@@ -399,6 +400,8 @@ async def fetch_sleep(
         "available": True,
         "source": "google_health",
         "date": target_date.isoformat(),
+        "sleep_start": interval.get("startTime"),
+        "sleep_end": interval.get("endTime"),
         "total_sleep_min": int(summary.get("minutesAsleep") or 0),
         "total_in_bed_min": int(summary.get("minutesInSleepPeriod") or 0),
         "awake_min": int(summary.get("minutesAwake") or 0),
