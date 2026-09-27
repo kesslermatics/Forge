@@ -639,12 +639,6 @@ export default function ForgeSessionPage() {
             </div>
           </div>
         </aside>}
-        {activeExercise.source_exercise_id && (
-          <ExerciseStatsCard
-            exerciseId={activeExercise.source_exercise_id}
-            machineProfileId={activeExercise.machine_profile_id}
-          />
-        )}
         <div className="border-y" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
           <div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', color: DIM }}><span>Satz</span><span className="text-center">Ziel</span><span className="text-center">Heute</span><span /></div>
           {activeExercise.sets.map((set, index) => {
@@ -668,6 +662,12 @@ export default function ForgeSessionPage() {
           })}
         </div>
         {session.status === 'active' && <div className="p-3 flex gap-3"><button onClick={addSet} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: SAND }}><Plus size={14} />Satz</button>{activeExercise.sets.length > 1 && <button onClick={() => void mutate(() => deleteForgeSessionSet(session.id, activeExercise.sets[activeExercise.sets.length - 1].id))} className="tap text-[11px] flex items-center gap-1 cursor-pointer" style={{ color: DIM }}><Trash2 size={13} />Letzten löschen</button>}</div>}
+        {activeExercise.source_exercise_id && (
+          <ExerciseStatsCard
+            exerciseId={activeExercise.source_exercise_id}
+            machineProfileId={activeExercise.machine_profile_id}
+          />
+        )}
       </section>
     </> : <div className="card-forge p-6 text-center text-[13px]" style={{ color: DIM }}>Diese Session hat noch keine Übungen.</div>}
 

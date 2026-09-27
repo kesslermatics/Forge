@@ -2199,9 +2199,11 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
             ),
         }
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(10):
             if attempt:
-                await asyncio.sleep(2 ** (attempt - 1))
+                # Exponential back-off capped at 8 s; 503 overload errors get the
+                # same treatment as validation failures so we keep retrying.
+                await asyncio.sleep(min(2 ** (attempt - 1), 8))
             request_payload: dict[str, object] = {
                 "context": session_context,
                 "completion_contract": completion_contract,
@@ -2230,7 +2232,7 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
             except Exception as exc:
                 last_error = exc
                 logger.warning(
-                    "Forge AI response rejected (attempt %s/3): %s",
+                    "Forge AI response rejected (attempt %s/10): %s",
                     attempt + 1,
                     exc,
                 )
