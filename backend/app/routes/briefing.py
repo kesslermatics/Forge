@@ -1148,16 +1148,27 @@ async def get_today_nutrition(
 @router.get("/nutrition-history")
 async def get_nutrition_history(
     days: int = 7,
+    start_date: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Get nutrition history for the last N days.
+    Get nutrition history from start_date until today (or last N days when start_date is omitted).
     Returns daily totals + goals for charting.
     """
     if not current_user.yazio_email or not current_user.yazio_password:
         return {"error": "No Yazio credentials", "days": []}
 
-    days = min(max(days, 1), 90)  # Clamp 1-90
+    today = date.today()
+    if start_date:
+        try:
+            parsed = date.fromisoformat(start_date)
+            if parsed > today:
+                parsed = today
+            days = min((today - parsed).days + 1, 365)
+        except ValueError:
+            days = min(max(days, 1), 365)
+    else:
+        days = min(max(days, 1), 365)
 
     try:
         email = decrypt_value(current_user.yazio_email)
@@ -1170,7 +1181,6 @@ async def get_nutrition_history(
     from app.services.yazio_service import _yazio_login, _fetch_daily_summary, _parse_summary, YAZIO_BASE_URL
 
     history = []
-    today = date.today()
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         token = await _yazio_login(client, email, password)
@@ -1205,16 +1215,27 @@ async def get_nutrition_history(
 @router.get("/food-statistics")
 async def get_food_statistics(
     days: int = 30,
+    start_date: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Get aggregated food statistics for the last N days.
+    Get aggregated food statistics from start_date until today (or last N days when start_date is omitted).
     Returns top foods, top protein sources, top calorie items, top brands, new items this week.
     """
     if not current_user.yazio_email or not current_user.yazio_password:
         return {"error": "No Yazio credentials"}
 
-    days = min(max(days, 7), 90)
+    today = date.today()
+    if start_date:
+        try:
+            parsed = date.fromisoformat(start_date)
+            if parsed > today:
+                parsed = today
+            days = min((today - parsed).days + 1, 365)
+        except ValueError:
+            days = min(max(days, 7), 365)
+    else:
+        days = min(max(days, 7), 365)
 
     try:
         email = decrypt_value(current_user.yazio_email)
@@ -1228,8 +1249,6 @@ async def get_food_statistics(
     from app.services.yazio_service import (
         _yazio_login, _fetch_consumed_items, _fetch_product, YAZIO_BASE_URL
     )
-
-    today = date.today()
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         token = await _yazio_login(client, email, password)
@@ -1337,21 +1356,157 @@ async def get_food_statistics(
 
 @router.post("/nutrition-analysis")
 async def get_nutrition_analysis(
+    start_date: str | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    AI-powered nutrition analysis.
-    Returns analysis for yesterday, tips for today, and overall patterns.
+    AI-powered nutrition analysis with an optional custom date range.
+
+    When start_date is provided (ISO date), an aggregate summary of the interval
+    from start_date to today is computed and passed to the AI as the primary
+    trend signal.  Otherwise only yesterday + today are used (legacy behavior).
     """
     from app.services.ai_service import generate_nutrition_analysis
 
     context = await gather_user_context(current_user, db)
 
+    range_summary = None
+    if start_date and current_user.yazio_email and current_user.yazio_password:
+        try:
+            parsed_start = date.fromisoformat(start_date)
+        except ValueError:
+            parsed_start = None
+
+        if parsed_start is not None:
+            today_date = date.today()
+            if parsed_start > today_date:
+                parsed_start = today_date
+
+            try:
+                email = decrypt_value(current_user.yazio_email)
+                password = decrypt_value(current_user.yazio_password)
+            except Exception:
+                email = password = None
+
+            if email and password:
+                import asyncio
+                import httpx
+                from collections import Counter, defaultdict
+                from app.services.yazio_service import (
+                    _yazio_login, _fetch_daily_summary, _parse_summary,
+                    _fetch_consumed_items, _fetch_product,
+                )
+
+                total_days = (today_date - parsed_start).days + 1
+                dates_to_check = [parsed_start + timedelta(days=i) for i in range(total_days)]
+
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    token = await _yazio_login(client, email, password)
+                    if token:
+                        semaphore = asyncio.Semaphore(5)
+
+                        async def fetch_summary(d):
+                            async with semaphore:
+                                raw = await _fetch_daily_summary(client, token, d.isoformat())
+                                return _parse_summary(raw) if raw else None
+
+                        async def fetch_items(d):
+                            async with semaphore:
+                                items = await _fetch_consumed_items(client, token, d.isoformat())
+                                return [(item.get("product_id"), item.get("amount", 0))
+                                        for item in items if item.get("product_id")]
+
+                        summaries, item_lists = await asyncio.gather(
+                            asyncio.gather(*[fetch_summary(d) for d in dates_to_check]),
+                            asyncio.gather(*[fetch_items(d) for d in dates_to_check]),
+                        )
+
+                        # Aggregate macros over logged days only.
+                        logged = [
+                            s for s in summaries
+                            if s and (s.get("totals") or {}).get("calories", 0) > 0
+                        ]
+                        days_logged = len(logged)
+
+                        def mean(key: str, source: str = "totals"):
+                            values = [
+                                (row.get(source) or {}).get(key)
+                                for row in logged
+                                if (row.get(source) or {}).get(key) is not None
+                            ]
+                            values = [v for v in values if isinstance(v, (int, float)) and v > 0]
+                            return round(sum(values) / len(values), 1) if values else None
+
+                        def attainment(actual_key: str, goal_key: str = None):
+                            ratios = []
+                            for row in logged:
+                                actual = (row.get("totals") or {}).get(actual_key)
+                                goal = (row.get("goals") or {}).get(goal_key or actual_key)
+                                if isinstance(actual, (int, float)) and isinstance(goal, (int, float)) and goal > 0:
+                                    ratios.append(actual / goal)
+                            return round(sum(ratios) / len(ratios), 3) if ratios else None
+
+                        # Aggregate food frequency + protein contribution.
+                        all_items = [pair for sublist in item_lists for pair in sublist]
+                        product_ids = {pid for pid, _ in all_items if pid}
+                        product_cache: dict = {}
+
+                        async with httpx.AsyncClient(timeout=45.0) as client2:
+                            token2 = await _yazio_login(client2, email, password) or token
+                            sem2 = asyncio.Semaphore(5)
+
+                            async def load_product(pid):
+                                async with sem2:
+                                    await _fetch_product(client2, token2, pid, product_cache)
+
+                            await asyncio.gather(*[load_product(pid) for pid in product_ids])
+
+                        food_freq = Counter()
+                        protein_sum: dict = defaultdict(float)
+                        food_names: dict = {}
+                        for pid, amount in all_items:
+                            if not pid:
+                                continue
+                            food_freq[pid] += 1
+                            product = product_cache.get(pid)
+                            if product:
+                                food_names[pid] = product.get("name", "Unknown")
+                                nutrients = product.get("nutrients", {})
+                                protein_sum[pid] += (nutrients.get("nutrient.protein", 0) or 0) * amount
+
+                        top_foods = [
+                            {"name": food_names.get(pid, "Unbekannt"), "count": count}
+                            for pid, count in food_freq.most_common(10)
+                        ]
+                        top_protein = sorted(protein_sum.items(), key=lambda x: x[1], reverse=True)[:8]
+                        top_protein_sources = [
+                            {"name": food_names.get(pid, "Unbekannt"), "protein_g": round(total, 1)}
+                            for pid, total in top_protein
+                        ]
+
+                        range_summary = {
+                            "start_date": parsed_start.isoformat(),
+                            "end_date": today_date.isoformat(),
+                            "days_covered": total_days,
+                            "days_logged": days_logged,
+                            "avg_calories": mean("calories"),
+                            "avg_protein": mean("protein"),
+                            "avg_carbs": mean("carbs"),
+                            "avg_fat": mean("fat"),
+                            "avg_calorie_goal": mean("calories", "goals"),
+                            "avg_protein_goal": mean("protein", "goals"),
+                            "calorie_attainment": attainment("calories"),
+                            "protein_attainment": attainment("protein"),
+                            "top_foods": top_foods,
+                            "top_protein_sources": top_protein_sources,
+                        }
+
     response = await generate_nutrition_analysis(
         yazio_yesterday=context.get("yazio"),
         yazio_today=context.get("yazio_today"),
         language=current_user.language or "de",
+        range_summary=range_summary,
     )
 
     return response

@@ -43,75 +43,110 @@ function ExerciseStatsCard({ exerciseId, machineProfileId }: {
       .catch(() => { });
   }, [exerciseId, machineProfileId]);
 
-  const { chartData, lastSession, prevSession } = useMemo(() => {
-    if (!history) return { chartData: [], lastSession: null, prevSession: null };
+  const stats = useMemo(() => {
+    if (!history) return null;
 
-    // Filter to start date, sort oldest→newest
+    // Filter to start date, oldest→newest
     const sessions = [...history.sessions]
       .filter(s => (s.completed_at || s.started_at) >= startDate)
       .reverse();
+    if (sessions.length < 2) return null;
 
-    const chartData = sessions.flatMap(s => {
+    const perSession = sessions.map(s => {
       const working = s.sets.filter(
         set => set.set_type === 'working' && set.actual_weight_kg != null && set.actual_reps != null && set.actual_weight_kg > 0,
       );
-      if (!working.length) return [];
-      const bestE1rm = Math.max(...working.map(set => epley(set.actual_weight_kg!, set.actual_reps!)));
-      const volume = working.reduce((sum, set) => sum + (set.actual_weight_kg ?? 0) * (set.actual_reps ?? 0), 0);
+      const bestKg = working.length ? Math.max(...working.map(w => w.actual_weight_kg!)) : 0;
+      const bestE1rm = working.length ? Math.max(...working.map(w => epley(w.actual_weight_kg!, w.actual_reps!))) : 0;
+      const volume = working.reduce((sum, w) => sum + (w.actual_weight_kg ?? 0) * (w.actual_reps ?? 0), 0);
+      const totalReps = working.reduce((sum, w) => sum + (w.actual_reps ?? 0), 0);
+      const workingSets = working.length;
+      const avgReps = workingSets > 0 ? totalReps / workingSets : 0;
       const date = (s.completed_at || s.started_at).slice(0, 10);
-      return [{ date, e1rm: Math.round(bestE1rm * 10) / 10, volume: Math.round(volume) }];
-    });
+      return {
+        date,
+        bestKg: Math.round(bestKg * 10) / 10,
+        e1rm: Math.round(bestE1rm * 10) / 10,
+        volume: Math.round(volume),
+        totalReps,
+        sets: workingSets,
+        avgReps: Math.round(avgReps * 10) / 10,
+      };
+    }).filter(row => row.sets > 0);
 
-    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
-    const prevSession = sessions.length > 1 ? sessions[sessions.length - 2] : null;
-    return { chartData, lastSession, prevSession };
+    if (perSession.length < 2) return null;
+
+    const last = perSession[perSession.length - 1];
+    const first = perSession[0];
+    const prev = perSession[perSession.length - 2];
+
+    // Personal record across the visible window
+    const prE1rm = Math.max(...perSession.map(r => r.e1rm));
+    const prKg = Math.max(...perSession.map(r => r.bestKg));
+
+    return { perSession, last, first, prev, prE1rm, prKg };
   }, [history, startDate]);
 
   if (!history) return (
-    <div className="mx-4 mb-3 flex items-center justify-center py-4">
+    <div className="mx-4 flex items-center justify-center py-6">
       <Loader2 size={14} className="animate-spin" style={{ color: DIM }} />
     </div>
   );
 
-  if (chartData.length < 2) return null; // not enough data to be useful
+  if (!stats) return null;
 
-  const lastBestKg = lastSession
-    ? Math.max(0, ...lastSession.sets
-      .filter(s => s.set_type === 'working' && (s.actual_weight_kg ?? 0) > 0)
-      .map(s => s.actual_weight_kg!))
-    : null;
-  const prevBestKg = prevSession
-    ? Math.max(0, ...prevSession.sets
-      .filter(s => s.set_type === 'working' && (s.actual_weight_kg ?? 0) > 0)
-      .map(s => s.actual_weight_kg!))
-    : null;
-  const kgDelta = lastBestKg != null && prevBestKg != null ? lastBestKg - prevBestKg : null;
+  const { perSession, last, prev, prE1rm, prKg } = stats;
+
+  const kgDelta = last.bestKg - prev.bestKg;
+  const e1rmDelta = last.e1rm - prev.e1rm;
+  const volumeDelta = last.volume - prev.volume;
 
   const tooltipStyle = {
     background: 'rgba(22,19,15,0.95)',
     border: `1px solid rgba(232,197,138,0.18)`,
     borderRadius: 8,
-    fontSize: 10,
+    fontSize: 11,
     color: TEXT,
-    padding: '3px 8px',
+    padding: '4px 10px',
+  };
+
+  const fmtDate = (l: unknown) =>
+    new Date(`${l}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+
+  const DeltaTag = ({ value, unit = 'kg', invert = false, digits = 1 }: {
+    value: number; unit?: string; invert?: boolean; digits?: number;
+  }) => {
+    if (value === 0) return <span className="text-[10px] tabular-nums" style={{ color: DIM }}>±0 {unit}</span>;
+    const positive = invert ? value < 0 : value > 0;
+    return (
+      <span className="text-[10px] font-medium tabular-nums" style={{ color: positive ? MINT : '#f87171' }}>
+        {value > 0 ? '+' : ''}{value.toFixed(digits)} {unit}
+      </span>
+    );
   };
 
   return (
-    <div className="mx-4 mb-4 grid grid-cols-2 gap-2">
-      {/* ── e1RM chart ── */}
-      <div className="rounded-2xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
-        <p className="text-[9px] uppercase tracking-widest mb-2" style={{ color: DIM }}>
-          Geschätzte 1RM
-        </p>
-        <p className="text-[17px] font-semibold tabular-nums leading-none mb-2" style={{ color: MINT }}>
-          {chartData[chartData.length - 1].e1rm.toFixed(1)}
-          <span className="text-[10px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
-        </p>
-        <ResponsiveContainer width="100%" height={44}>
-          <AreaChart data={chartData} margin={{ top: 2, right: 2, bottom: 0, left: 0 }}>
+    <div className="mx-4 my-3 space-y-2">
+      {/* ── e1RM Trend (Area) ── */}
+      <div className="rounded-2xl p-4" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest" style={{ color: DIM }}>Geschätzte 1RM</p>
+            <p className="text-[22px] font-semibold tabular-nums leading-none mt-1" style={{ color: MINT }}>
+              {last.e1rm.toFixed(1)}
+              <span className="text-[11px] font-normal ml-1" style={{ color: DIM }}>kg</span>
+            </p>
+          </div>
+          <div className="text-right">
+            <DeltaTag value={e1rmDelta} />
+            <p className="text-[9px] mt-1" style={{ color: DIM }}>vs. letzte</p>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={70}>
+          <AreaChart data={perSession} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id="e1rmGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={MINT} stopOpacity={0.22} />
+                <stop offset="0%" stopColor={MINT} stopOpacity={0.28} />
                 <stop offset="100%" stopColor={MINT} stopOpacity={0} />
               </linearGradient>
             </defs>
@@ -120,59 +155,140 @@ function ExerciseStatsCard({ exerciseId, machineProfileId }: {
             <Tooltip
               contentStyle={tooltipStyle}
               itemStyle={{ color: MINT }}
-              labelStyle={{ color: DIM, marginBottom: 2 }}
-              formatter={(v: number | undefined) => v != null ? `${v.toFixed(1)} kg` : ''}
-              labelFormatter={(l: unknown) => new Date(`${l}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
-              cursor={{ stroke: 'rgba(255,247,235,0.1)', strokeWidth: 1 }}
+              labelStyle={{ color: DIM, marginBottom: 2, fontSize: 10 }}
+              formatter={(v: number | undefined) => v != null ? [`${v.toFixed(1)} kg`, 'e1RM'] : ['', '']}
+              labelFormatter={fmtDate}
+              cursor={{ stroke: 'rgba(255,247,235,0.12)', strokeWidth: 1 }}
             />
             <Area
               type="monotone" dataKey="e1rm"
-              stroke={MINT} strokeWidth={1.8}
+              stroke={MINT} strokeWidth={2}
               fill="url(#e1rmGrad)"
               dot={false}
-              activeDot={{ r: 3, fill: MINT, strokeWidth: 0 }}
+              activeDot={{ r: 3.5, fill: MINT, strokeWidth: 0 }}
               isAnimationActive={false}
             />
           </AreaChart>
         </ResponsiveContainer>
       </div>
 
-      {/* ── Volume bar chart ── */}
-      <div className="rounded-2xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
-        <p className="text-[9px] uppercase tracking-widest mb-2" style={{ color: DIM }}>
-          Volumen
-        </p>
-        {kgDelta !== null ? (
-          <p className="text-[17px] font-semibold tabular-nums leading-none mb-2" style={{ color: kgDelta >= 0 ? SAND : '#f87171' }}>
-            {kgDelta >= 0 ? '+' : ''}{kgDelta.toFixed(1)}
-            <span className="text-[10px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
-          </p>
-        ) : (
-          <p className="text-[17px] font-semibold tabular-nums leading-none mb-2" style={{ color: SAND }}>
-            {chartData[chartData.length - 1].volume.toLocaleString('de-DE')}
-            <span className="text-[10px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
-          </p>
-        )}
-        <ResponsiveContainer width="100%" height={44}>
-          <BarChart data={chartData} margin={{ top: 2, right: 2, bottom: 0, left: 0 }} barCategoryGap="30%">
+      {/* ── Bestes Gewicht (Area) ── */}
+      <div className="rounded-2xl p-4" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest" style={{ color: DIM }}>Bestes Gewicht</p>
+            <p className="text-[22px] font-semibold tabular-nums leading-none mt-1" style={{ color: SAND }}>
+              {last.bestKg.toFixed(1)}
+              <span className="text-[11px] font-normal ml-1" style={{ color: DIM }}>kg</span>
+            </p>
+          </div>
+          <div className="text-right">
+            <DeltaTag value={kgDelta} />
+            <p className="text-[9px] mt-1" style={{ color: DIM }}>vs. letzte</p>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={70}>
+          <AreaChart data={perSession} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id="kgGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={SAND} stopOpacity={0.25} />
+                <stop offset="100%" stopColor={SAND} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="date" hide />
+            <YAxis domain={['auto', 'auto']} hide />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              itemStyle={{ color: SAND }}
+              labelStyle={{ color: DIM, marginBottom: 2, fontSize: 10 }}
+              formatter={(v: number | undefined) => v != null ? [`${v.toFixed(1)} kg`, 'Bestes'] : ['', '']}
+              labelFormatter={fmtDate}
+              cursor={{ stroke: 'rgba(255,247,235,0.12)', strokeWidth: 1 }}
+            />
+            <Area
+              type="monotone" dataKey="bestKg"
+              stroke={SAND} strokeWidth={2}
+              fill="url(#kgGrad)"
+              dot={false}
+              activeDot={{ r: 3.5, fill: SAND, strokeWidth: 0 }}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* ── Volumen (Bars) ── */}
+      <div className="rounded-2xl p-4" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+        <div className="flex items-start justify-between mb-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest" style={{ color: DIM }}>Volumen</p>
+            <p className="text-[22px] font-semibold tabular-nums leading-none mt-1" style={{ color: SAND }}>
+              {last.volume.toLocaleString('de-DE')}
+              <span className="text-[11px] font-normal ml-1" style={{ color: DIM }}>kg</span>
+            </p>
+          </div>
+          <div className="text-right">
+            <DeltaTag value={volumeDelta} unit="kg" digits={0} />
+            <p className="text-[9px] mt-1" style={{ color: DIM }}>vs. letzte</p>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={70}>
+          <BarChart data={perSession} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} barCategoryGap="25%">
             <XAxis dataKey="date" hide />
             <YAxis domain={[0, 'auto']} hide />
             <Tooltip
               contentStyle={tooltipStyle}
               itemStyle={{ color: SAND }}
-              labelStyle={{ color: DIM, marginBottom: 2 }}
-              formatter={(v: number | undefined) => v != null ? `${v.toLocaleString('de-DE')} kg` : ''}
-              labelFormatter={(l: unknown) => new Date(`${l}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
+              labelStyle={{ color: DIM, marginBottom: 2, fontSize: 10 }}
+              formatter={(v: number | undefined) => v != null ? [`${v.toLocaleString('de-DE')} kg`, 'Volumen'] : ['', '']}
+              labelFormatter={fmtDate}
               cursor={{ fill: 'rgba(255,247,235,0.04)' }}
             />
             <Bar
               dataKey="volume" fill={SAND}
               radius={[3, 3, 0, 0]}
-              opacity={0.7}
+              opacity={0.75}
               isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      {/* ── KPI row: PR, Sessions, Avg reps ── */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+          <p className="text-[9px] uppercase tracking-widest" style={{ color: DIM }}>PR · e1RM</p>
+          <p className="text-[15px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: MINT }}>
+            {prE1rm.toFixed(1)}
+            <span className="text-[9px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
+          </p>
+        </div>
+        <div className="rounded-xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+          <p className="text-[9px] uppercase tracking-widest" style={{ color: DIM }}>PR · Gewicht</p>
+          <p className="text-[15px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: SAND }}>
+            {prKg.toFixed(1)}
+            <span className="text-[9px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
+          </p>
+        </div>
+        <div className="rounded-xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+          <p className="text-[9px] uppercase tracking-widest" style={{ color: DIM }}>Sessions</p>
+          <p className="text-[15px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: TEXT }}>
+            {perSession.length}
+          </p>
+        </div>
+      </div>
+
+      {/* ── Letzte Session Summary ── */}
+      <div className="rounded-xl px-3 py-2.5 flex items-center justify-between" style={{ background: 'rgba(255,247,235,0.02)', border: `1px solid rgba(255,247,235,0.05)` }}>
+        <div>
+          <p className="text-[9px] uppercase tracking-widest" style={{ color: DIM }}>Letzte Session</p>
+          <p className="text-[11px] mt-0.5 tabular-nums" style={{ color: TEXT }}>
+            {last.sets} × {last.avgReps.toFixed(1)} Wdh. · {last.bestKg.toFixed(1)} kg
+          </p>
+        </div>
+        <p className="text-[10px]" style={{ color: DIM }}>
+          {new Date(`${last.date}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
+        </p>
       </div>
     </div>
   );
@@ -554,17 +670,6 @@ export default function ForgeSessionPage() {
     <header className="flex items-start justify-between gap-3">
       <div className="flex gap-3"><button onClick={() => void leaveSession()} disabled={saving} className="tap mt-1 cursor-pointer disabled:cursor-default disabled:opacity-50" style={{ color: DIM }} aria-label="Zurück zum Dashboard"><ArrowLeft size={18} /></button><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{session.status === 'active' ? 'Live Session' : 'Abgeschlossen'}</p><h1 className="text-[22px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>{session.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · {duration}</p></div></div>
       {session.status === 'active' && <div className="flex items-center gap-3">
-        {session.start_coaching?.coaching_source === 'ai' && !coachBriefOpen && (
-          <button
-            onClick={() => setCoachBriefOpen(true)}
-            className="tap flex items-center gap-1 rounded-full px-2 py-1"
-            style={{ background: `${SAND}14`, color: SAND }}
-            title="KI-Analyse anzeigen"
-          >
-            <Sparkles size={11} />
-            <span className="text-[10px] font-medium">Coach</span>
-          </button>
-        )}
         <button onClick={() => setSessionActionConfirm('discard')} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button>
         <button onClick={() => void reviewCompletion()} disabled={saving || reviewingCompletion} className="tap flex items-center gap-1 text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>{reviewingCompletion && <Loader2 size={12} className="animate-spin" />}Beenden</button>
       </div>}
@@ -572,7 +677,7 @@ export default function ForgeSessionPage() {
     {/* ── KI-Coach Brief — modal overlay, auto-opens once, dismissable ── */}
     {session.start_coaching?.coaching_source === 'ai' && coachBriefOpen && (
       <div
-        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+        className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-16"
         style={{ background: 'rgba(10,8,5,0.72)', backdropFilter: 'blur(4px)' }}
         onClick={() => setCoachBriefOpen(false)}
       >

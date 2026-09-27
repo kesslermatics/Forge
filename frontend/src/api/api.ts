@@ -688,8 +688,12 @@ export interface NutritionHistoryData {
   error?: string;
 }
 
-export const getNutritionHistory = (days = 7) =>
-  apiRequest<NutritionHistoryData>(`/api/briefing/nutrition-history?days=${days}`);
+export const getNutritionHistory = (startDate: string | null = null, days = 7) => {
+  const params = startDate
+    ? `start_date=${encodeURIComponent(startDate)}`
+    : `days=${days}`;
+  return apiRequest<NutritionHistoryData>(`/api/briefing/nutrition-history?${params}`);
+};
 
 /* ── Food Statistics ────────────────────────────────── */
 
@@ -732,8 +736,12 @@ export interface FoodStatisticsData {
   error?: string;
 }
 
-export const getFoodStatistics = (days = 30) =>
-  apiRequest<FoodStatisticsData>(`/api/briefing/food-statistics?days=${days}`);
+export const getFoodStatistics = (startDate: string | null = null, days = 30) => {
+  const params = startDate
+    ? `start_date=${encodeURIComponent(startDate)}`
+    : `days=${days}`;
+  return apiRequest<FoodStatisticsData>(`/api/briefing/food-statistics?${params}`);
+};
 
 /* ── Nutrition Analysis (AI) ────────────────────────── */
 
@@ -741,10 +749,12 @@ export interface NutritionAnalysis {
   analysis: string;
 }
 
-export const getNutritionAnalysis = () =>
-  apiRequest<NutritionAnalysis>('/api/briefing/nutrition-analysis', {
+export const getNutritionAnalysis = (startDate: string | null = null) => {
+  const qs = startDate ? `?start_date=${encodeURIComponent(startDate)}` : '';
+  return apiRequest<NutritionAnalysis>(`/api/briefing/nutrition-analysis${qs}`, {
     method: 'POST',
   });
+};
 
 
 /* ── Native Forge planning ─────────────────────────────── */

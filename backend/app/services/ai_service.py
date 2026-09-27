@@ -1626,14 +1626,69 @@ async def generate_nutrition_analysis(
     yazio_yesterday: Optional[dict],
     yazio_today: Optional[dict],
     language: str = "de",
+    range_summary: Optional[dict] = None,
 ) -> dict:
     """
-    Generate a comprehensive AI nutrition analysis covering yesterday, today, goals, and recommendations.
+    Generate a comprehensive AI nutrition analysis.
+
+    range_summary is an optional aggregate over a user-selected date window:
+        {
+            "start_date": "2025-01-01",
+            "end_date":   "2025-03-31",
+            "days_covered": 65,
+            "days_logged": 58,
+            "avg_calories": 2140,
+            "avg_protein": 138,
+            "avg_carbs": 245,
+            "avg_fat": 74,
+            "avg_calorie_goal": 2200,
+            "avg_protein_goal": 150,
+            "calorie_attainment": 0.97,
+            "protein_attainment": 0.92,
+            "top_foods": [{"name": ..., "count": ...}, ...],
+            "top_protein_sources": [{"name": ..., "protein_g": ...}, ...],
+        }
     """
     client = genai.Client(api_key=settings.gemini_api_key)
 
     # Build context
     context_parts = []
+
+    if range_summary:
+        context_parts.append(
+            f"=== ERNÄHRUNGS-TRENDS "
+            f"({range_summary.get('start_date', '?')} bis {range_summary.get('end_date', '?')}) ==="
+        )
+        context_parts.append(
+            f"Getrackte Tage: {range_summary.get('days_logged', 0)} von "
+            f"{range_summary.get('days_covered', 0)} im Zeitraum"
+        )
+        if range_summary.get("avg_calories") is not None:
+            context_parts.append(
+                f"Ø Kalorien: {range_summary['avg_calories']:.0f} kcal "
+                f"(Ziel Ø {range_summary.get('avg_calorie_goal', 0):.0f} kcal, "
+                f"Erreichung {(range_summary.get('calorie_attainment') or 0) * 100:.0f}%)"
+            )
+            context_parts.append(
+                f"Ø Protein: {range_summary['avg_protein']:.0f}g "
+                f"(Ziel Ø {range_summary.get('avg_protein_goal', 0):.0f}g, "
+                f"Erreichung {(range_summary.get('protein_attainment') or 0) * 100:.0f}%)"
+            )
+            context_parts.append(
+                f"Ø Kohlenhydrate: {range_summary.get('avg_carbs', 0):.0f}g | "
+                f"Ø Fett: {range_summary.get('avg_fat', 0):.0f}g"
+            )
+        top_foods = range_summary.get("top_foods") or []
+        if top_foods:
+            names = ", ".join(f"{item['name']} ({item['count']}x)" for item in top_foods[:8])
+            context_parts.append(f"Häufigste Lebensmittel: {names}")
+        top_prot = range_summary.get("top_protein_sources") or []
+        if top_prot:
+            names = ", ".join(
+                f"{item['name']} ({item['protein_g']:.0f}g total)" for item in top_prot[:6]
+            )
+            context_parts.append(f"Wichtigste Proteinquellen: {names}")
+        context_parts.append("")
 
     if yazio_yesterday:
         totals = yazio_yesterday.get("totals", {})
@@ -1702,15 +1757,15 @@ Sage NICHT "gestern" wenn die Daten nicht von gestern sind. Sage NICHT "heute" w
 
 Schreibe eine AUSFÜHRLICHE Ernährungsanalyse (mindestens 200-300 Wörter) die folgendes abdeckt:
 
-1. **Letzte Bilanz**: Wie waren die Makros im Vergleich zu den Zielen? Was war gut, was nicht optimal? Welche Lebensmittel haben positiv/negativ beigetragen?
+1. **Trend im Zeitraum**: Nutze primär die ERNÄHRUNGS-TRENDS für den gewählten Zeitraum. Wie konsistent wurde getrackt? Wie sind die Durchschnittswerte im Vergleich zu den Zielen? Welche Lebensmittel dominieren? Gibt es Muster (zu wenig Protein? zu viele Snacks? Wochenend-Ausreißer?).
 
-2. **Aktuelle Situation**: Was wurde heute schon gegessen? Wie sieht die verbleibende Kalorienbilanz aus? Was fehlt noch an Makros?
+2. **Letzte Bilanz**: Wie waren die Makros am letzten Tag? Was war gut, was nicht optimal?
 
-3. **Konkrete Empfehlungen**: Was sollte der Nutzer heute noch essen, um seine Ziele zu erreichen? Nenne konkrete Lebensmittel oder Mahlzeiten. Wenn Protein fehlt: schlage proteinreiche Optionen vor. Wenn zu viel Fett: empfehle leichtere Alternativen.
+3. **Aktuelle Situation**: Was wurde heute schon gegessen? Wie sieht die verbleibende Kalorienbilanz aus? Was fehlt noch an Makros?
 
-4. **Tipps & Beobachtungen**: Gibt es Muster? Zu viel Zucker/Salz? Zu wenig Ballaststoffe? Gib praktische Tipps.
+4. **Konkrete Empfehlungen**: Was sollte der Nutzer heute und die nächsten Tage essen um seine Ziele zu erreichen? Nenne konkrete Lebensmittel oder Mahlzeiten basierend auf den beobachteten Trends. Wenn Protein durchgängig fehlt: schlage proteinreiche Optionen vor. Wenn ein Muster bei ungesundem Essen sichtbar ist: sprich es direkt an.
 
-Sei motivierend aber ehrlich. Beziehe dich auf konkrete Lebensmittel aus den Daten. Schreibe in einem freundlichen, coachenden Ton.
+Sei motivierend aber ehrlich. Der Zeitraum-Trend ist das Wichtigste — ein einzelner schlechter Tag ist kein Problem, aber ein durchgängiges Defizit über Wochen schon. Beziehe dich auf konkrete Lebensmittel aus den Daten. Schreibe in einem freundlichen, coachenden Ton.
 {lang_instruction}
 
 Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeile sein, keine Zeilenumbrüche im String):
