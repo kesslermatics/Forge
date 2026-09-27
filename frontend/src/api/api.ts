@@ -471,8 +471,12 @@ export interface WeightHistoryData {
   count: number;
 }
 
-export const getWeightHistory = (days = 90) =>
-  apiRequest<WeightHistoryData>(`/api/briefing/weight-history?days=${days}`);
+export const getWeightHistory = (startDate: string | null = null, days = 90) => {
+  const params = startDate
+    ? `start_date=${encodeURIComponent(startDate)}`
+    : `days=${days}`;
+  return apiRequest<WeightHistoryData>(`/api/briefing/weight-history?${params}`);
+};
 
 /* ── Macro-Performance Correlation ──────────────────── */
 

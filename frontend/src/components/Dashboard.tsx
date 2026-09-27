@@ -10,7 +10,7 @@ import type {
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
-    Dumbbell, Scale, X, ChevronRight, Clock3, Pencil, Check,
+    Dumbbell, Scale, X, ChevronRight, Clock3, Pencil,
 } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
@@ -148,10 +148,9 @@ export default function Dashboard() {
     const [startingSession, setStartingSession] = useState(false);
     const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
-    // Weight chart range
-    const [weightDays, setWeightDays] = useState(90);
+    // Weight chart range — startDate null means "use default 90 days"
+    const [weightStartDate, setWeightStartDate] = useState<string | null>(null);
     const [weightRangeEditing, setWeightRangeEditing] = useState(false);
-    const [weightRangeDraft, setWeightRangeDraft] = useState('90');
     const weightInputRef = useRef<HTMLInputElement>(null);
 
     /* load briefing + secondary data */
@@ -185,8 +184,8 @@ export default function Dashboard() {
     }, []);
 
     useEffect(() => {
-        getWeightHistory(weightDays).then(d => setWeightHistory(d.entries)).catch(() => { });
-    }, [weightDays]);
+        getWeightHistory(weightStartDate).then(d => setWeightHistory(d.entries)).catch(() => { });
+    }, [weightStartDate]);
 
     useEffect(() => {
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
@@ -396,110 +395,121 @@ export default function Dashboard() {
                         </section>
                     )}
 
-                    {/* ── Konsistenz + Gewicht ── */}
-                    {(consistency || weightValues.length > 0) && (
-                        <section className="grid gap-3 forge-anim forge-d2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                            {consistency && <ConsistencyTimeline data={consistency} />}
-                            {weightValues.length > 0 && (
-                                <div className="card-forge p-3" style={{ gridColumn: consistency ? undefined : '1 / -1' }}>
+                    {/* ── Konsistenz ── */}
+                    {consistency && (
+                        <section className="forge-anim forge-d2">
+                            <ConsistencyTimeline data={consistency} />
+                        </section>
+                    )}
 
-                                    {/* ── Header row: icon + label | range edit | delta ── */}
-                                    <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
-                                        <div className="flex items-center gap-1.5">
-                                            <Scale size={12} />
-                                            <span>Gewicht</span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            {/* Range badge / editor */}
-                                            {weightRangeEditing ? (
-                                                <form
-                                                    className="flex items-center gap-1"
-                                                    onSubmit={e => {
-                                                        e.preventDefault();
-                                                        const parsed = parseInt(weightRangeDraft, 10);
-                                                        if (!isNaN(parsed) && parsed >= 7 && parsed <= 365) {
-                                                            setWeightDays(parsed);
-                                                        } else {
-                                                            setWeightRangeDraft(String(weightDays));
-                                                        }
-                                                        setWeightRangeEditing(false);
-                                                    }}
-                                                >
-                                                    <input
-                                                        ref={weightInputRef}
-                                                        type="number"
-                                                        min={7}
-                                                        max={365}
-                                                        value={weightRangeDraft}
-                                                        onChange={e => setWeightRangeDraft(e.target.value)}
-                                                        onBlur={() => {
-                                                            const parsed = parseInt(weightRangeDraft, 10);
-                                                            if (!isNaN(parsed) && parsed >= 7 && parsed <= 365) {
-                                                                setWeightDays(parsed);
-                                                            } else {
-                                                                setWeightRangeDraft(String(weightDays));
-                                                            }
+                    {/* ── Gewicht ── */}
+                    {weightValues.length > 0 && (
+                        <section className="forge-anim forge-d2">
+                            <div className="card-forge p-3">
+
+                                {/* ── Header row: icon + label | range edit | delta ── */}
+                                <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
+                                    <div className="flex items-center gap-1.5">
+                                        <Scale size={12} />
+                                        <span>Gewicht</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {/* Date range badge / editor */}
+                                        {weightRangeEditing ? (
+                                            <div className="flex items-center gap-1">
+                                                <input
+                                                    ref={weightInputRef}
+                                                    type="date"
+                                                    max={new Date().toISOString().slice(0, 10)}
+                                                    defaultValue={
+                                                        weightStartDate ??
+                                                        (() => {
+                                                            const d = new Date();
+                                                            d.setDate(d.getDate() - 90);
+                                                            return d.toISOString().slice(0, 10);
+                                                        })()
+                                                    }
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        if (val) {
+                                                            setWeightStartDate(val);
                                                             setWeightRangeEditing(false);
-                                                        }}
-                                                        className="w-12 rounded-md px-1.5 py-0.5 text-[11px] tabular-nums text-center outline-none"
-                                                        style={{
-                                                            background: 'rgba(232,197,138,0.12)',
-                                                            border: `1px solid ${SAND}55`,
-                                                            color: SAND,
-                                                        }}
-                                                        autoFocus
-                                                    />
-                                                    <span style={{ color: TEXT_DIM }}>Tage</span>
-                                                    <button type="submit" className="tap ml-0.5" style={{ color: '#4ade80' }} aria-label="Bestätigen">
-                                                        <Check size={12} />
-                                                    </button>
-                                                </form>
-                                            ) : (
-                                                <button
-                                                    className="tap flex items-center gap-1 rounded-md px-1.5 py-0.5"
-                                                    style={{ background: 'rgba(232,197,138,0.08)', color: TEXT_DIM }}
-                                                    onClick={() => {
-                                                        setWeightRangeDraft(String(weightDays));
-                                                        setWeightRangeEditing(true);
-                                                        setTimeout(() => weightInputRef.current?.select(), 30);
+                                                        }
                                                     }}
-                                                    title="Zeitraum bearbeiten"
-                                                >
-                                                    <span className="tabular-nums">{weightDays}d</span>
-                                                    <Pencil size={9} style={{ color: TEXT_DIM }} />
-                                                </button>
-                                            )}
-
-                                            {/* Total delta */}
-                                            {weightDelta !== null && !weightRangeEditing && (
-                                                <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
-                                                    {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)} kg
+                                                    onBlur={() => setWeightRangeEditing(false)}
+                                                    onKeyDown={e => {
+                                                        if (e.key === 'Escape') {
+                                                            setWeightRangeEditing(false);
+                                                        }
+                                                    }}
+                                                    className="rounded-md px-1.5 py-0.5 text-[11px] outline-none"
+                                                    style={{
+                                                        background: 'rgba(232,197,138,0.12)',
+                                                        border: `1px solid ${SAND}55`,
+                                                        color: SAND,
+                                                        colorScheme: 'dark',
+                                                    }}
+                                                    autoFocus
+                                                />
+                                                {weightStartDate && (
+                                                    <button
+                                                        className="tap text-[9px]"
+                                                        style={{ color: TEXT_DIM }}
+                                                        onClick={() => { setWeightStartDate(null); setWeightRangeEditing(false); }}
+                                                        title="Zurücksetzen"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <button
+                                                className="tap flex items-center gap-1 rounded-md px-1.5 py-0.5"
+                                                style={{ background: 'rgba(232,197,138,0.08)', color: TEXT_DIM }}
+                                                onClick={() => {
+                                                    setWeightRangeEditing(true);
+                                                    setTimeout(() => weightInputRef.current?.showPicker?.(), 30);
+                                                }}
+                                                title="Startzeitpunkt festlegen"
+                                            >
+                                                <span className="tabular-nums">
+                                                    {weightStartDate
+                                                        ? new Date(`${weightStartDate}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: '2-digit' })
+                                                        : '90d'}
                                                 </span>
-                                            )}
-                                        </div>
+                                                <Pencil size={9} />
+                                            </button>
+                                        )}
+
+                                        {/* Total delta */}
+                                        {weightDelta !== null && !weightRangeEditing && (
+                                            <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
+                                                {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)} kg
+                                            </span>
+                                        )}
                                     </div>
-
-                                    {/* ── Current weight ── */}
-                                    <div className="text-[20px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: '#f2ece0' }}>
-                                        {weightCurrent?.toFixed(1)}
-                                        <span className="text-[11px] font-normal ml-0.5" style={{ color: TEXT_DIM }}>kg</span>
-                                    </div>
-
-                                    {/* ── Chart ── */}
-                                    {weightHistory.length >= 4 && (
-                                        <div className="mt-2">
-                                            <WeightChart entries={weightHistory} />
-                                        </div>
-                                    )}
-
-                                    {/* ── Weekly avg change ── */}
-                                    {weightWeeklyAvg !== null && (
-                                        <div className="mt-2 text-[10px] tabular-nums" style={{ color: '#4ade80' }}>
-                                            Ø {weightWeeklyAvg > 0 ? '+' : ''}{(weightWeeklyAvg * 1000).toFixed(0)} g / Woche
-                                        </div>
-                                    )}
                                 </div>
-                            )}
+
+                                {/* ── Current weight ── */}
+                                <div className="text-[20px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: '#f2ece0' }}>
+                                    {weightCurrent?.toFixed(1)}
+                                    <span className="text-[11px] font-normal ml-0.5" style={{ color: TEXT_DIM }}>kg</span>
+                                </div>
+
+                                {/* ── Chart ── */}
+                                {weightHistory.length >= 4 && (
+                                    <div className="mt-2">
+                                        <WeightChart entries={weightHistory} />
+                                    </div>
+                                )}
+
+                                {/* ── Weekly avg change ── */}
+                                {weightWeeklyAvg !== null && (
+                                    <div className="mt-2 text-[10px] tabular-nums" style={{ color: '#4ade80' }}>
+                                        Ø {weightWeeklyAvg > 0 ? '+' : ''}{(weightWeeklyAvg * 1000).toFixed(0)} g / Woche
+                                    </div>
+                                )}
+                            </div>
                         </section>
                     )}
 

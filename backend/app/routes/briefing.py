@@ -528,17 +528,34 @@ async def get_activity_heatmap(
 async def get_weight_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    days: int = Query(90, ge=7, le=365),
+    days: int = Query(90, ge=7, le=3650),
+    start_date: str | None = Query(None, description="ISO date string YYYY-MM-DD; overrides 'days' when provided"),
 ):
     """
-    Return the user's weight history (last N days).
+    Return the user's weight history from a given start date until today.
 
-    Each dashboard load fetches today's Yazio summary first, so the displayed
+    Either supply ``start_date`` (ISO date, e.g. 2024-01-01) or ``days``
+    (integer, default 90).  When both are present, ``start_date`` wins.
+
+    Each dashboard load fetches today's Yazio summary first so the displayed
     current weight reflects a same-day entry instead of only the morning sync.
     """
     from datetime import timedelta
     today_date = date.today()
-    cutoff = today_date - timedelta(days=days)
+
+    if start_date:
+        try:
+            cutoff = date.fromisoformat(start_date)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=422, detail="start_date must be a valid ISO date (YYYY-MM-DD)")
+        # Clamp to a sane range: not in the future, not more than 10 years back
+        if cutoff > today_date:
+            cutoff = today_date
+        if cutoff < today_date - timedelta(days=3650):
+            cutoff = today_date - timedelta(days=3650)
+    else:
+        cutoff = today_date - timedelta(days=days)
 
     # Refresh today's weight on demand; _log_weight_entry updates the existing
     # daily snapshot only when Yazio reports a meaningfully different value.
