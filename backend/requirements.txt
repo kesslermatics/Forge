@@ -6,6 +6,9 @@ mcp==2.0.1
 
 # Database
 sqlalchemy>=2.0.25
+# psycopg2-binary is the PostgreSQL driver. Railway and other PaaS providers
+# set DATABASE_URL to a plain postgres:// URL; database.py rewrites it to
+# use the psycopg2 dialect so no psycopg3 package is needed.
 psycopg2-binary>=2.9.9
 
 # Authentication & Security
