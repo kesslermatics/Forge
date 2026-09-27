@@ -5,18 +5,178 @@ import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction,
   completeForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, deleteForgeSession,
   dismissForgeSessionAction, generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
-  getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
+  getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, getForgeExerciseHistory, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
-import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput, ForgeSessionSetUpdateInput } from '../api/api';
+import type { ForgeExercise, ForgeExerciseHistory, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionSet, ForgeSessionSetInput, ForgeSessionSetUpdateInput } from '../api/api';
 import ForgeSessionLoader from './ForgeSessionLoader';
 import ForgeExercisePicker from './ForgeExercisePicker';
 import ForgeSheet from './ForgeSheet';
 import ConfirmDialog from './ConfirmDialog';
+import { AreaChart, Area, BarChart, Bar, YAxis, XAxis, ResponsiveContainer, Tooltip } from 'recharts';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
 const DIM = 'rgba(242,236,226,0.48)';
 const BORDER = 'rgba(232,197,138,0.11)';
+const MINT = '#83d6ad';
+
+/* ── e1RM (Epley) ── */
+const epley = (kg: number, reps: number) => kg * (1 + reps / 30);
+
+/* ── ExerciseStatsCard ── */
+function ExerciseStatsCard({ exerciseId, machineProfileId }: {
+  exerciseId: string;
+  machineProfileId: string | null;
+}) {
+  const [history, setHistory] = useState<ForgeExerciseHistory | null>(null);
+
+  // Use same start date as the weight chart on Home
+  const startDate = localStorage.getItem('weightStartDate') ?? (() => {
+    const d = new Date(); d.setDate(d.getDate() - 90);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  useEffect(() => {
+    setHistory(null);
+    getForgeExerciseHistory(exerciseId, machineProfileId)
+      .then(setHistory)
+      .catch(() => { });
+  }, [exerciseId, machineProfileId]);
+
+  const { chartData, lastSession, prevSession } = useMemo(() => {
+    if (!history) return { chartData: [], lastSession: null, prevSession: null };
+
+    // Filter to start date, sort oldest→newest
+    const sessions = [...history.sessions]
+      .filter(s => (s.completed_at || s.started_at) >= startDate)
+      .reverse();
+
+    const chartData = sessions.flatMap(s => {
+      const working = s.sets.filter(
+        set => set.set_type === 'working' && set.actual_weight_kg != null && set.actual_reps != null && set.actual_weight_kg > 0,
+      );
+      if (!working.length) return [];
+      const bestE1rm = Math.max(...working.map(set => epley(set.actual_weight_kg!, set.actual_reps!)));
+      const volume = working.reduce((sum, set) => sum + (set.actual_weight_kg ?? 0) * (set.actual_reps ?? 0), 0);
+      const date = (s.completed_at || s.started_at).slice(0, 10);
+      return [{ date, e1rm: Math.round(bestE1rm * 10) / 10, volume: Math.round(volume) }];
+    });
+
+    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
+    const prevSession = sessions.length > 1 ? sessions[sessions.length - 2] : null;
+    return { chartData, lastSession, prevSession };
+  }, [history, startDate]);
+
+  if (!history) return (
+    <div className="mx-4 mb-3 flex items-center justify-center py-4">
+      <Loader2 size={14} className="animate-spin" style={{ color: DIM }} />
+    </div>
+  );
+
+  if (chartData.length < 2) return null; // not enough data to be useful
+
+  const lastBestKg = lastSession
+    ? Math.max(0, ...lastSession.sets
+      .filter(s => s.set_type === 'working' && (s.actual_weight_kg ?? 0) > 0)
+      .map(s => s.actual_weight_kg!))
+    : null;
+  const prevBestKg = prevSession
+    ? Math.max(0, ...prevSession.sets
+      .filter(s => s.set_type === 'working' && (s.actual_weight_kg ?? 0) > 0)
+      .map(s => s.actual_weight_kg!))
+    : null;
+  const kgDelta = lastBestKg != null && prevBestKg != null ? lastBestKg - prevBestKg : null;
+
+  const tooltipStyle = {
+    background: 'rgba(22,19,15,0.95)',
+    border: `1px solid rgba(232,197,138,0.18)`,
+    borderRadius: 8,
+    fontSize: 10,
+    color: TEXT,
+    padding: '3px 8px',
+  };
+
+  return (
+    <div className="mx-4 mb-4 grid grid-cols-2 gap-2">
+      {/* ── e1RM chart ── */}
+      <div className="rounded-2xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+        <p className="text-[9px] uppercase tracking-widest mb-2" style={{ color: DIM }}>
+          Geschätzte 1RM
+        </p>
+        <p className="text-[17px] font-semibold tabular-nums leading-none mb-2" style={{ color: MINT }}>
+          {chartData[chartData.length - 1].e1rm.toFixed(1)}
+          <span className="text-[10px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
+        </p>
+        <ResponsiveContainer width="100%" height={44}>
+          <AreaChart data={chartData} margin={{ top: 2, right: 2, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id="e1rmGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={MINT} stopOpacity={0.22} />
+                <stop offset="100%" stopColor={MINT} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="date" hide />
+            <YAxis domain={['auto', 'auto']} hide />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              itemStyle={{ color: MINT }}
+              labelStyle={{ color: DIM, marginBottom: 2 }}
+              formatter={(v: number | undefined) => v != null ? `${v.toFixed(1)} kg` : ''}
+              labelFormatter={(l: unknown) => new Date(`${l}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
+              cursor={{ stroke: 'rgba(255,247,235,0.1)', strokeWidth: 1 }}
+            />
+            <Area
+              type="monotone" dataKey="e1rm"
+              stroke={MINT} strokeWidth={1.8}
+              fill="url(#e1rmGrad)"
+              dot={false}
+              activeDot={{ r: 3, fill: MINT, strokeWidth: 0 }}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* ── Volume bar chart ── */}
+      <div className="rounded-2xl p-3" style={{ background: 'rgba(255,247,235,0.03)', border: `1px solid rgba(255,247,235,0.06)` }}>
+        <p className="text-[9px] uppercase tracking-widest mb-2" style={{ color: DIM }}>
+          Volumen
+        </p>
+        {kgDelta !== null ? (
+          <p className="text-[17px] font-semibold tabular-nums leading-none mb-2" style={{ color: kgDelta >= 0 ? SAND : '#f87171' }}>
+            {kgDelta >= 0 ? '+' : ''}{kgDelta.toFixed(1)}
+            <span className="text-[10px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
+          </p>
+        ) : (
+          <p className="text-[17px] font-semibold tabular-nums leading-none mb-2" style={{ color: SAND }}>
+            {chartData[chartData.length - 1].volume.toLocaleString('de-DE')}
+            <span className="text-[10px] font-normal ml-0.5" style={{ color: DIM }}>kg</span>
+          </p>
+        )}
+        <ResponsiveContainer width="100%" height={44}>
+          <BarChart data={chartData} margin={{ top: 2, right: 2, bottom: 0, left: 0 }} barCategoryGap="30%">
+            <XAxis dataKey="date" hide />
+            <YAxis domain={[0, 'auto']} hide />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              itemStyle={{ color: SAND }}
+              labelStyle={{ color: DIM, marginBottom: 2 }}
+              formatter={(v: number | undefined) => v != null ? `${v.toLocaleString('de-DE')} kg` : ''}
+              labelFormatter={(l: unknown) => new Date(`${l}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
+              cursor={{ fill: 'rgba(255,247,235,0.04)' }}
+            />
+            <Bar
+              dataKey="volume" fill={SAND}
+              radius={[3, 3, 0, 0]}
+              opacity={0.7}
+              isAnimationActive={false}
+            />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
 
 const toCreateInput = (set: ForgeSessionSet, overrides: Partial<ForgeSessionSetInput> = {}): ForgeSessionSetInput => ({
   set_type: set.set_type,
@@ -84,6 +244,7 @@ export default function ForgeSessionPage() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [analyzingProfileId, setAnalyzingProfileId] = useState<string | null>(null);
   const [celebratingCompletion, setCelebratingCompletion] = useState(false);
+  const [coachBriefOpen, setCoachBriefOpen] = useState(true); // auto-open when AI coaching arrives
   const [sessionActionConfirm, setSessionActionConfirm] = useState<'complete' | 'discard' | null>(null);
   const [completionChanges, setCompletionChanges] = useState<ForgePlanChanges | null>(null);
   const [reviewingCompletion, setReviewingCompletion] = useState(false);
@@ -392,11 +553,75 @@ export default function ForgeSessionPage() {
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start justify-between gap-3">
       <div className="flex gap-3"><button onClick={() => void leaveSession()} disabled={saving} className="tap mt-1 cursor-pointer disabled:cursor-default disabled:opacity-50" style={{ color: DIM }} aria-label="Zurück zum Dashboard"><ArrowLeft size={18} /></button><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{session.status === 'active' ? 'Live Session' : 'Abgeschlossen'}</p><h1 className="text-[22px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>{session.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · {duration}</p></div></div>
-      {session.status === 'active' && <div className="flex items-center gap-3"><button onClick={() => setSessionActionConfirm('discard')} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button><button onClick={() => void reviewCompletion()} disabled={saving || reviewingCompletion} className="tap flex items-center gap-1 text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>{reviewingCompletion && <Loader2 size={12} className="animate-spin" />}Beenden</button></div>}
+      {session.status === 'active' && <div className="flex items-center gap-3">
+        {session.start_coaching?.coaching_source === 'ai' && !coachBriefOpen && (
+          <button
+            onClick={() => setCoachBriefOpen(true)}
+            className="tap flex items-center gap-1 rounded-full px-2 py-1"
+            style={{ background: `${SAND}14`, color: SAND }}
+            title="KI-Analyse anzeigen"
+          >
+            <Sparkles size={11} />
+            <span className="text-[10px] font-medium">Coach</span>
+          </button>
+        )}
+        <button onClick={() => setSessionActionConfirm('discard')} disabled={saving} className="tap text-[11px] cursor-pointer" style={{ color: DIM }}>Verwerfen</button>
+        <button onClick={() => void reviewCompletion()} disabled={saving || reviewingCompletion} className="tap flex items-center gap-1 text-[11px] font-medium cursor-pointer" style={{ color: SAND }}>{reviewingCompletion && <Loader2 size={12} className="animate-spin" />}Beenden</button>
+      </div>}
     </header>
-    {session.start_coaching?.coaching_source === 'ai' && <section className="forge-coach-brief card-forge p-5" style={{ borderColor: `${SAND}40`, background: 'linear-gradient(135deg, rgba(232,197,138,0.13), rgba(255,247,235,0.025))' }}>
-      <div className="flex items-start gap-3"><div className="forge-coach-spark"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p><span className="rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: SAND, background: `${SAND}14` }}>KI-Analyse</span></div><h2 className="mt-1 text-[17px] font-semibold" style={{ color: TEXT }}>{session.start_coaching.headline}</h2><p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.78)' }}>{session.start_coaching.session_focus}</p></div></div>
-    </section>}
+    {/* ── KI-Coach Brief — modal overlay, auto-opens once, dismissable ── */}
+    {session.start_coaching?.coaching_source === 'ai' && coachBriefOpen && (
+      <div
+        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+        style={{ background: 'rgba(10,8,5,0.72)', backdropFilter: 'blur(4px)' }}
+        onClick={() => setCoachBriefOpen(false)}
+      >
+        <div
+          className="w-full max-w-md rounded-3xl p-6 space-y-4"
+          style={{
+            background: 'linear-gradient(160deg, #221c10, #1a1509)',
+            border: `1px solid ${SAND}33`,
+            boxShadow: `0 24px 64px -12px rgba(0,0,0,0.7), 0 0 0 1px rgba(232,197,138,0.08)`,
+          }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* header */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="forge-coach-spark"><Sparkles size={16} /></div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: SAND }}>Forge KI-Coach</p>
+                <p className="text-[9px] mt-0.5" style={{ color: DIM }}>Analyse für diese Session</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setCoachBriefOpen(false)}
+              className="tap flex h-7 w-7 items-center justify-center rounded-full shrink-0"
+              style={{ background: 'rgba(255,247,235,0.07)', color: DIM }}
+              aria-label="Schließen"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {/* content */}
+          <div>
+            <h2 className="text-[18px] font-semibold leading-snug" style={{ color: TEXT }}>
+              {session.start_coaching.headline}
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.75)' }}>
+              {session.start_coaching.session_focus}
+            </p>
+          </div>
+          {/* dismiss */}
+          <button
+            onClick={() => setCoachBriefOpen(false)}
+            className="btn-forge w-full"
+          >
+            Los geht's
+          </button>
+        </div>
+      </div>
+    )}
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
 
     {session.status === 'completed' && <section className={`card-forge p-5 flex items-center gap-4 ${celebratingCompletion ? 'forge-session-complete' : ''}`} style={{ borderColor: `${SAND}44`, background: 'rgba(232,197,138,0.08)' }}><div className={`forge-completion-mark ${celebratingCompletion ? 'forge-completion-bloom' : ''}`}><Check size={22} /></div><div><p className="text-[15px] font-semibold" style={{ color: TEXT }}>Stark gemacht.</p><p className="text-[12px] mt-1" style={{ color: DIM }}>{completedSets} von {totalSets} Sätzen · Dauer {duration}</p></div><Clock3 className="ml-auto" size={18} style={{ color: SAND }} /></section>}
@@ -414,6 +639,12 @@ export default function ForgeSessionPage() {
             </div>
           </div>
         </aside>}
+        {activeExercise.source_exercise_id && (
+          <ExerciseStatsCard
+            exerciseId={activeExercise.source_exercise_id}
+            machineProfileId={activeExercise.machine_profile_id}
+          />
+        )}
         <div className="border-y" style={{ borderColor: 'rgba(255,247,235,0.06)' }}>
           <div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '36px 1fr 1fr 32px', color: DIM }}><span>Satz</span><span className="text-center">Ziel</span><span className="text-center">Heute</span><span /></div>
           {activeExercise.sets.map((set, index) => {

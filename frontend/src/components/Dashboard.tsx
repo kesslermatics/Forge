@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    AreaChart, Area, YAxis, XAxis, Tooltip,
+    ResponsiveContainer, CartesianGrid,
+} from 'recharts';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
@@ -25,85 +29,84 @@ const TEXT_MID = 'rgba(242,236,226,0.7)';
 
 type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 
-/* ── weight chart with Y-axis labels ── */
-function WeightChart({ entries, color = SAND }: { entries: WeightHistoryEntry[]; color?: string }) {
+/* ── weight chart — Recharts ── */
+function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
     if (entries.length < 2) return null;
-
-    const W = 300;
-    const H = 72;
-    const PAD_LEFT = 34; // space for Y labels
-    const PAD_RIGHT = 6;
-    const PAD_TOP = 6;
-    const PAD_BOTTOM = 6;
 
     const values = entries.map(e => e.weight_kg);
     const rawMin = Math.min(...values);
     const rawMax = Math.max(...values);
     const spread = rawMax - rawMin || 0.5;
-    // Add 15% padding above and below so the line never hugs the edges
-    const yMin = rawMin - spread * 0.15;
-    const yMax = rawMax + spread * 0.15;
-    const yRange = yMax - yMin;
+    const yMin = Math.floor((rawMin - spread * 0.2) * 10) / 10;
+    const yMax = Math.ceil((rawMax + spread * 0.2) * 10) / 10;
 
-    const toX = (i: number) =>
-        PAD_LEFT + (i / (entries.length - 1)) * (W - PAD_LEFT - PAD_RIGHT);
-    const toY = (v: number) =>
-        PAD_TOP + (H - PAD_TOP - PAD_BOTTOM) * (1 - (v - yMin) / yRange);
+    // 3 evenly-spaced ticks
+    const mid = Math.round(((yMin + yMax) / 2) * 10) / 10;
+    const yTicks = [yMin, mid, yMax];
 
-    const pts = entries.map((e, i) => ({ x: toX(i), y: toY(e.weight_kg) }));
-
-    let line = `M ${pts[0].x} ${pts[0].y}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-        const cx = pts[i].x + (pts[i + 1].x - pts[i].x) * 0.4;
-        line += ` C ${cx} ${pts[i].y}, ${pts[i + 1].x - (pts[i + 1].x - pts[i].x) * 0.4} ${pts[i + 1].y}, ${pts[i + 1].x} ${pts[i + 1].y}`;
-    }
-    const area = `${line} L ${pts[pts.length - 1].x} ${H - PAD_BOTTOM} L ${pts[0].x} ${H - PAD_BOTTOM} Z`;
-
-    // 3 Y-axis tick values: min, mid, max (rounded to 1 decimal)
-    const yTicks = [rawMax, (rawMin + rawMax) / 2, rawMin];
+    const data = entries.map(e => ({
+        date: e.date,
+        kg: e.weight_kg,
+    }));
 
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
-            <defs>
-                <linearGradient id="wchrt" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={color} stopOpacity="0.22" />
-                    <stop offset="100%" stopColor={color} stopOpacity="0" />
-                </linearGradient>
-            </defs>
-
-            {/* Y-axis tick lines (subtle) */}
-            {yTicks.map((v, i) => {
-                const y = toY(v);
-                return (
-                    <g key={i}>
-                        <line
-                            x1={PAD_LEFT} y1={y} x2={W - PAD_RIGHT} y2={y}
-                            stroke="rgba(242,236,226,0.06)" strokeWidth="1"
-                        />
-                        <text
-                            x={PAD_LEFT - 4} y={y + 3.5}
-                            textAnchor="end"
-                            fontSize="8"
-                            fill="rgba(242,236,226,0.35)"
-                            fontFamily="inherit"
-                        >
-                            {v.toFixed(1)}
-                        </text>
-                    </g>
-                );
-            })}
-
-            {/* Area fill */}
-            <path d={area} fill="url(#wchrt)" />
-            {/* Line */}
-            <path d={line} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-
-            {/* Last-point dot */}
-            <circle cx={pts[pts.length - 1].x} cy={pts[pts.length - 1].y} r="2.5" fill={color} />
-        </svg>
+        <ResponsiveContainer width="100%" height={100}>
+            <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <defs>
+                    <linearGradient id="wgrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={SAND} stopOpacity={0.25} />
+                        <stop offset="100%" stopColor={SAND} stopOpacity={0} />
+                    </linearGradient>
+                </defs>
+                <CartesianGrid
+                    vertical={false}
+                    stroke="rgba(242,236,226,0.06)"
+                    strokeDasharray="0"
+                />
+                <XAxis dataKey="date" hide />
+                <YAxis
+                    domain={[yMin, yMax]}
+                    ticks={yTicks}
+                    tickFormatter={v => v.toFixed(1)}
+                    tick={{ fontSize: 9, fill: 'rgba(242,236,226,0.35)', fontFamily: 'inherit' }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={32}
+                />
+                <Tooltip
+                    contentStyle={{
+                        background: 'rgba(30,24,18,0.92)',
+                        border: `1px solid rgba(232,197,138,0.2)`,
+                        borderRadius: 8,
+                        fontSize: 11,
+                        color: '#f2ece2',
+                        padding: '4px 10px',
+                    }}
+                    itemStyle={{ color: SAND }}
+                    labelStyle={{ color: 'rgba(242,236,226,0.45)', marginBottom: 2, fontSize: 10 }}
+                    formatter={(v: number | undefined) => v != null ? `${v.toFixed(1)} kg` : ''}
+                    labelFormatter={(label: unknown) => {
+                        const s = String(label);
+                        return new Date(`${s}T12:00:00`).toLocaleDateString('de-DE', {
+                            day: 'numeric', month: 'short', year: 'numeric',
+                        });
+                    }}
+                    cursor={{ stroke: 'rgba(232,197,138,0.3)', strokeWidth: 1 }}
+                />
+                <Area
+                    type="monotone"
+                    dataKey="kg"
+                    stroke={SAND}
+                    strokeWidth={2}
+                    fill="url(#wgrad)"
+                    dot={false}
+                    activeDot={{ r: 3.5, fill: SAND, strokeWidth: 0 }}
+                    isAnimationActive={false}
+                />
+            </AreaChart>
+        </ResponsiveContainer>
     );
 }
-
 /* ── macro bar ── */
 function MacroBar({ label, current, goal, color }: { label: string; current: number; goal: number; color: string }) {
     const pct = goal > 0 ? Math.min(current / goal, 1) : 0;
@@ -148,10 +151,20 @@ export default function Dashboard() {
     const [startingSession, setStartingSession] = useState(false);
     const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
-    // Weight chart range — startDate null means "use default 90 days"
-    const [weightStartDate, setWeightStartDate] = useState<string | null>(null);
-    const [weightRangeEditing, setWeightRangeEditing] = useState(false);
+    // Weight chart range — persisted in localStorage
+    const [weightStartDate, setWeightStartDate] = useState<string>(() => {
+        const saved = localStorage.getItem('weightStartDate');
+        if (saved) return saved;
+        const d = new Date();
+        d.setDate(d.getDate() - 90);
+        return d.toISOString().slice(0, 10);
+    });
     const weightInputRef = useRef<HTMLInputElement>(null);
+
+    const updateWeightStartDate = (val: string) => {
+        setWeightStartDate(val);
+        localStorage.setItem('weightStartDate', val);
+    };
 
     /* load briefing + secondary data */
     useEffect(() => {
@@ -407,82 +420,35 @@ export default function Dashboard() {
                         <section className="forge-anim forge-d2">
                             <div className="card-forge p-3">
 
-                                {/* ── Header row: icon + label | range edit | delta ── */}
+                                {/* ── Header row: icon + label | date input | delta ── */}
                                 <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
                                     <div className="flex items-center gap-1.5">
                                         <Scale size={12} />
                                         <span>Gewicht</span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        {/* Date range badge / editor */}
-                                        {weightRangeEditing ? (
-                                            <div className="flex items-center gap-1">
-                                                <input
-                                                    ref={weightInputRef}
-                                                    type="date"
-                                                    max={new Date().toISOString().slice(0, 10)}
-                                                    defaultValue={
-                                                        weightStartDate ??
-                                                        (() => {
-                                                            const d = new Date();
-                                                            d.setDate(d.getDate() - 90);
-                                                            return d.toISOString().slice(0, 10);
-                                                        })()
-                                                    }
-                                                    onChange={e => {
-                                                        const val = e.target.value;
-                                                        if (val) {
-                                                            setWeightStartDate(val);
-                                                            setWeightRangeEditing(false);
-                                                        }
-                                                    }}
-                                                    onBlur={() => setWeightRangeEditing(false)}
-                                                    onKeyDown={e => {
-                                                        if (e.key === 'Escape') {
-                                                            setWeightRangeEditing(false);
-                                                        }
-                                                    }}
-                                                    className="rounded-md px-1.5 py-0.5 text-[11px] outline-none"
-                                                    style={{
-                                                        background: 'rgba(232,197,138,0.12)',
-                                                        border: `1px solid ${SAND}55`,
-                                                        color: SAND,
-                                                        colorScheme: 'dark',
-                                                    }}
-                                                    autoFocus
-                                                />
-                                                {weightStartDate && (
-                                                    <button
-                                                        className="tap text-[9px]"
-                                                        style={{ color: TEXT_DIM }}
-                                                        onClick={() => { setWeightStartDate(null); setWeightRangeEditing(false); }}
-                                                        title="Zurücksetzen"
-                                                    >
-                                                        <X size={10} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <button
-                                                className="tap flex items-center gap-1 rounded-md px-1.5 py-0.5"
-                                                style={{ background: 'rgba(232,197,138,0.08)', color: TEXT_DIM }}
-                                                onClick={() => {
-                                                    setWeightRangeEditing(true);
-                                                    setTimeout(() => weightInputRef.current?.showPicker?.(), 30);
-                                                }}
-                                                title="Startzeitpunkt festlegen"
-                                            >
-                                                <span className="tabular-nums">
-                                                    {weightStartDate
-                                                        ? new Date(`${weightStartDate}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: '2-digit' })
-                                                        : '90d'}
-                                                </span>
-                                                <Pencil size={9} />
-                                            </button>
-                                        )}
+                                        {/* Date picker — always visible */}
+                                        <label className="flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer"
+                                            style={{ background: 'rgba(232,197,138,0.08)' }}>
+                                            <Pencil size={9} style={{ color: TEXT_DIM }} />
+                                            <span className="tabular-nums" style={{ color: TEXT_DIM }}>
+                                                {new Date(`${weightStartDate}T12:00:00`).toLocaleDateString('de-DE', {
+                                                    day: 'numeric', month: 'short', year: '2-digit',
+                                                })}
+                                            </span>
+                                            <input
+                                                ref={weightInputRef}
+                                                type="date"
+                                                max={new Date().toISOString().slice(0, 10)}
+                                                value={weightStartDate}
+                                                onChange={e => { if (e.target.value) updateWeightStartDate(e.target.value); }}
+                                                className="sr-only"
+                                                style={{ colorScheme: 'dark' }}
+                                            />
+                                        </label>
 
                                         {/* Total delta */}
-                                        {weightDelta !== null && !weightRangeEditing && (
+                                        {weightDelta !== null && (
                                             <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
                                                 {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)} kg
                                             </span>

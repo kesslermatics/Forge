@@ -62,6 +62,16 @@ body {
   min-height: 100dvh;
 }
 
+/* ── Kill browser/Tailwind focus outlines everywhere ── */
+*:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+*:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* ── Sand gradient text ────────────────────────────── */
 .text-gradient-gold {
   background: linear-gradient(90deg, #d8c8a8, #e8c58a, #c8b488);
@@ -201,6 +211,9 @@ body {
 /* ── Tap feedback ──────────────────────────────────── */
 .tap { transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .tap:active { transform: scale(0.97); }
+.tap:focus-visible { outline: none; }
+button:focus-visible { outline: none; }
+button:focus { outline: none; }
 
 /* ── Forge session feedback ─────────────────────────── */
 @keyframes forge-set-check {

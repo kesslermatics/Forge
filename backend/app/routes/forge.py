@@ -1196,6 +1196,12 @@ def _session_coaching_context(
     completed_sessions = db.query(ForgeWorkoutSession).filter(
         ForgeWorkoutSession.user_id == user.id,
         ForgeWorkoutSession.status == "completed",
+        # 90 days is more than enough: 28-day muscle-volume windows need at most
+        # 28 days of history, and we cap per-exercise exposures at 6 sessions.
+        # Loading every session ever is wasteful and slows down the coaching call
+        # proportionally to the user's total workout history.
+        (ForgeWorkoutSession.completed_at >= date.today() - timedelta(days=90))
+        | (ForgeWorkoutSession.started_at >= date.today() - timedelta(days=90)),
     ).order_by(ForgeWorkoutSession.completed_at.desc().nullslast(), ForgeWorkoutSession.started_at.desc()).all()
     today = date.today()
 
