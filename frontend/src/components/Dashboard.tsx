@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
@@ -10,7 +10,7 @@ import type {
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
-    Dumbbell, Scale, X, ChevronRight, Clock3,
+    Dumbbell, Scale, X, ChevronRight, Clock3, Pencil, Check,
 } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
@@ -25,32 +25,81 @@ const TEXT_MID = 'rgba(242,236,226,0.7)';
 
 type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 
-/* ── sparkline ── */
-function Spark({ values, color = SAND, h = 36 }: { values: number[]; color?: string; h?: number }) {
-    if (values.length < 2) return null;
-    const W = 300; const PAD = 4;
-    const min = Math.min(...values); const max = Math.max(...values);
-    const range = max - min || 1;
-    const pts = values.map((v, i) => ({
-        x: PAD + (i / (values.length - 1)) * (W - PAD * 2),
-        y: PAD + (h - PAD * 2) - ((v - min) / range) * (h - PAD * 2),
-    }));
+/* ── weight chart with Y-axis labels ── */
+function WeightChart({ entries, color = SAND }: { entries: WeightHistoryEntry[]; color?: string }) {
+    if (entries.length < 2) return null;
+
+    const W = 300;
+    const H = 72;
+    const PAD_LEFT = 34; // space for Y labels
+    const PAD_RIGHT = 6;
+    const PAD_TOP = 6;
+    const PAD_BOTTOM = 6;
+
+    const values = entries.map(e => e.weight_kg);
+    const rawMin = Math.min(...values);
+    const rawMax = Math.max(...values);
+    const spread = rawMax - rawMin || 0.5;
+    // Add 15% padding above and below so the line never hugs the edges
+    const yMin = rawMin - spread * 0.15;
+    const yMax = rawMax + spread * 0.15;
+    const yRange = yMax - yMin;
+
+    const toX = (i: number) =>
+        PAD_LEFT + (i / (entries.length - 1)) * (W - PAD_LEFT - PAD_RIGHT);
+    const toY = (v: number) =>
+        PAD_TOP + (H - PAD_TOP - PAD_BOTTOM) * (1 - (v - yMin) / yRange);
+
+    const pts = entries.map((e, i) => ({ x: toX(i), y: toY(e.weight_kg) }));
+
     let line = `M ${pts[0].x} ${pts[0].y}`;
     for (let i = 0; i < pts.length - 1; i++) {
         const cx = pts[i].x + (pts[i + 1].x - pts[i].x) * 0.4;
         line += ` C ${cx} ${pts[i].y}, ${pts[i + 1].x - (pts[i + 1].x - pts[i].x) * 0.4} ${pts[i + 1].y}, ${pts[i + 1].x} ${pts[i + 1].y}`;
     }
-    const area = `${line} L ${pts[pts.length - 1].x} ${h - PAD} L ${pts[0].x} ${h - PAD} Z`;
+    const area = `${line} L ${pts[pts.length - 1].x} ${H - PAD_BOTTOM} L ${pts[0].x} ${H - PAD_BOTTOM} Z`;
+
+    // 3 Y-axis tick values: min, mid, max (rounded to 1 decimal)
+    const yTicks = [rawMax, (rawMin + rawMax) / 2, rawMin];
+
     return (
-        <svg viewBox={`0 0 ${W} ${h}`} className="w-full" style={{ height: h }}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
             <defs>
-                <linearGradient id="spk" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+                <linearGradient id="wchrt" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={color} stopOpacity="0.22" />
                     <stop offset="100%" stopColor={color} stopOpacity="0" />
                 </linearGradient>
             </defs>
-            <path d={area} fill="url(#spk)" />
-            <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" />
+
+            {/* Y-axis tick lines (subtle) */}
+            {yTicks.map((v, i) => {
+                const y = toY(v);
+                return (
+                    <g key={i}>
+                        <line
+                            x1={PAD_LEFT} y1={y} x2={W - PAD_RIGHT} y2={y}
+                            stroke="rgba(242,236,226,0.06)" strokeWidth="1"
+                        />
+                        <text
+                            x={PAD_LEFT - 4} y={y + 3.5}
+                            textAnchor="end"
+                            fontSize="8"
+                            fill="rgba(242,236,226,0.35)"
+                            fontFamily="inherit"
+                        >
+                            {v.toFixed(1)}
+                        </text>
+                    </g>
+                );
+            })}
+
+            {/* Area fill */}
+            <path d={area} fill="url(#wchrt)" />
+            {/* Line */}
+            <path d={line} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+
+            {/* Last-point dot */}
+            <circle cx={pts[pts.length - 1].x} cy={pts[pts.length - 1].y} r="2.5" fill={color} />
         </svg>
     );
 }
@@ -99,6 +148,12 @@ export default function Dashboard() {
     const [startingSession, setStartingSession] = useState(false);
     const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
+    // Weight chart range
+    const [weightDays, setWeightDays] = useState(90);
+    const [weightRangeEditing, setWeightRangeEditing] = useState(false);
+    const [weightRangeDraft, setWeightRangeDraft] = useState('90');
+    const weightInputRef = useRef<HTMLInputElement>(null);
+
     /* load briefing + secondary data */
     useEffect(() => {
         let resolved = false;
@@ -130,7 +185,10 @@ export default function Dashboard() {
     }, []);
 
     useEffect(() => {
-        getWeightHistory(90).then(d => setWeightHistory(d.entries)).catch(() => { });
+        getWeightHistory(weightDays).then(d => setWeightHistory(d.entries)).catch(() => { });
+    }, [weightDays]);
+
+    useEffect(() => {
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
         getConsistency().then(setConsistency).catch(() => { });
         refreshForgeDashboard();
@@ -175,6 +233,17 @@ export default function Dashboard() {
     const weightValues = weightHistory.map(w => w.weight_kg);
     const weightCurrent = weightValues[weightValues.length - 1];
     const weightDelta = weightValues.length >= 2 ? weightCurrent - weightValues[0] : null;
+
+    // Weekly average change: total delta / span in weeks
+    const weightWeeklyAvg: number | null = (() => {
+        if (weightHistory.length < 2) return null;
+        const first = weightHistory[0];
+        const last = weightHistory[weightHistory.length - 1];
+        const daysDiff = (new Date(last.date).getTime() - new Date(first.date).getTime()) / (1000 * 60 * 60 * 24);
+        if (daysDiff < 7) return null;
+        const weeks = daysDiff / 7;
+        return (last.weight_kg - first.weight_kg) / weeks;
+    })();
     const homeRoutine = forgeToday?.routine ?? null;
     const availableTrainingPlans = forgeToday?.program?.routines
         .map((routine) => routine.plan)
@@ -329,24 +398,106 @@ export default function Dashboard() {
 
                     {/* ── Konsistenz + Gewicht ── */}
                     {(consistency || weightValues.length > 0) && (
-                        <section className="grid gap-3 forge-anim forge-d2 sm:grid-cols-[minmax(0,1fr)_124px]">
+                        <section className="grid gap-3 forge-anim forge-d2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                             {consistency && <ConsistencyTimeline data={consistency} />}
                             {weightValues.length > 0 && (
                                 <div className="card-forge p-3" style={{ gridColumn: consistency ? undefined : '1 / -1' }}>
+
+                                    {/* ── Header row: icon + label | range edit | delta ── */}
                                     <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
-                                        <div className="flex items-center gap-1"><Scale size={12} /> Gewicht</div>
-                                        {weightDelta !== null && (
-                                            <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
-                                                {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)}
-                                            </span>
-                                        )}
+                                        <div className="flex items-center gap-1.5">
+                                            <Scale size={12} />
+                                            <span>Gewicht</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {/* Range badge / editor */}
+                                            {weightRangeEditing ? (
+                                                <form
+                                                    className="flex items-center gap-1"
+                                                    onSubmit={e => {
+                                                        e.preventDefault();
+                                                        const parsed = parseInt(weightRangeDraft, 10);
+                                                        if (!isNaN(parsed) && parsed >= 7 && parsed <= 365) {
+                                                            setWeightDays(parsed);
+                                                        } else {
+                                                            setWeightRangeDraft(String(weightDays));
+                                                        }
+                                                        setWeightRangeEditing(false);
+                                                    }}
+                                                >
+                                                    <input
+                                                        ref={weightInputRef}
+                                                        type="number"
+                                                        min={7}
+                                                        max={365}
+                                                        value={weightRangeDraft}
+                                                        onChange={e => setWeightRangeDraft(e.target.value)}
+                                                        onBlur={() => {
+                                                            const parsed = parseInt(weightRangeDraft, 10);
+                                                            if (!isNaN(parsed) && parsed >= 7 && parsed <= 365) {
+                                                                setWeightDays(parsed);
+                                                            } else {
+                                                                setWeightRangeDraft(String(weightDays));
+                                                            }
+                                                            setWeightRangeEditing(false);
+                                                        }}
+                                                        className="w-12 rounded-md px-1.5 py-0.5 text-[11px] tabular-nums text-center outline-none"
+                                                        style={{
+                                                            background: 'rgba(232,197,138,0.12)',
+                                                            border: `1px solid ${SAND}55`,
+                                                            color: SAND,
+                                                        }}
+                                                        autoFocus
+                                                    />
+                                                    <span style={{ color: TEXT_DIM }}>Tage</span>
+                                                    <button type="submit" className="tap ml-0.5" style={{ color: '#4ade80' }} aria-label="Bestätigen">
+                                                        <Check size={12} />
+                                                    </button>
+                                                </form>
+                                            ) : (
+                                                <button
+                                                    className="tap flex items-center gap-1 rounded-md px-1.5 py-0.5"
+                                                    style={{ background: 'rgba(232,197,138,0.08)', color: TEXT_DIM }}
+                                                    onClick={() => {
+                                                        setWeightRangeDraft(String(weightDays));
+                                                        setWeightRangeEditing(true);
+                                                        setTimeout(() => weightInputRef.current?.select(), 30);
+                                                    }}
+                                                    title="Zeitraum bearbeiten"
+                                                >
+                                                    <span className="tabular-nums">{weightDays}d</span>
+                                                    <Pencil size={9} style={{ color: TEXT_DIM }} />
+                                                </button>
+                                            )}
+
+                                            {/* Total delta */}
+                                            {weightDelta !== null && !weightRangeEditing && (
+                                                <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
+                                                    {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)} kg
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
-                                    <div className="text-[20px] font-semibold tabular-nums leading-none mt-1.5"
-                                        style={{ color: '#f2ece0' }}>
+
+                                    {/* ── Current weight ── */}
+                                    <div className="text-[20px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: '#f2ece0' }}>
                                         {weightCurrent?.toFixed(1)}
                                         <span className="text-[11px] font-normal ml-0.5" style={{ color: TEXT_DIM }}>kg</span>
                                     </div>
-                                    {weightValues.length >= 4 && <Spark values={weightValues.slice(-12)} h={28} />}
+
+                                    {/* ── Chart ── */}
+                                    {weightHistory.length >= 4 && (
+                                        <div className="mt-2">
+                                            <WeightChart entries={weightHistory} />
+                                        </div>
+                                    )}
+
+                                    {/* ── Weekly avg change ── */}
+                                    {weightWeeklyAvg !== null && (
+                                        <div className="mt-2 text-[10px] tabular-nums" style={{ color: '#4ade80' }}>
+                                            Ø {weightWeeklyAvg > 0 ? '+' : ''}{(weightWeeklyAvg * 1000).toFixed(0)} g / Woche
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </section>
