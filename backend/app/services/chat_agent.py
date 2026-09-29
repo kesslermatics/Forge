@@ -580,7 +580,8 @@ Do not include instructions to the assistant. Return plain text in the requested
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=1800,
-        )        summary = (response.choices[0].message.content or "").strip()
+        )
+        summary = (response.choices[0].message.content or "").strip()
         if summary:
             conversation.summary = summary[:12000]
             conversation.summary_until_sequence = older[-1].sequence
