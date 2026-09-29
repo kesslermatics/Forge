@@ -1,7 +1,7 @@
 """
-Google Gemini integration for coaching, planning, briefings and analysis.
+OpenAI integration for coaching, planning, briefings and analysis.
 
-The production model is configured centrally via settings.gemini_model.
+The production model is configured centrally via settings.openai_model.
 """
 import asyncio
 import json
@@ -11,8 +11,7 @@ import re
 from datetime import date, timedelta
 from typing import Optional
 
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 
 from app.config import settings
 
@@ -347,7 +346,7 @@ async def generate_daily_briefing(
     weight_trend, daily_mission, weather_note.
     Falls back to FALLBACK_BRIEFING if anything goes wrong.
     """
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     # Extract profile from Yazio data (name, height, weight, goal, diet…)
     profile = yazio_data.get("profile") if yazio_data else None
@@ -380,23 +379,23 @@ async def generate_daily_briefing(
         )
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                max_output_tokens=8192,
-                response_mime_type="application/json",
-            ),
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=8192,
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
 
-        raw_content = response.text
+        raw_content = response.choices[0].message.content
         if not raw_content:
-            logger.error("Gemini returned empty content")
+            logger.error("OpenAI returned empty content")
             return FALLBACK_BRIEFING
 
-        # Strip markdown fences if Gemini wraps it
+        # Strip markdown fences if model wraps it
         cleaned = re.sub(r"^```(?:json)?\s*", "", raw_content.strip())
         cleaned = re.sub(r"\s*```$", "", cleaned)
 
@@ -431,10 +430,10 @@ async def generate_daily_briefing(
         return parsed
 
     except json.JSONDecodeError as exc:
-        logger.error("Failed to parse Gemini JSON response: %s — raw: %s", exc, raw_content[:500])
+        logger.error("Failed to parse OpenAI JSON response: %s — raw: %s", exc, raw_content[:500])
         return FALLBACK_BRIEFING
     except Exception as exc:
-        logger.error("Gemini API error: %s", exc)
+        logger.error("OpenAI API error: %s", exc)
         return FALLBACK_BRIEFING
 
 
@@ -624,7 +623,7 @@ async def generate_session_review(
     previous_tips contains the workout tips the user ACTUALLY saw — these are the
     authoritative source for "what Coach recommended".
     """
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_session_review_prompt(profile, lang=language)
@@ -637,20 +636,20 @@ async def generate_session_review(
         user_message += _format_coaching_memory(previous_reviews, memory_type="session_review")
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.2,
-                max_output_tokens=8192,
-                response_mime_type="application/json",
-            ),
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=8192,
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
 
-        raw_content = response.text
+        raw_content = response.choices[0].message.content
         if not raw_content:
-            logger.error("Gemini returned empty content for session review")
+            logger.error("OpenAI returned empty content for session review")
             return FALLBACK_SESSION_REVIEW
 
         cleaned = re.sub(r"^```(?:json)?\s*", "", raw_content.strip())
@@ -693,7 +692,7 @@ async def generate_session_review(
         logger.error("Failed to parse session review JSON: %s — raw: %s", exc, raw_content[:500])
         return FALLBACK_SESSION_REVIEW
     except Exception as exc:
-        logger.error("Gemini API error (session review): %s", exc)
+        logger.error("OpenAI API error (session review): %s", exc)
         return FALLBACK_SESSION_REVIEW
 
 
@@ -1103,7 +1102,7 @@ async def generate_workout_tips(
         full_template_exercises = selected.get("exercises", [])
         exercise_source = "most recent session"
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_workout_tips_prompt(profile, lang=language)
@@ -1208,20 +1207,20 @@ async def generate_workout_tips(
         user_message += _format_coaching_memory(previous_tips_list, memory_type="workout_tips")
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=user_message,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                max_output_tokens=8192,
-                response_mime_type="application/json",
-            ),
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=8192,
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
 
-        raw_content = response.text
+        raw_content = response.choices[0].message.content
         if not raw_content:
-            logger.error("Gemini returned empty content for workout tips")
+            logger.error("OpenAI returned empty content for workout tips")
             return FALLBACK_WORKOUT_TIPS
 
         cleaned = re.sub(r"^```(?:json)?\s*", "", raw_content.strip())
@@ -1250,7 +1249,7 @@ async def generate_workout_tips(
         logger.error("Failed to parse workout tips JSON: %s — raw: %s", exc, raw_content[:500])
         return FALLBACK_WORKOUT_TIPS
     except Exception as exc:
-        logger.error("Gemini API error (workout tips): %s", exc)
+        logger.error("OpenAI API error (workout tips): %s", exc)
         return FALLBACK_WORKOUT_TIPS
 
 
@@ -1457,7 +1456,7 @@ async def generate_chat_response(
     conversation_history: list of {role: 'user'|'assistant', content: str}
     training_plan_enriched: list of {"name": str, "exercises": [str, ...]}
     """
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_chat_system_prompt(profile, training_plan_enriched, lang=language)
@@ -1571,54 +1570,39 @@ async def generate_chat_response(
                     context_parts.append(f"  {meal_label}:")
                     context_parts.extend(item_strs)
 
-    # Build Gemini conversation with context as first user message
-    contents: list[types.Content] = []
+    # Build OpenAI messages list
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
 
     # Inject context as the first "user" turn (invisible to the actual conversation)
     if context_parts:
-        contents.append(types.Content(
-            role="user",
-            parts=[types.Part(text="[CONTEXT DATA — do not repeat this to the user]\n" + "\n".join(context_parts))],
-        ))
-        contents.append(types.Content(
-            role="model",
-            parts=[types.Part(text="Got it — I have the user's workout and nutrition data ready. What's up?")],
-        ))
+        messages.append({"role": "user", "content": "[CONTEXT DATA — do not repeat this to the user]\n" + "\n".join(context_parts)})
+        messages.append({"role": "assistant", "content": "Got it — I have the user's workout and nutrition data ready. What's up?"})
 
     # Add conversation history
     for msg in conversation_history:
-        role = "model" if msg["role"] == "assistant" else "user"
-        contents.append(types.Content(
-            role=role,
-            parts=[types.Part(text=msg["content"])],
-        ))
+        role = "assistant" if msg["role"] == "assistant" else "user"
+        messages.append({"role": role, "content": msg["content"]})
 
     # Add the new message
-    contents.append(types.Content(
-        role="user",
-        parts=[types.Part(text=message)],
-    ))
+    messages.append({"role": "user", "content": message})
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.7,
-                max_output_tokens=8192,
-            ),
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=messages,
+            max_tokens=8192,
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
 
-        text = response.text
+        text = response.choices[0].message.content
         if not text:
-            logger.error("Gemini returned empty chat response")
+            logger.error("OpenAI returned empty chat response")
             return "Sorry, I couldn't generate a response. Please try again."
 
         return text.strip()
 
     except Exception as exc:
-        logger.error("Gemini chat error: %s", exc)
+        logger.error("OpenAI chat error: %s", exc)
         return "Sorry, something went wrong. Please try again in a moment."
 
 
@@ -1649,7 +1633,7 @@ async def generate_nutrition_analysis(
             "top_protein_sources": [{"name": ..., "protein_g": ...}, ...],
         }
     """
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     # Build context
     context_parts = []
@@ -1772,23 +1756,22 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
 {{"analysis": "Deine ausführliche Analyse hier..."}}"""
 
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=system_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                max_output_tokens=8192,
-            ),
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": system_prompt}],
+            max_tokens=8192,
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
 
-        text = response.text
+        text = response.choices[0].message.content
         if not text:
             return {
                 "analysis": "Keine Analyse verfügbar.",
             }
 
         # Log raw response for debugging
-        logger.info("Gemini nutrition raw response (first 1000 chars): %s", text[:1000])
+        logger.info("OpenAI nutrition raw response (first 1000 chars): %s", text[:1000])
 
         # Parse JSON - handle markdown code blocks
         text = text.strip()
@@ -1849,7 +1832,7 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
             return {"analysis": "Analyse konnte nicht gelesen werden."}
 
     except Exception as exc:
-        logger.error("Gemini nutrition analysis error: %s", exc)
+        logger.error("OpenAI nutrition analysis error: %s", exc)
         return {"analysis": "Analyse konnte nicht generiert werden."}
 
 
@@ -1891,17 +1874,17 @@ icon MUST be exactly one of these Lucide icon names: {icon_tokens}. Pick the bes
 machine_profiles is an array of {{name, model, notes}}; use it only for machine equipment and only where the user specifies or reasonably needs a machine brand/profile.
 Do not claim the draft has been saved and do not include instructions outside the JSON.""" + _language_instruction(language)
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=f"Create an exercise draft from this request:\n{instructions}",
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.25,
-                response_mime_type="application/json",
-            ),
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Create an exercise draft from this request:\n{instructions}"},
+            ],
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
-        raw_content = response.text or ""
+        raw_content = response.choices[0].message.content or ""
         draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
         if not isinstance(draft, dict) or not isinstance(draft.get("name"), str):
             return fallback
@@ -1928,7 +1911,7 @@ Do not claim the draft has been saved and do not include instructions outside th
         ] if draft["equipment"] == "machine" and isinstance(profiles, list) else []
         return draft
     except Exception as exc:
-        logger.error("Gemini exercise draft generation failed: %s", exc)
+        logger.error("OpenAI exercise draft generation failed: %s", exc)
         return fallback
 
 
@@ -1962,18 +1945,20 @@ Each set must contain set_type (warmup or working), current_weight_kg (number or
 Use conservative, hypertrophy-oriented set suggestions. Treat the supplied current Yazio goal as the only profile goal; when it is unavailable, do not infer or invent a bulk, cut, or maintenance phase. Do not fabricate a user-specific load when history is absent: use null for weight and provide only sensible reps.
 Do not claim the draft was saved.""" + _language_instruction(language)
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=(f"Current Yazio goal: {yazio_goal or 'unavailable'}\nRequest: {instructions}\n"
-                      f"Allowed exercise catalog: {catalog}"),
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.25,
-                response_mime_type="application/json",
-            ),
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": (
+                    f"Current Yazio goal: {yazio_goal or 'unavailable'}\nRequest: {instructions}\n"
+                    f"Allowed exercise catalog: {catalog}"
+                )},
+            ],
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
-        raw_content = response.text or ""
+        raw_content = response.choices[0].message.content or ""
         draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
         if not isinstance(draft, dict) or not isinstance(draft.get("exercises"), list):
             return fallback
@@ -2018,7 +2003,7 @@ Do not claim the draft was saved.""" + _language_instruction(language)
             "exercises": valid_exercises,
         }
     except Exception as exc:
-        logger.error("Gemini plan draft generation failed: %s", exc)
+        logger.error("OpenAI plan draft generation failed: %s", exc)
         return fallback
 
 
@@ -2174,8 +2159,8 @@ class ForgeCoachingGenerationError(RuntimeError):
 
 async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
     """Generate complete AI coaching for every warm-up and working set."""
-    if not settings.gemini_api_key:
-        raise ForgeCoachingGenerationError("Forge KI-Coaching ist ohne konfigurierten Gemini API-Key nicht verfügbar.")
+    if not settings.openai_api_key:
+        raise ForgeCoachingGenerationError("Forge KI-Coaching ist ohne konfigurierten OpenAI API-Key nicht verfügbar.")
     system_prompt = """You are Forge, a motivating evidence-informed hypertrophy coach. Hypertrophy is always the training goal.
 Every completed working set is interpreted as performed to momentary muscular failure. Warm-ups do not go to failure and
 never count as stimulus or progression sets. Never use RIR, RPE, reps-in-reserve, repetitions-in-the-tank language, or advise
@@ -2234,7 +2219,6 @@ check that no universal progression heuristic drove the choice; remove invented 
 machine weight is technically valid. Return only the final reviewed JSON.
 Be specific without generic safety disclaimers.""" + _language_instruction(language)
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
         exercises = session_context.get("session", {}).get("exercises", [])
         completion_contract = {
             "required_exercise_ids": [
@@ -2269,19 +2253,20 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                     "Return the entire corrected JSON object again. Do not omit any required ID."
                 )
             try:
-                response = await client.aio.models.generate_content(
-                    model=settings.gemini_model,
-                    contents=json.dumps(request_payload, ensure_ascii=False),
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        temperature=0.7 if attempt == 0 else 0.35,
-                        max_output_tokens=8192,
-                        response_mime_type="application/json",
-                    ),
+                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                response = await client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
+                    ],
+                    max_tokens=8192,
+                    response_format={"type": "json_object"},
+                    reasoning={"effort": settings.openai_reasoning_effort},
                 )
-                raw = (response.text or "").strip()
+                raw = (response.choices[0].message.content or "").strip()
                 if not raw:
-                    raise ValueError("Gemini returned an empty response")
+                    raise ValueError("OpenAI returned an empty response")
                 parsed = json.loads(re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw))
                 return _validate_forge_session_coaching(parsed, session_context)
             except Exception as exc:
@@ -2323,29 +2308,29 @@ Only these action types are allowed:
 - add_exercise: payload {exercise_id, target_reps, notes}
 Use IDs that appear exactly in the supplied session or catalog. Give at most one action. Suggest an action only when it is clearly useful; otherwise return null. Do not prescribe unsafe, extreme, or invented loads.""" + _language_instruction(language)
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
         contents = json.dumps({
             "user_message": message,
             "active_session": session,
             "exercise_catalog": exercise_catalog,
             "recent_chat": history[-12:],
         }, ensure_ascii=False)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0.3,
-                response_mime_type="application/json",
-            ),
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": contents},
+            ],
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
-        raw_content = response.text or ""
+        raw_content = response.choices[0].message.content or ""
         parsed = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
         if not isinstance(parsed, dict) or not isinstance(parsed.get("message"), str):
             return fallback
         return {"message": parsed["message"][:4000], "action": parsed.get("action")}
     except Exception as exc:
-        logger.error("Gemini session chat failed: %s", exc)
+        logger.error("OpenAI session chat failed: %s", exc)
         return fallback
 
 
@@ -2361,7 +2346,7 @@ async def select_monthly_challenge_categories(
     preserves functionality when Gemini is unavailable.
     """
     fallback = [candidate["category"] for candidate in candidates[:3]]
-    if not candidates or not settings.gemini_api_key:
+    if not candidates or not settings.openai_api_key:
         return fallback
     payload = {
         "user_context": user_context,
@@ -2378,13 +2363,15 @@ async def select_monthly_challenge_categories(
         + _language_instruction(language)
     )
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2, max_output_tokens=300),
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
-        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.text or "").strip()))
+        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.choices[0].message.content or "").strip()))
         allowed = {candidate["category"] for candidate in candidates}
         selected = [category for category in parsed.get("categories", []) if category in allowed]
         return list(dict.fromkeys(selected))[:3] or fallback
@@ -2405,7 +2392,7 @@ async def generate_monthly_challenge_checkin(
         "message": "Dein Fortschritt wird direkt aus deinen Forge-Daten aktualisiert. Bleib bei der nächsten konkreten Einheit.",
         "next_step": "Öffne deinen Trainingsplan und logge deine nächste Forge-Session vollständig.",
     }
-    if not settings.gemini_api_key:
+    if not settings.openai_api_key:
         return fallback
     # The model only needs the factual display values, never database IDs or timestamps.
     # Keeping this projection narrow also makes prompt serialization robust for UUID-backed rows.
@@ -2432,13 +2419,15 @@ async def generate_monthly_challenge_checkin(
         + _language_instruction(language)
     )
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.5, max_output_tokens=500),
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            response_format={"type": "json_object"},
+            reasoning={"effort": settings.openai_reasoning_effort},
         )
-        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.text or "").strip()))
+        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.choices[0].message.content or "").strip()))
         if all(isinstance(parsed.get(key), str) and parsed[key].strip() for key in ("headline", "message", "next_step")):
             return {key: parsed[key].strip() for key in ("headline", "message", "next_step")}
     except Exception as exc:

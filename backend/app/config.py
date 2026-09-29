@@ -24,9 +24,10 @@ class Settings(BaseSettings):
     # Encryption key for API credentials (Fernet key, 32 bytes base64)
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "")
 
-    # Google Gemini
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
+    # OpenAI
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-6.1-sol")
+    openai_reasoning_effort: str = os.getenv("OPENAI_REASONING_EFFORT", "xhigh")
 
     # Google Health API OAuth (optional until the integration is enabled in Google Cloud)
     google_health_client_id: str = os.getenv("GOOGLE_HEALTH_CLIENT_ID", "")
@@ -73,8 +74,8 @@ def get_settings() -> Settings:
         raise ValueError("JWT_SECRET_KEY environment variable is not set!")
     if not settings.encryption_key:
         raise ValueError("ENCRYPTION_KEY environment variable is not set!")
-    if not settings.gemini_api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set!")
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is not set!")
 
     return settings
 

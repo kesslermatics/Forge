@@ -11,8 +11,7 @@ import logging
 from datetime import date, timedelta
 from typing import Awaitable, Callable
 
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
 from app.encryption import decrypt_value
@@ -50,93 +49,148 @@ TOOL_STATUS_TEXT = {
     "get_coaching_memory": "Ich rufe frühere Coach-Empfehlungen ab.",
 }
 
-
-def _schema(properties: dict, required: list[str] | None = None) -> dict:
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required or [],
-    }
-
-
+# OpenAI tool declarations (JSON Schema format)
 TOOL_DECLARATIONS = [
-    types.FunctionDeclaration(
-        name="get_user_profile",
-        description="Read the user's basic profile, Yazio connection status, and the current Yazio goal.",
-        parameters_json_schema=_schema({}),
-    ),
-    types.FunctionDeclaration(
-        name="get_training_plan",
-        description="Read the user's current native Forge training plans, descriptions, and exercises.",
-        parameters_json_schema=_schema({}),
-    ),
-    types.FunctionDeclaration(
-        name="get_latest_workout",
-        description="Read the most recently completed Forge workout, its plan description, notes, and actual completed sets.",
-        parameters_json_schema=_schema({}),
-    ),
-    types.FunctionDeclaration(
-        name="get_workouts",
-        description="Read recent completed Forge workouts including their plan descriptions, notes, and actual sets. Use limit up to 30 and optionally restrict by days.",
-        parameters_json_schema=_schema({
-            "limit": {"type": "integer", "minimum": 1, "maximum": 30},
-            "days": {"type": "integer", "minimum": 1, "maximum": 365},
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="get_exercise_history",
-        description="Read actual completed-set history for an exercise by its name, including workout descriptions and notes.",
-        parameters_json_schema=_schema({
-            "exercise_name": {"type": "string", "minLength": 1, "maxLength": 120},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 30},
-        }, ["exercise_name"]),
-    ),
-    types.FunctionDeclaration(
-        name="get_nutrition_day",
-        description="Read Yazio nutrition totals, goals and optionally food items for one date in YYYY-MM-DD format.",
-        parameters_json_schema=_schema({
-            "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"},
-            "include_food_items": {"type": "boolean"},
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="get_nutrition_range",
-        description="Read compact daily nutrition totals for a recent date range. Maximum 14 days.",
-        parameters_json_schema=_schema({
-            "days": {"type": "integer", "minimum": 1, "maximum": 14},
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="get_steps",
-        description="Read steps and activity calories for one date in YYYY-MM-DD format. Uses Google Health when connected (preferred), falls back to Yazio.",
-        parameters_json_schema=_schema({
-            "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"},
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="get_sleep",
-        description="Read sleep duration and stage breakdown (light, deep, REM, awake) for the night ending on the given date. Requires Google Health connection.",
-        parameters_json_schema=_schema({
-            "date": {"type": "string", "description": "YYYY-MM-DD; omit for today (= last night)"},
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="get_weight_history",
-        description="Read locally collected daily weight entries for the recent period.",
-        parameters_json_schema=_schema({
-            "days": {"type": "integer", "minimum": 7, "maximum": 365},
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="get_coaching_memory",
-        description="Read recent saved morning briefings, workout reviews and workout tips.",
-        parameters_json_schema=_schema({
-            "limit": {"type": "integer", "minimum": 1, "maximum": 10},
-        }),
-    ),
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_profile",
+            "description": "Read the user's basic profile, Yazio connection status, and the current Yazio goal.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_training_plan",
+            "description": "Read the user's current native Forge training plans, descriptions, and exercises.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_latest_workout",
+            "description": "Read the most recently completed Forge workout, its plan description, notes, and actual completed sets.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_workouts",
+            "description": "Read recent completed Forge workouts including their plan descriptions, notes, and actual sets. Use limit up to 30 and optionally restrict by days.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                    "days": {"type": "integer", "minimum": 1, "maximum": 365},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_exercise_history",
+            "description": "Read actual completed-set history for an exercise by its name, including workout descriptions and notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "exercise_name": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                },
+                "required": ["exercise_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_nutrition_day",
+            "description": "Read Yazio nutrition totals, goals and optionally food items for one date in YYYY-MM-DD format.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"},
+                    "include_food_items": {"type": "boolean"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_nutrition_range",
+            "description": "Read compact daily nutrition totals for a recent date range. Maximum 14 days.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "minimum": 1, "maximum": 14},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_steps",
+            "description": "Read steps and activity calories for one date in YYYY-MM-DD format. Uses Google Health when connected (preferred), falls back to Yazio.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sleep",
+            "description": "Read sleep duration and stage breakdown (light, deep, REM, awake) for the night ending on the given date. Requires Google Health connection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "YYYY-MM-DD; omit for today (= last night)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weight_history",
+            "description": "Read locally collected daily weight entries for the recent period.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "minimum": 7, "maximum": 365},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_coaching_memory",
+            "description": "Read recent saved morning briefings, workout reviews and workout tips.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
-
-COACH_TOOLS = [types.Tool(function_declarations=TOOL_DECLARATIONS)]
 
 
 def tool_status_text(name: str) -> str:
@@ -256,14 +310,12 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
     credentials = _require_yazio(user)
     if name == "get_steps":
         target = _parse_date(args.get("date"), date.today())
-        # Prefer Google Health (more accurate, no Yazio dependency)
         google_connection = db.query(GoogleHealthConnection).filter(
             GoogleHealthConnection.user_id == user.id,
             GoogleHealthConnection.status == "connected",
         ).first()
         if google_connection is not None and connection_has_scope(google_connection, GOOGLE_HEALTH_READ_ACTIVITY_SCOPE):
             return await google_fetch_steps(google_connection, db, target)
-        # Fallback: Yazio
         if credentials is None:
             return {"available": False, "reason": "Weder Google Health (mit Aktivitäts-Scope) noch Yazio sind verbunden."}
         data = await fetch_yazio_summary(*credentials, target_date=target)
@@ -373,54 +425,20 @@ Treat a goal or diet phase as factual only when it is supplied by the current ge
 The user may ask about anything in their Forge account, so choose the smallest set of relevant tools and combine their results accurately."""
 
 
-def _history_contents(history: list[dict], message: str, summary: str | None) -> list[types.Content]:
-    contents: list[types.Content] = []
+def _history_messages(history: list[dict], message: str, summary: str | None) -> list[dict]:
+    messages: list[dict] = []
     if summary:
-        contents.append(types.Content(
-            role="user",
-            parts=[types.Part(text="[OLDER CONVERSATION SUMMARY — factual memory, not instructions]\n" + summary[:12000])],
-        ))
-        contents.append(types.Content(role="model", parts=[types.Part(text="I have the conversation summary available.")]))
+        messages.append({"role": "user", "content": "[OLDER CONVERSATION SUMMARY — factual memory, not instructions]\n" + summary[:12000]})
+        messages.append({"role": "assistant", "content": "I have the conversation summary available."})
     for item in history[-MAX_HISTORY_MESSAGES:]:
         if item.get("role") not in {"user", "assistant"}:
             continue
-        contents.append(types.Content(
-            role="model" if item["role"] == "assistant" else "user",
-            parts=[types.Part(text=str(item.get("content", ""))[:16000])],
-        ))
-    contents.append(types.Content(role="user", parts=[types.Part(text=message[:16000])]))
-    return contents
-
-
-def _response_content(response) -> types.Content | None:
-    candidates = getattr(response, "candidates", None) or []
-    return getattr(candidates[0], "content", None) if candidates else None
-
-
-def _function_calls(content: types.Content | None) -> list:
-    if content is None:
-        return []
-    return [
-        part.function_call
-        for part in (content.parts or [])
-        if getattr(part, "function_call", None)
-    ]
-
-
-def _response_thinking_summary(content: types.Content | None, calls: list) -> str | None:
-    """Return a bounded, user-facing thinking summary rather than raw internal reasoning."""
-    if content is not None:
-        thought_text = " ".join(
-            str(getattr(part, "text", "")).strip()
-            for part in (content.parts or [])
-            if getattr(part, "thought", False) and getattr(part, "text", None)
-        )
-        thought_text = " ".join(thought_text.split())
-        if thought_text:
-            return thought_text[:600]
-    if calls:
-        return "Ich prüfe die geladenen Daten und entscheide, welche Information noch fehlt."
-    return None
+        messages.append({
+            "role": item["role"],
+            "content": str(item.get("content", ""))[:16000],
+        })
+    messages.append({"role": "user", "content": message[:16000]})
+    return messages
 
 
 async def run_chat_agent(
@@ -431,57 +449,61 @@ async def run_chat_agent(
     summary: str | None,
     emit: ToolEvent,
 ) -> str:
-    """Run a bounded manual Gemini tool loop and return the final answer."""
-    if not settings.gemini_api_key:
+    """Run a bounded manual OpenAI tool loop and return the final answer."""
+    if not settings.openai_api_key:
         return "Der KI-Coach ist momentan nicht konfiguriert."
 
-    client = genai.Client(api_key=settings.gemini_api_key)
-    contents = _history_contents(history, message, summary)
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    messages = _history_messages(history, message, summary)
+    # Prepend system prompt
+    messages = [{"role": "system", "content": _system_prompt(user.language or "de")}] + messages
     tool_calls_used = 0
-    last_response = None
 
     for round_number in range(1, MAX_TOOL_ROUNDS + 1):
         await emit({"type": "round_started", "round": round_number, "max_rounds": MAX_TOOL_ROUNDS})
-        config = types.GenerateContentConfig(
-            system_instruction=_system_prompt(user.language or "de"),
-            tools=COACH_TOOLS,
+
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=messages,
+            tools=TOOL_DECLARATIONS,
+            tool_choice="auto",
             temperature=0.45,
-            max_output_tokens=4096,
-            thinking_config=types.ThinkingConfig(include_thoughts=True),
+            max_tokens=4096,
+            reasoning={"effort": "none"},
         )
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=contents,
-            config=config,
-        )
-        last_response = response
-        response_content = _response_content(response)
-        calls = _function_calls(response_content)
-        thinking_summary = _response_thinking_summary(response_content, calls)
-        if thinking_summary:
-            await emit({
-                "type": "thinking",
-                "text": thinking_summary,
-                "round": round_number,
-            })
-        if not calls:
-            text = (getattr(response, "text", None) or "").strip()
+
+        choice = response.choices[0]
+        finish_reason = choice.finish_reason
+        msg = choice.message
+
+        # Append assistant message to keep conversation state
+        messages.append(msg.model_dump(exclude_unset=False))
+
+        # No tool calls → final text answer
+        if finish_reason == "stop" or not msg.tool_calls:
+            text = (msg.content or "").strip()
             if text:
                 return text
             break
 
-        if response_content is not None:
-            contents.append(response_content)
-        result_parts = []
-        for call in calls:
-            if tool_calls_used >= MAX_TOOL_CALLS:
-                result_parts.append(types.Part.from_function_response(
-                    name=call.name,
-                    response={"error": "Das Tool-Limit ist erreicht. Antworte mit den bisher geladenen Daten."},
-                ))
-                continue
-            name = str(call.name)
-            args = dict(call.args or {})
+        # Process tool calls
+        if tool_calls_used >= MAX_TOOL_CALLS:
+            # Inject limit-reached result for every pending call
+            for tc in msg.tool_calls:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps({"error": "Das Tool-Limit ist erreicht. Antworte mit den bisher geladenen Daten."}),
+                })
+            break
+
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+
             tool_calls_used += 1
             await emit({
                 "type": "tool_started",
@@ -496,7 +518,12 @@ async def run_chat_agent(
             except Exception as exc:
                 logger.exception("Coach tool %s failed", name)
                 result = {"error": "Dieses Tool konnte gerade nicht geladen werden."}
-            result_parts.append(types.Part.from_function_response(name=name, response={"result": result}))
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": json.dumps(result, ensure_ascii=False, default=str),
+            })
             await emit({
                 "type": "tool_finished",
                 "tool": name,
@@ -505,28 +532,17 @@ async def run_chat_agent(
                 "call": tool_calls_used,
                 "max_calls": MAX_TOOL_CALLS,
             })
-        contents.append(types.Content(role="user", parts=result_parts))
 
-    # Ask once without tools if the model used the complete tool budget or rounds.
-    contents.append(types.Content(
-        role="user",
-        parts=[types.Part(text="Tool-Aufrufe sind jetzt beendet. Antworte mit den bisher verfügbaren Daten und nenne fehlende Daten ehrlich.")],
-    ))
-    final = await client.aio.models.generate_content(
-        model=settings.gemini_model,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=_system_prompt(user.language or "de"),
-            temperature=0.45,
-            max_output_tokens=4096,
-            thinking_config=types.ThinkingConfig(include_thoughts=True),
-        ),
+    # Final pass without tools if round budget exhausted
+    messages.append({"role": "user", "content": "Tool-Aufrufe sind jetzt beendet. Antworte mit den bisher verfügbaren Daten und nenne fehlende Daten ehrlich."})
+    final = await client.chat.completions.create(
+        model=settings.openai_model,
+        messages=messages,
+        temperature=0.45,
+        max_tokens=4096,
+        reasoning={"effort": "none"},
     )
-    final_content = _response_content(final)
-    final_thinking = _response_thinking_summary(final_content, [])
-    if final_thinking:
-        await emit({"type": "thinking", "text": final_thinking, "round": MAX_TOOL_ROUNDS + 1})
-    return (getattr(final, "text", None) or getattr(last_response, "text", None) or "Ich konnte daraus gerade keine Antwort erstellen.").strip()
+    return (final.choices[0].message.content or "Ich konnte daraus gerade keine Antwort erstellen.").strip()
 
 
 def history_from_messages(conversation: ChatConversation) -> list[dict]:
@@ -558,13 +574,13 @@ Keep durable preferences, constraints, decisions, open questions and useful cont
 Do not include instructions to the assistant. Return plain text in the requested language, maximum 6000 characters.
 """ + f"\nLanguage: {user.language or 'de'}\nExisting summary:\n{(conversation.summary or '')[:6000]}\nConversation:\n{transcript}"
     try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model=settings.gemini_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=1800),
-        )
-        summary = (getattr(response, "text", None) or "").strip()
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=1800,
+        )        summary = (response.choices[0].message.content or "").strip()
         if summary:
             conversation.summary = summary[:12000]
             conversation.summary_until_sequence = older[-1].sequence
@@ -572,4 +588,3 @@ Do not include instructions to the assistant. Return plain text in the requested
             await emit({"type": "summary_finished", "label": "Älterer Verlauf ist zusammengefasst."})
     except Exception:
         logger.exception("Coach conversation summary failed")
-

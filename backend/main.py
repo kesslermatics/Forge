@@ -16,6 +16,7 @@ from app.routes import forge as forge_router
 from app.routes import monthly_challenges as monthly_challenges_router
 from app.mcp_server import mcp, mcp_http_app
 from app.scheduler import start_scheduler, stop_scheduler
+from app.config import settings
 
 # Configure logging
 logging.basicConfig(
@@ -105,6 +106,17 @@ app = FastAPI(
 )
 
 # Configure CORS for frontend communication
+# Origins are built from the FRONTEND_URL env var plus local dev origins.
+_extra_origins: list[str] = []
+if settings.frontend_url and settings.frontend_url not in (
+    "http://localhost:5173",
+    "http://localhost:3000",
+):
+    _extra_origins.append(settings.frontend_url)
+    # Also allow http variant in case it's needed
+    if settings.frontend_url.startswith("https://"):
+        _extra_origins.append(settings.frontend_url.replace("https://", "http://", 1))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -113,9 +125,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        # Production
-        "https://coach.kesslermatics.com",
-        "http://coach.kesslermatics.com",
+        # Production (from FRONTEND_URL env var)
+        *_extra_origins,
     ],
     allow_credentials=True,
     allow_methods=["*"],
