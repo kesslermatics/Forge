@@ -309,10 +309,11 @@ export default function NutritionPage() {
                                             contentStyle={tooltipStyle}
                                             labelStyle={{ color: TEXT_DIM, fontSize: 10, marginBottom: 2 }}
                                             labelFormatter={fmtDay}
-                                            formatter={(v: number | undefined, name: string) => {
-                                                if (v == null) return ['', ''] as [string, string];
-                                                return [`${Math.round(v)} kcal`, name === 'calories' ? 'Gegessen' : 'Ziel'] as [string, string];
-                                            }}
+                                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                            formatter={((v: number, name: string | undefined) => {
+                                                if (v == null) return ['', ''];
+                                                return [`${Math.round(v)} kcal`, (name ?? '') === 'calories' ? 'Gegessen' : 'Ziel'];
+                                            }) as any}
                                             cursor={{ stroke: 'rgba(255,247,235,0.12)', strokeWidth: 1 }}
                                         />
                                         {derived.avgCalGoal > 0 && (
