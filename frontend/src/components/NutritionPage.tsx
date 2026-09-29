@@ -310,8 +310,8 @@ export default function NutritionPage() {
                                             labelStyle={{ color: TEXT_DIM, fontSize: 10, marginBottom: 2 }}
                                             labelFormatter={fmtDay}
                                             formatter={(v: number | undefined, name: string) => {
-                                                if (v == null) return ['', ''];
-                                                return [`${Math.round(v)} kcal`, name === 'calories' ? 'Gegessen' : 'Ziel'];
+                                                if (v == null) return ['', ''] as [string, string];
+                                                return [`${Math.round(v)} kcal`, name === 'calories' ? 'Gegessen' : 'Ziel'] as [string, string];
                                             }}
                                             cursor={{ stroke: 'rgba(255,247,235,0.12)', strokeWidth: 1 }}
                                         />
