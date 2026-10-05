@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     google_health_client_secret: str = os.getenv("GOOGLE_HEALTH_CLIENT_SECRET", "")
     google_health_redirect_uri: str = os.getenv("GOOGLE_HEALTH_REDIRECT_URI", "")
     frontend_url: str = os.getenv("FRONTEND_URL", "https://coach.kesslermatics.com")
+    # Comma-separated list of additional allowed CORS origins, e.g.
+    # "https://forge.kesslermatics.com,https://other.example.com"
+    extra_cors_origins: str = os.getenv("EXTRA_CORS_ORIGINS", "")
 
     # Public Streamable HTTP MCP endpoint and transport allowlists.
     mcp_server_url: str = os.getenv(

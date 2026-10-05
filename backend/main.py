@@ -106,16 +106,32 @@ app = FastAPI(
 )
 
 # Configure CORS for frontend communication
-# Origins are built from the FRONTEND_URL env var plus local dev origins.
-_extra_origins: list[str] = []
-if settings.frontend_url and settings.frontend_url not in (
-    "http://localhost:5173",
-    "http://localhost:3000",
-):
-    _extra_origins.append(settings.frontend_url)
-    # Also allow http variant in case it's needed
-    if settings.frontend_url.startswith("https://"):
-        _extra_origins.append(settings.frontend_url.replace("https://", "http://", 1))
+# Origins are built from the FRONTEND_URL env var plus EXTRA_CORS_ORIGINS plus local dev origins.
+_production_origins: list[str] = []
+
+def _add_origin(url: str) -> None:
+    """Add an origin (and its http variant) to the allowed list."""
+    url = url.strip()
+    if not url:
+        return
+    _production_origins.append(url)
+    if url.startswith("https://"):
+        _production_origins.append(url.replace("https://", "http://", 1))
+
+# Primary frontend URL
+_add_origin(settings.frontend_url)
+
+# Additional origins (comma-separated EXTRA_CORS_ORIGINS env var)
+for _origin in settings.extra_cors_origins.split(","):
+    _add_origin(_origin)
+
+# De-duplicate while preserving order
+_seen: set[str] = set()
+_deduped: list[str] = []
+for _o in _production_origins:
+    if _o not in _seen:
+        _seen.add(_o)
+        _deduped.append(_o)
 
 app.add_middleware(
     CORSMiddleware,
@@ -125,8 +141,8 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        # Production (from FRONTEND_URL env var)
-        *_extra_origins,
+        # Production (from FRONTEND_URL + EXTRA_CORS_ORIGINS env vars)
+        *_deduped,
     ],
     allow_credentials=True,
     allow_methods=["*"],
