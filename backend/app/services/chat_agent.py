@@ -477,7 +477,7 @@ async def run_chat_agent(
             tool_choice="auto",
             temperature=0.45,
             max_tokens=4096,
-            extra_body={"reasoning": {"effort": "none"}},
+            extra_body={"reasoning": {"effort": "high"}},
         )
 
         choice = response.choices[0]
