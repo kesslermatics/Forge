@@ -2284,18 +2284,18 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
                     ],
-                    max_tokens=8192,
+                    max_tokens=65536,
                     response_format={"type": "json_object"},
                     extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
                 )
                 raw = (response.choices[0].message.content or "").strip()
                 if not raw:
                     raise ValueError("OpenAI returned an empty response")
-                logger.warning(
-                    "Forge session raw response (attempt %s, %s chars): %s",
+                logger.debug(
+                    "Forge session raw response (attempt %s, %s chars): %.300s",
                     attempt + 1,
                     len(raw),
-                    raw[:500],
+                    raw,
                 )
                 parsed = json.loads(_clean_json(raw))
                 return _validate_forge_session_coaching(parsed, session_context)
