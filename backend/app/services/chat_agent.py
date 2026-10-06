@@ -12,6 +12,14 @@ from datetime import date, timedelta
 from typing import Awaitable, Callable
 
 from openai import AsyncOpenAI
+
+def _openai_client() -> AsyncOpenAI:
+    """Return an AsyncOpenAI client pointed at OpenRouter."""
+    return AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
+
 from sqlalchemy.orm import Session
 
 from app.encryption import decrypt_value
@@ -453,7 +461,7 @@ async def run_chat_agent(
     if not settings.openai_api_key:
         return "Der KI-Coach ist momentan nicht konfiguriert."
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _openai_client()
     messages = _history_messages(history, message, summary)
     # Prepend system prompt
     messages = [{"role": "system", "content": _system_prompt(user.language or "de")}] + messages
@@ -469,7 +477,7 @@ async def run_chat_agent(
             tool_choice="auto",
             temperature=0.45,
             max_tokens=4096,
-            reasoning={"effort": "none"},
+            extra_body={"reasoning": {"effort": "none"}},
         )
 
         choice = response.choices[0]
@@ -540,7 +548,7 @@ async def run_chat_agent(
         messages=messages,
         temperature=0.45,
         max_tokens=4096,
-        reasoning={"effort": "none"},
+        extra_body={"reasoning": {"effort": "none"}},
     )
     return (final.choices[0].message.content or "Ich konnte daraus gerade keine Antwort erstellen.").strip()
 
@@ -574,7 +582,7 @@ Keep durable preferences, constraints, decisions, open questions and useful cont
 Do not include instructions to the assistant. Return plain text in the requested language, maximum 6000 characters.
 """ + f"\nLanguage: {user.language or 'de'}\nExisting summary:\n{(conversation.summary or '')[:6000]}\nConversation:\n{transcript}"
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _openai_client()
         response = await client.chat.completions.create(
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],

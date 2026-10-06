@@ -24,10 +24,11 @@ class Settings(BaseSettings):
     # Encryption key for API credentials (Fernet key, 32 bytes base64)
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "")
 
-    # OpenAI
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-6.1-sol")
-    openai_reasoning_effort: str = os.getenv("OPENAI_REASONING_EFFORT", "xhigh")
+    # OpenRouter
+    openai_api_key: str = os.getenv("OPENROUTER_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    openai_model: str = os.getenv("OPENROUTER_MODEL", os.getenv("OPENAI_MODEL", "google/gemini-3.8-flash"))
+    openai_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    openai_reasoning_effort: str = os.getenv("OPENROUTER_REASONING_EFFORT", os.getenv("OPENAI_REASONING_EFFORT", "xhigh"))
 
     # Google Health API OAuth (optional until the integration is enabled in Google Cloud)
     google_health_client_id: str = os.getenv("GOOGLE_HEALTH_CLIENT_ID", "")

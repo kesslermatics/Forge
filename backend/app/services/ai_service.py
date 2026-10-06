@@ -13,6 +13,13 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
+def _openai_client() -> AsyncOpenAI:
+    """Return an AsyncOpenAI client pointed at OpenRouter."""
+    return AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -346,7 +353,7 @@ async def generate_daily_briefing(
     weight_trend, daily_mission, weather_note.
     Falls back to FALLBACK_BRIEFING if anything goes wrong.
     """
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _openai_client()
 
     # Extract profile from Yazio data (name, height, weight, goal, diet…)
     profile = yazio_data.get("profile") if yazio_data else None
@@ -387,7 +394,7 @@ async def generate_daily_briefing(
             ],
             max_tokens=8192,
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
 
         raw_content = response.choices[0].message.content
@@ -623,7 +630,7 @@ async def generate_session_review(
     previous_tips contains the workout tips the user ACTUALLY saw — these are the
     authoritative source for "what Coach recommended".
     """
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _openai_client()
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_session_review_prompt(profile, lang=language)
@@ -644,7 +651,7 @@ async def generate_session_review(
             ],
             max_tokens=8192,
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
 
         raw_content = response.choices[0].message.content
@@ -1102,7 +1109,7 @@ async def generate_workout_tips(
         full_template_exercises = selected.get("exercises", [])
         exercise_source = "most recent session"
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _openai_client()
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_workout_tips_prompt(profile, lang=language)
@@ -1215,7 +1222,7 @@ async def generate_workout_tips(
             ],
             max_tokens=8192,
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
 
         raw_content = response.choices[0].message.content
@@ -1456,7 +1463,7 @@ async def generate_chat_response(
     conversation_history: list of {role: 'user'|'assistant', content: str}
     training_plan_enriched: list of {"name": str, "exercises": [str, ...]}
     """
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _openai_client()
 
     profile = yazio_data.get("profile") if yazio_data else None
     system_prompt = _build_chat_system_prompt(profile, training_plan_enriched, lang=language)
@@ -1591,7 +1598,7 @@ async def generate_chat_response(
             model=settings.openai_model,
             messages=messages,
             max_tokens=8192,
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
 
         text = response.choices[0].message.content
@@ -1633,7 +1640,7 @@ async def generate_nutrition_analysis(
             "top_protein_sources": [{"name": ..., "protein_g": ...}, ...],
         }
     """
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _openai_client()
 
     # Build context
     context_parts = []
@@ -1761,7 +1768,7 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
             messages=[{"role": "user", "content": system_prompt}],
             max_tokens=8192,
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
 
         text = response.choices[0].message.content
@@ -1874,7 +1881,7 @@ icon MUST be exactly one of these Lucide icon names: {icon_tokens}. Pick the bes
 machine_profiles is an array of {{name, model, notes}}; use it only for machine equipment and only where the user specifies or reasonably needs a machine brand/profile.
 Do not claim the draft has been saved and do not include instructions outside the JSON.""" + _language_instruction(language)
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _openai_client()
         response = await client.chat.completions.create(
             model=settings.openai_model,
             messages=[
@@ -1882,7 +1889,7 @@ Do not claim the draft has been saved and do not include instructions outside th
                 {"role": "user", "content": f"Create an exercise draft from this request:\n{instructions}"},
             ],
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         raw_content = response.choices[0].message.content or ""
         draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
@@ -1945,7 +1952,7 @@ Each set must contain set_type (warmup or working), current_weight_kg (number or
 Use conservative, hypertrophy-oriented set suggestions. Treat the supplied current Yazio goal as the only profile goal; when it is unavailable, do not infer or invent a bulk, cut, or maintenance phase. Do not fabricate a user-specific load when history is absent: use null for weight and provide only sensible reps.
 Do not claim the draft was saved.""" + _language_instruction(language)
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _openai_client()
         response = await client.chat.completions.create(
             model=settings.openai_model,
             messages=[
@@ -1956,7 +1963,7 @@ Do not claim the draft was saved.""" + _language_instruction(language)
                 )},
             ],
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         raw_content = response.choices[0].message.content or ""
         draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
@@ -2253,7 +2260,7 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                     "Return the entire corrected JSON object again. Do not omit any required ID."
                 )
             try:
-                client = AsyncOpenAI(api_key=settings.openai_api_key)
+                client = _openai_client()
                 response = await client.chat.completions.create(
                     model=settings.openai_model,
                     messages=[
@@ -2262,7 +2269,7 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                     ],
                     max_tokens=8192,
                     response_format={"type": "json_object"},
-                    reasoning={"effort": settings.openai_reasoning_effort},
+                    extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
                 )
                 raw = (response.choices[0].message.content or "").strip()
                 if not raw:
@@ -2308,7 +2315,7 @@ Only these action types are allowed:
 - add_exercise: payload {exercise_id, target_reps, notes}
 Use IDs that appear exactly in the supplied session or catalog. Give at most one action. Suggest an action only when it is clearly useful; otherwise return null. Do not prescribe unsafe, extreme, or invented loads.""" + _language_instruction(language)
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _openai_client()
         contents = json.dumps({
             "user_message": message,
             "active_session": session,
@@ -2322,7 +2329,7 @@ Use IDs that appear exactly in the supplied session or catalog. Give at most one
                 {"role": "user", "content": contents},
             ],
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         raw_content = response.choices[0].message.content or ""
         parsed = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
@@ -2363,13 +2370,13 @@ async def select_monthly_challenge_categories(
         + _language_instruction(language)
     )
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _openai_client()
         response = await client.chat.completions.create(
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300,
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.choices[0].message.content or "").strip()))
         allowed = {candidate["category"] for candidate in candidates}
@@ -2419,13 +2426,13 @@ async def generate_monthly_challenge_checkin(
         + _language_instruction(language)
     )
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _openai_client()
         response = await client.chat.completions.create(
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=500,
             response_format={"type": "json_object"},
-            reasoning={"effort": settings.openai_reasoning_effort},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.choices[0].message.content or "").strip()))
         if all(isinstance(parsed.get(key), str) and parsed[key].strip() for key in ("headline", "message", "next_step")):
