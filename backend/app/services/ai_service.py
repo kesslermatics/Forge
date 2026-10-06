@@ -20,6 +20,22 @@ def _openai_client() -> AsyncOpenAI:
         base_url=settings.openai_base_url,
     )
 
+def _clean_json(raw: str) -> str:
+    """Strip thinking blocks, markdown fences and leading/trailing whitespace.
+
+    Gemini reasoning models can prepend thinking content before the actual JSON.
+    This function removes such artifacts so json.loads() always receives clean input.
+    """
+    # Remove <thinking>...</thinking> blocks (Gemini / OpenRouter reasoning output)
+    text = re.sub(r"<thinking>.*?</thinking>", "", raw, flags=re.DOTALL)
+    text = text.strip()
+    # Remove opening markdown fence (```json or ```)
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    # Remove closing markdown fence
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
+
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -403,8 +419,7 @@ async def generate_daily_briefing(
             return FALLBACK_BRIEFING
 
         # Strip markdown fences if model wraps it
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw_content.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = _clean_json(raw_content)
 
         parsed = json.loads(cleaned)
 
@@ -659,8 +674,7 @@ async def generate_session_review(
             logger.error("OpenAI returned empty content for session review")
             return FALLBACK_SESSION_REVIEW
 
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw_content.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = _clean_json(raw_content)
 
         parsed = json.loads(cleaned)
 
@@ -1230,9 +1244,7 @@ async def generate_workout_tips(
             logger.error("OpenAI returned empty content for workout tips")
             return FALLBACK_WORKOUT_TIPS
 
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw_content.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-
+        cleaned = _clean_json(raw_content)
         parsed = json.loads(cleaned)
 
         # Ensure arrays exist
@@ -1780,14 +1792,9 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (der Text muss in einer Zeil
         # Log raw response for debugging
         logger.info("OpenAI nutrition raw response (first 1000 chars): %s", text[:1000])
 
-        # Parse JSON - handle markdown code blocks
-        text = text.strip()
-        if text.startswith("```"):
-            # Remove opening code block (```json or ```)
-            text = re.sub(r'^```(?:json)?\s*\n?', '', text)
-            # Remove closing code block
-            text = re.sub(r'\n?```\s*$', '', text)
-        
+        # Parse JSON - handle markdown code blocks and thinking artifacts
+        text = _clean_json(text)
+
         # Extract the "analysis" field
         def extract_field(field_name: str, source: str) -> str:
             """Extract a JSON string field value, handling multiline and special chars."""
@@ -1892,7 +1899,7 @@ Do not claim the draft has been saved and do not include instructions outside th
             extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         raw_content = response.choices[0].message.content or ""
-        draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
+        draft = json.loads(_clean_json(raw_content))
         if not isinstance(draft, dict) or not isinstance(draft.get("name"), str):
             return fallback
         equipment = draft.get("equipment")
@@ -1966,7 +1973,7 @@ Do not claim the draft was saved.""" + _language_instruction(language)
             extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         raw_content = response.choices[0].message.content or ""
-        draft = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
+        draft = json.loads(_clean_json(raw_content))
         if not isinstance(draft, dict) or not isinstance(draft.get("exercises"), list):
             return fallback
         valid_exercises = []
@@ -2274,7 +2281,7 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                 raw = (response.choices[0].message.content or "").strip()
                 if not raw:
                     raise ValueError("OpenAI returned an empty response")
-                parsed = json.loads(re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw))
+                parsed = json.loads(_clean_json(raw))
                 return _validate_forge_session_coaching(parsed, session_context)
             except Exception as exc:
                 last_error = exc
@@ -2332,7 +2339,7 @@ Use IDs that appear exactly in the supplied session or catalog. Give at most one
             extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
         raw_content = response.choices[0].message.content or ""
-        parsed = json.loads(re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", raw_content.strip())))
+        parsed = json.loads(_clean_json(raw_content))
         if not isinstance(parsed, dict) or not isinstance(parsed.get("message"), str):
             return fallback
         return {"message": parsed["message"][:4000], "action": parsed.get("action")}
@@ -2378,7 +2385,7 @@ async def select_monthly_challenge_categories(
             response_format={"type": "json_object"},
             extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
-        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.choices[0].message.content or "").strip()))
+        parsed = json.loads(_clean_json(response.choices[0].message.content or ""))
         allowed = {candidate["category"] for candidate in candidates}
         selected = [category for category in parsed.get("categories", []) if category in allowed]
         return list(dict.fromkeys(selected))[:3] or fallback
@@ -2434,7 +2441,7 @@ async def generate_monthly_challenge_checkin(
             response_format={"type": "json_object"},
             extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
-        parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", (response.choices[0].message.content or "").strip()))
+        parsed = json.loads(_clean_json(response.choices[0].message.content or ""))
         if all(isinstance(parsed.get(key), str) and parsed[key].strip() for key in ("headline", "message", "next_step")):
             return {key: parsed[key].strip() for key in ("headline", "message", "next_step")}
     except Exception as exc:
