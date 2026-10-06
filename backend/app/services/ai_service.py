@@ -33,7 +33,17 @@ def _clean_json(raw: str) -> str:
     text = re.sub(r"^```(?:json)?\s*\n?", "", text)
     # Remove closing markdown fence
     text = re.sub(r"\n?```\s*$", "", text)
-    return text.strip()
+    text = text.strip()
+    # If there's still non-JSON text before the first { or [, slice it off
+    first_obj = text.find("{")
+    first_arr = text.find("[")
+    if first_obj == -1 and first_arr == -1:
+        return text
+    if first_obj == -1:
+        return text[first_arr:]
+    if first_arr == -1:
+        return text[first_obj:]
+    return text[min(first_obj, first_arr):]
 
 
 from app.config import settings
@@ -2281,6 +2291,7 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                 raw = (response.choices[0].message.content or "").strip()
                 if not raw:
                     raise ValueError("OpenAI returned an empty response")
+                logger.debug("Forge session raw response (first 300 chars): %s", raw[:300])
                 parsed = json.loads(_clean_json(raw))
                 return _validate_forge_session_coaching(parsed, session_context)
             except Exception as exc:
