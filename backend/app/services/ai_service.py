@@ -2291,7 +2291,12 @@ Be specific without generic safety disclaimers.""" + _language_instruction(langu
                 raw = (response.choices[0].message.content or "").strip()
                 if not raw:
                     raise ValueError("OpenAI returned an empty response")
-                logger.debug("Forge session raw response (first 300 chars): %s", raw[:300])
+                logger.warning(
+                    "Forge session raw response (attempt %s, %s chars): %s",
+                    attempt + 1,
+                    len(raw),
+                    raw[:500],
+                )
                 parsed = json.loads(_clean_json(raw))
                 return _validate_forge_session_coaching(parsed, session_context)
             except Exception as exc:
