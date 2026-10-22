@@ -836,6 +836,7 @@ export interface ForgeExerciseHistorySession {
   started_at: string;
   machine_profile_id: string | null;
   machine_profile_name: string | null;
+  session_note?: string | null;
   sets: ForgeExerciseHistorySet[];
 }
 
@@ -1017,53 +1018,8 @@ export interface ForgeSessionSetUpdateInput {
   position?: number;
 }
 
-export interface ForgeMuscleEvidence {
-  direct_sets: Record<'7d' | '14d' | '28d', number>;
-  indirect_sets: Record<'7d' | '14d' | '28d', number>;
-  sessions: Record<string, number>;
-  days_since_direct: number | null;
-  days_since_indirect: number | null;
-}
-
-export interface ForgeExposureSetEvidence {
-  set_index: number;
-  actual_weight_kg: number | null;
-  actual_reps: number;
-  coach_suggested_weight_kg: number | null;
-  coach_suggested_reps: number | null;
-  forecast_weight_delta_kg: number | null;
-  forecast_reps_delta: number | null;
-  set_drop_percent: number | null;
-}
-
-export interface ForgeExerciseEvidence {
-  session_exercise_id: string;
-  progression_key: string | null;
-  position: number;
-  history_count: number;
-  days_since_same_exposure: number | null;
-  recent_exposures: Array<{ completed_at: string; days_ago: number; exercise_position: number; sets: ForgeExposureSetEvidence[] }>;
-  current_prefatigue: { direct_working_sets: number; indirect_working_sets: number };
-  primary_muscle: string;
-  secondary_muscles: string[];
-  allowed_evidence_refs: string[];
-}
-
-export interface ForgeCoachEvidence {
-  version: 'v1';
-  generated_at: string;
-  training_goal: 'hypertrophy';
-  working_set_semantics: 'momentary_muscular_failure';
-  warmup_semantics: 'not_failure_not_stimulus';
-  muscles: Record<string, ForgeMuscleEvidence>;
-  exercises: ForgeExerciseEvidence[];
-  nutrition: {
-    training_goal: 'hypertrophy';
-    nutrition_role: 'background_confidence_only';
-    yazio?: { source?: string; rolling?: Record<string, Record<string, number | null>> };
-    bodyweight?: Record<string, unknown>;
-  };
-}
+/** Server-side evidence snapshot persisted with coaching; the UI does not read it. */
+export type ForgeCoachEvidence = Record<string, unknown>;
 
 export interface ForgeSessionCoachGuidance {
   progression_status: 'INCREASE_WEIGHT' | 'KEEP_PROGRESSING' | 'STAGNATED' | 'REGRESSED' | 'FIRST_SESSION';
@@ -1103,25 +1059,44 @@ export interface ForgeSessionExercise {
   machine_profile_name: string | null;
   machine_profile_snapshot: (Omit<ForgeMachineProfile, 'exercise_ids'> & { snapshot_quality?: 'best_available_current' }) | null;
   notes: string | null;
+  /** Free-text note the user writes during the workout. */
+  session_note: string | null;
   coach_guidance: ForgeSessionCoachGuidance | null;
   addition_coaching: ForgeSessionAdditionCoaching | null;
   position: number;
   sets: ForgeSessionSet[];
 }
 
+export type ForgeSessionActionType =
+  | 'adjust_sets' | 'add_set' | 'add_exercise' | 'replace_exercise' | 'remove_exercise'
+  | 'reorder_exercises' | 'set_machine_profile' | 'create_machine_profile' | 'set_session_note'
+  // legacy single-action proposals
+  | 'adjust_set';
+
 export interface ForgeSessionAction {
-  type: 'adjust_set' | 'add_set' | 'add_exercise';
+  id?: string;
+  type: ForgeSessionActionType;
   title: string;
   payload: Record<string, unknown>;
 }
+
+/** New agent replies carry {actions, tools_used}; older messages hold one bare action. */
+export type ForgeSessionProposal = { actions: ForgeSessionAction[]; tools_used?: string[] } | ForgeSessionAction;
 
 export interface ForgeSessionMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  proposed_action: ForgeSessionAction | null;
+  proposed_action: ForgeSessionProposal | null;
   action_status: 'pending' | 'applied' | 'dismissed' | null;
   created_at: string;
+}
+
+export interface ForgeSessionCompletionReview {
+  headline: string;
+  verdict: 'strong' | 'solid' | 'mixed' | 'tough';
+  review: string;
+  generated_at: string;
 }
 
 export interface ForgeSession {
@@ -1133,6 +1108,7 @@ export interface ForgeSession {
   started_at: string;
   completed_at: string | null;
   start_coaching: ForgeSessionStartCoaching | null;
+  completion_review: ForgeSessionCompletionReview | null;
   exercises: ForgeSessionExercise[];
   messages: ForgeSessionMessage[];
 }
@@ -1201,8 +1177,14 @@ export const applyForgeSessionAction = (sessionId: string, message_id: string) =
 export const dismissForgeSessionAction = (sessionId: string, message_id: string) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/actions/dismiss`, { method: 'POST', body: JSON.stringify({ message_id }) });
 
-export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId: string, data: { machine_profile_id?: string | null; notes?: string | null }) =>
+export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId: string, data: { machine_profile_id?: string | null; notes?: string | null; session_note?: string | null }) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const replaceForgeSessionExercise = (sessionId: string, sessionExerciseId: string, exercise_id: string) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}/replace`, { method: 'POST', body: JSON.stringify({ exercise_id }) });
+export const reorderForgeSessionExercises = (sessionId: string, session_exercise_ids: string[]) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercise-order`, { method: 'PUT', body: JSON.stringify({ session_exercise_ids }) });
+export const generateForgeSessionCompletionReview = (sessionId: string, force = false) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/completion-review${force ? '?force=true' : ''}`, { method: 'POST' });
 
 export const refreshForgePlanCoachTargets = (planId: string) =>
   apiRequest<ForgePlan>(`/api/forge/plans/${planId}/coach-targets`, { method: 'POST' });

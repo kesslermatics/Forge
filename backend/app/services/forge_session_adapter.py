@@ -166,6 +166,9 @@ def _serialize_completed_session(
                 "title": exercise.name,
                 "muscle_group": exercise.primary_muscle_group or "other",
                 "notes": exercise.notes or "",
+                # Written by the user during the workout (pain, form, machine occupied, ...).
+                "session_note": exercise.session_note or "",
+                "machine_profile": exercise.machine_profile_name or "",
                 "sets": [
                     {
                         "type": set_data.set_type,

@@ -3,6 +3,7 @@ Configuration settings loaded from environment variables.
 NEVER hardcode secrets - always use environment variables!
 """
 import os
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
@@ -24,11 +25,12 @@ class Settings(BaseSettings):
     # Encryption key for API credentials (Fernet key, 32 bytes base64)
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "")
 
-    # OpenRouter
-    openai_api_key: str = os.getenv("OPENROUTER_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-    openai_model: str = os.getenv("OPENROUTER_MODEL", os.getenv("OPENAI_MODEL", "google/gemini-3.8-flash"))
-    openai_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    openai_reasoning_effort: str = os.getenv("OPENROUTER_REASONING_EFFORT", os.getenv("OPENAI_REASONING_EFFORT", "xhigh"))
+    # OpenRouter is the only LLM gateway. The field names stay "openai_*" because the
+    # OpenAI-compatible SDK is used, but they bind exclusively to OPENROUTER_* variables.
+    openai_api_key: str = Field(default=os.getenv("OPENROUTER_API_KEY", ""), validation_alias="OPENROUTER_API_KEY")
+    openai_model: str = Field(default=os.getenv("OPENROUTER_MODEL", "google/gemini-3.8-flash"), validation_alias="OPENROUTER_MODEL")
+    openai_base_url: str = Field(default=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), validation_alias="OPENROUTER_BASE_URL")
+    openai_reasoning_effort: str = Field(default=os.getenv("OPENROUTER_REASONING_EFFORT", "medium"), validation_alias="OPENROUTER_REASONING_EFFORT")
 
     # Google Health API OAuth (optional until the integration is enabled in Google Cloud)
     google_health_client_id: str = os.getenv("GOOGLE_HEALTH_CLIENT_ID", "")
@@ -79,7 +81,7 @@ def get_settings() -> Settings:
     if not settings.encryption_key:
         raise ValueError("ENCRYPTION_KEY environment variable is not set!")
     if not settings.openai_api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set!")
+        raise ValueError("OPENROUTER_API_KEY environment variable is not set!")
 
     return settings
 

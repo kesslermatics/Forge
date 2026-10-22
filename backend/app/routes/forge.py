@@ -50,6 +50,8 @@ from app.schemas import (
     ForgeProgramResponse,
     ForgeSessionChatRequest,
     ForgeSessionExerciseInput,
+    ForgeSessionExerciseOrderRequest,
+    ForgeSessionExerciseReplaceRequest,
     ForgeSessionExerciseUpdate,
     ForgeSessionResponse,
     ForgeSessionSummaryResponse,
@@ -74,10 +76,11 @@ from app.services.ai_service import (
     _compute_exercise_progression,
     generate_forge_exercise_draft,
     generate_forge_plan_draft,
-    generate_forge_session_chat,
+    generate_forge_session_review,
     generate_forge_session_start_coaching,
 )
-from app.services.yazio_service import fetch_yazio_coaching_trends
+from app.services.forge_session_agent import run_session_agent
+from app.services.yazio_service import fetch_yazio_coaching_trends, resolve_yazio_goal_context
 from app.services.google_health_service import export_completed_session
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
@@ -95,6 +98,21 @@ async def _yazio_coaching_context(user: User) -> dict:
             end_date=date.today(),
         )
         return result if isinstance(result, dict) else unavailable
+    except Exception:
+        return unavailable
+
+
+async def _yazio_goal_context(user: User) -> dict:
+    """Resolve the plan-draft goal only from Yazio; never fall back to Forge profile data."""
+    unavailable = {"available": False, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
+    if not user.yazio_email or not user.yazio_password:
+        return unavailable
+    try:
+        return await resolve_yazio_goal_context(
+            decrypt_value(user.yazio_email),
+            decrypt_value(user.yazio_password),
+            target_date=date.today(),
+        )
     except Exception:
         return unavailable
 
@@ -770,6 +788,7 @@ async def get_exercise_history(
                 "started_at": session.started_at,
                 "machine_profile_id": session_exercise.source_machine_profile_id,
                 "machine_profile_name": session_exercise.machine_profile_name,
+                "session_note": session_exercise.session_note,
                 "sets": [
                     {
                         "position": set_data.position,
@@ -1085,6 +1104,7 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
         "started_at": session.started_at,
         "completed_at": session.completed_at,
         "start_coaching": session.start_coaching,
+        "completion_review": session.completion_review,
         "exercises": [
             {
                 "id": exercise.id,
@@ -1099,6 +1119,7 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
                 "machine_profile_name": exercise.machine_profile_name,
                 "machine_profile_snapshot": exercise.machine_profile_snapshot,
                 "notes": exercise.notes,
+                "session_note": exercise.session_note,
                 "coach_guidance": exercise.coach_guidance,
                 "addition_coaching": exercise.addition_coaching,
                 "position": exercise.position,
@@ -1168,6 +1189,57 @@ async def _forge_coaching_profile(db: Session, user: User) -> dict:
         "nutrition_role": "background_confidence_only",
         "yazio": {"source": yazio.get("source", "unavailable"), "rolling": yazio.get("rolling") or {}},
         "bodyweight": _local_weight_trends(db, user.id),
+    }
+
+
+def _epley_e1rm(weight_kg: float, reps: int) -> float:
+    return weight_kg * (1 + reps / 30)
+
+
+def _best_e1rm(sets: list[dict]) -> float | None:
+    """Best Epley estimate of one exposure's working sets (all taken to failure)."""
+    values = [
+        _epley_e1rm(float(row["actual_weight_kg"]), int(row["actual_reps"]))
+        for row in sets
+        if isinstance(row.get("actual_weight_kg"), (int, float)) and row["actual_weight_kg"] > 0 and isinstance(row.get("actual_reps"), int)
+    ]
+    return round(max(values), 1) if values else None
+
+
+def _load_projection(exposures: list[dict], available_weights: list) -> dict | None:
+    """Project reps to failure at nearby loads so the model does not guess jump sizes.
+
+    Uses the latest exposure's best e1RM. With a machine weight list, the projection covers
+    up to two steps below and three steps above the latest top working weight.
+    """
+    if not exposures or exposures[0].get("best_e1rm_kg") is None:
+        return None
+    latest = exposures[0]
+    e1rm = float(latest["best_e1rm_kg"])
+    top_weight = max(
+        (float(row["actual_weight_kg"]) for row in latest["sets"] if isinstance(row.get("actual_weight_kg"), (int, float))),
+        default=None,
+    )
+    if top_weight is None:
+        return None
+    weights = sorted({float(value) for value in available_weights if isinstance(value, (int, float)) and value > 0})
+    if weights:
+        index = min(range(len(weights)), key=lambda position: abs(weights[position] - top_weight))
+        candidates = weights[max(0, index - 2): index + 4]
+        label = "nearby_available_weights"
+    else:
+        # Without a weight list the real increments are unknown; these are illustrative loads.
+        candidates = [value for value in (top_weight - 5, top_weight - 2.5, top_weight, top_weight + 2.5, top_weight + 5) if value > 0]
+        label = "illustrative_loads_unknown_increments"
+    projections = [
+        {"weight_kg": weight, "projected_reps_to_failure": round(max(0.0, 30 * (e1rm / weight - 1)), 1)}
+        for weight in candidates
+    ]
+    return {
+        "method": "epley_from_latest_exposure",
+        "latest_best_e1rm_kg": round(e1rm, 1),
+        "latest_top_weight_kg": top_weight,
+        label: projections,
     }
 
 
@@ -1275,11 +1347,8 @@ def _session_coaching_context(
                     "set_index": set_data.position + 1,
                     "actual_weight_kg": actual_weight,
                     "actual_reps": set_data.actual_reps,
-                    "coach_suggested_weight_kg": suggested_weight,
-                    "coach_suggested_reps": set_data.coach_suggested_reps,
-                    "forecast_weight_delta_kg": round(actual_weight - suggested_weight, 3) if actual_weight is not None and suggested_weight is not None else None,
-                    "forecast_reps_delta": set_data.actual_reps - set_data.coach_suggested_reps if isinstance(set_data.coach_suggested_reps, int) else None,
-                    "set_drop_percent": None,
+                    "coach_target_weight_kg": suggested_weight,
+                    "coach_target_reps": set_data.coach_suggested_reps,
                 }
                 if previous_comparable and previous_comparable["actual_weight_kg"] == actual_weight and previous_comparable["actual_reps"] > 0:
                     row["set_drop_percent"] = round((previous_comparable["actual_reps"] - set_data.actual_reps) / previous_comparable["actual_reps"] * 100, 1)
@@ -1288,12 +1357,15 @@ def _session_coaching_context(
             if sets:
                 matching_history_count += 1
                 if len(exposures) < 6:
-                    exposures.append({
-                        "completed_at": (completed.completed_at or completed.started_at).isoformat(),
+                    exposure = {
                         "days_ago": (today - session_day(completed)).days,
                         "exercise_position": matching.position + 1,
+                        "best_e1rm_kg": _best_e1rm(sets),
                         "sets": sets,
-                    })
+                    }
+                    if matching.session_note:
+                        exposure["session_note"] = matching.session_note
+                    exposures.append(exposure)
 
         prior_exercises = [item for item in session.exercises if item.position < exercise.position]
         prefatigue_direct = 0
@@ -1314,30 +1386,14 @@ def _session_coaching_context(
                 prefatigue_direct += count
             elif exercise.primary_muscle_group in (prior.secondary_muscle_groups or []):
                 prefatigue_indirect += count
-        ref_prefix = f"exercise:{exercise.id}"
-        refs = [
-            f"{ref_prefix}:identity",
-            f"{ref_prefix}:position",
-            f"muscle:{exercise.primary_muscle_group}:load",
-        ]
-        if exposures:
-            refs.extend([f"{ref_prefix}:history", f"{ref_prefix}:forecast_actual"])
-        if prefatigue_direct or prefatigue_indirect:
-            refs.append(f"{ref_prefix}:prefatigue")
-        rolling_14 = ((coaching_profile.get("yazio") or {}).get("rolling") or {}).get("14d") or {}
-        if rolling_14.get("logged_days", 0) >= 4:
-            refs.append("nutrition:yazio:14d")
+        profile_weights = (profile_by_exercise.get(exercise.id) or {}).get("available_weights_kg") or []
         exercise_evidence.append({
             "session_exercise_id": str(exercise.id),
-            "progression_key": progression_key,
             "position": exercise.position + 1,
             "history_count": matching_history_count,
-            "days_since_same_exposure": exposures[0]["days_ago"] if exposures else None,
             "recent_exposures": exposures,
+            "load_projection": _load_projection(exposures, profile_weights) if exercise.equipment != "none" else None,
             "current_prefatigue": {"direct_working_sets": prefatigue_direct, "indirect_working_sets": prefatigue_indirect},
-            "primary_muscle": exercise.primary_muscle_group,
-            "secondary_muscles": list(exercise.secondary_muscle_groups or []),
-            "allowed_evidence_refs": refs,
         })
 
     evidence = {
@@ -1353,34 +1409,47 @@ def _session_coaching_context(
     evidence_by_id = {item["session_exercise_id"]: item for item in exercise_evidence}
 
     def target(exercise: ForgeSessionExercise, set_data: ForgeSessionSet) -> dict:
-        return {
+        item = {
             "session_set_id": str(set_data.id), "type": set_data.set_type,
             "set_index": set_data.position + 1,
-            "reference_weight_kg": set_data.target_weight_kg, "reference_reps": set_data.target_reps,
             "requires_weight": exercise.equipment != "none",
         }
+        # Pre-filled values are history-derived anchors ("same load, +1 rep"). The model only
+        # sees routine template values when no comparable history exists.
+        if not evidence_by_id[str(exercise.id)]["recent_exposures"]:
+            item["template_weight_kg"] = set_data.target_weight_kg
+            item["template_reps"] = set_data.target_reps
+        return item
 
-    return {
-        "profile": coaching_profile,
-        "coach_evidence": evidence,
-        "session": {"name": session.name, "exercises": [{
-            "session_exercise_id": str(exercise.id), "name": exercise.name, "equipment": exercise.equipment,
-            "muscle_group": exercise.primary_muscle_group,
+    def machine_profile_view(exercise: ForgeSessionExercise) -> dict | None:
+        profile = profile_by_exercise.get(exercise.id) or None
+        if not profile:
+            return None
+        return {key: profile.get(key) for key in ("name", "model", "notes", "loading_system", "load_basis", "available_weights_kg") if profile.get(key) not in (None, "", [])}
+
+    def exercise_view(exercise: ForgeSessionExercise) -> dict:
+        view = {
+            "session_exercise_id": str(exercise.id),
             "exercise_identity": {
                 "name": exercise.name,
                 "equipment": exercise.equipment,
                 "primary_muscle_group": exercise.primary_muscle_group,
                 "secondary_muscle_groups": list(exercise.secondary_muscle_groups or []),
-                "exercise_notes": exercise.notes,
             },
-            "machine_profile": profile_by_exercise.get(exercise.id) or None,
-            "machine_profile_name": exercise.machine_profile_name,
-            "machine_profile_notes": str(profile_by_exercise.get(exercise.id, {}).get("notes") or ""),
-            "notes": "\n".join(part for part in [exercise.notes or "", str(profile_by_exercise.get(exercise.id, {}).get("notes") or "")] if part),
+            "machine_profile": machine_profile_view(exercise),
             "evidence": evidence_by_id[str(exercise.id)],
-            "working_set_count": sum(1 for item in exercise.sets if item.set_type == "working"),
             "targets": [target(exercise, item) for item in exercise.sets],
-        } for exercise in selected]},
+        }
+        if exercise.notes:
+            view["routine_notes"] = exercise.notes
+        if exercise.session_note:
+            view["session_note"] = exercise.session_note
+        return view
+
+    return {
+        "profile": coaching_profile,
+        "coach_evidence": evidence,
+        "session": {"name": session.name, "exercises": [exercise_view(exercise) for exercise in selected]},
     }
 
 
@@ -2298,52 +2367,76 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
     if exercise is None:
         raise _not_found("Session exercise not found")
     updates = data.model_dump(exclude_unset=True)
-    profile_changed = False
-    library_exercise = None
     if "machine_profile_id" in updates:
-        previous_profile_id = exercise.source_machine_profile_id
         machine_profile = _session_machine_profile(
             db,
             current_user.id,
             exercise.source_exercise_id,
             updates.pop("machine_profile_id"),
         )
-        profile_changed = previous_profile_id != (machine_profile.id if machine_profile else None)
-        exercise.source_machine_profile_id = machine_profile.id if machine_profile else None
-        exercise.machine_profile_name = machine_profile.name if machine_profile else None
-        exercise.machine_profile_snapshot = _machine_profile_snapshot(machine_profile)
-        library_exercise = db.query(ForgeExercise).filter(
-            ForgeExercise.id == exercise.source_exercise_id,
-            ForgeExercise.user_id == current_user.id,
-        ).first()
-        if library_exercise is not None and profile_changed:
-            # Guidance may summarize matching history, but every concrete weight and
-            # repetition is chosen by Gemini for this exact exercise/profile pair.
-            _apply_live_session_exercise_guidance(db, current_user.id, exercise, library_exercise, machine_profile)
-            profile_targets = _last_profile_set_targets(
-                db,
-                current_user.id,
-                exercise.source_exercise_id,
-                machine_profile.id if machine_profile else None,
-            )
-            for set_data in exercise.sets:
-                set_data.target_weight_kg = None
-                set_data.target_reps = None
-                set_data.coach_suggested_weight_kg = None
-                set_data.coach_suggested_reps = None
-                reference = profile_targets.get(set_data.position) or {}
-                if reference.get("target_weight_kg") is not None:
-                    set_data.target_weight_kg = reference["target_weight_kg"]
-                if reference.get("target_reps") is not None:
-                    set_data.target_reps = reference["target_reps"]
-            exercise.addition_coaching = None
+        _assign_session_machine_profile(db, current_user.id, session, exercise, machine_profile)
+    if "session_note" in updates:
+        updates["session_note"] = (updates["session_note"] or "").strip() or None
     for key, value in updates.items():
         setattr(exercise, key, value)
-    if profile_changed and library_exercise is not None:
-        await _apply_isolated_session_exercise_coaching(db, current_user, session, exercise)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
+
+
+def _drop_exercise_coaching(session: ForgeWorkoutSession, exercise: ForgeSessionExercise) -> None:
+    """Forget coaching that described a different exercise/profile; the client re-requests it."""
+    exercise.addition_coaching = None
+    if isinstance(session.start_coaching, dict):
+        coaching = dict(session.start_coaching)
+        coaching["exercise_decisions"] = [
+            decision for decision in coaching.get("exercise_decisions") or []
+            if decision.get("session_exercise_id") != str(exercise.id)
+        ]
+        session.start_coaching = coaching
+
+
+def _assign_session_machine_profile(
+    db: Session,
+    user_id: UUID,
+    session: ForgeWorkoutSession,
+    exercise: ForgeSessionExercise,
+    machine_profile: ForgeMachineProfile | None,
+) -> None:
+    """Switch a live exercise to another profile with that profile's own history baseline.
+
+    No model call happens here: the client asks for ``addition-coaching`` afterwards so the
+    switch is instant and only this exercise waits for its new targets.
+    """
+    if exercise.source_machine_profile_id == (machine_profile.id if machine_profile else None):
+        return
+    exercise.source_machine_profile_id = machine_profile.id if machine_profile else None
+    exercise.machine_profile_name = machine_profile.name if machine_profile else None
+    exercise.machine_profile_snapshot = _machine_profile_snapshot(machine_profile)
+    library_exercise = db.query(ForgeExercise).filter(
+        ForgeExercise.id == exercise.source_exercise_id,
+        ForgeExercise.user_id == user_id,
+    ).first()
+    if library_exercise is None:
+        return
+    _apply_live_session_exercise_guidance(db, user_id, exercise, library_exercise, machine_profile)
+    profile_targets = _last_profile_set_targets(
+        db,
+        user_id,
+        exercise.source_exercise_id,
+        machine_profile.id if machine_profile else None,
+    )
+    for set_data in exercise.sets:
+        set_data.target_weight_kg = None
+        set_data.target_reps = None
+        set_data.coach_suggested_weight_kg = None
+        set_data.coach_suggested_reps = None
+        reference = profile_targets.get(set_data.position) or {}
+        if reference.get("target_weight_kg") is not None:
+            set_data.target_weight_kg = reference["target_weight_kg"]
+        if reference.get("target_reps") is not None:
+            set_data.target_reps = reference["target_reps"]
+    _drop_exercise_coaching(session, exercise)
 
 
 def _validate_completed_working_set(
@@ -2477,6 +2570,98 @@ async def delete_session_exercise(session_id: UUID, session_exercise_id: UUID, c
     return _serialize_session(session)
 
 
+@router.put("/sessions/{session_id}/exercise-order", response_model=ForgeSessionResponse)
+async def reorder_session_exercises(session_id: UUID, data: ForgeSessionExerciseOrderRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Reorder live exercises without new coaching; the plan review picks up the new order."""
+    session = _owned_session(db, current_user.id, session_id)
+    if session.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
+    _reorder_session_exercises(db, session, list(data.session_exercise_ids))
+    db.commit()
+    db.refresh(session)
+    return _serialize_session(session)
+
+
+def _reorder_session_exercises(db: Session, session: ForgeWorkoutSession, requested: list[UUID]) -> None:
+    by_id = {exercise.id: exercise for exercise in session.exercises}
+    if len(requested) != len(by_id) or set(requested) != set(by_id):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Die neue Reihenfolge muss jede Übung der Session genau einmal enthalten.")
+    # (session_id, position) is unique and checked immediately: park every row first.
+    for temporary_position, exercise in enumerate(list(session.exercises), start=1):
+        exercise.position = -temporary_position
+    db.flush()
+    for position, exercise_id in enumerate(requested):
+        by_id[exercise_id].position = position
+    db.flush()
+
+
+def _replace_session_exercise(
+    db: Session,
+    user_id: UUID,
+    session: ForgeWorkoutSession,
+    exercise: ForgeSessionExercise,
+    library_exercise: ForgeExercise,
+) -> None:
+    """Swap the identity of a live exercise; set structure stays, logged values are cleared."""
+    machine_profile = _last_used_machine_profiles(db, user_id, [library_exercise.id]).get(library_exercise.id)
+    exercise.source_exercise_id = library_exercise.id
+    # A swapped exercise is a different plan exercise: the completion review then offers
+    # "removed + added" instead of silently keeping the old exercise in the routine.
+    exercise.source_plan_exercise_id = None
+    exercise.name = library_exercise.name
+    exercise.icon = library_exercise.icon
+    exercise.equipment = library_exercise.equipment
+    exercise.primary_muscle_group = library_exercise.primary_muscle_group
+    exercise.secondary_muscle_groups = library_exercise.secondary_muscle_groups or []
+    exercise.source_machine_profile_id = machine_profile.id if machine_profile else None
+    exercise.machine_profile_name = machine_profile.name if machine_profile else None
+    exercise.machine_profile_snapshot = _machine_profile_snapshot(machine_profile)
+    exercise.session_note = None
+    for set_data in exercise.sets:
+        set_data.completed = False
+        set_data.actual_weight_kg = None
+        set_data.actual_reps = None
+        set_data.target_weight_kg = None
+        set_data.coach_suggested_weight_kg = None
+        set_data.coach_suggested_reps = None
+    # The start briefing described the old exercise; the client requests fresh coaching.
+    _drop_exercise_coaching(session, exercise)
+    _apply_live_session_exercise_guidance(db, user_id, exercise, library_exercise, machine_profile)
+
+
+@router.post("/sessions/{session_id}/exercises/{session_exercise_id}/replace", response_model=ForgeSessionResponse)
+async def replace_session_exercise(
+    session_id: UUID,
+    session_exercise_id: UUID,
+    data: ForgeSessionExerciseReplaceRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Swap a live exercise for another library exercise, keeping its set structure.
+
+    Coaching for the new exercise is generated separately through ``addition-coaching`` so
+    the swap itself never waits for, or fails with, the model.
+    """
+    session = _owned_session(db, current_user.id, session_id)
+    if session.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
+    exercise = next((item for item in session.exercises if item.id == session_exercise_id), None)
+    if exercise is None:
+        raise _not_found("Session exercise not found")
+    library_exercise = db.query(ForgeExercise).filter(
+        ForgeExercise.id == data.exercise_id,
+        ForgeExercise.user_id == current_user.id,
+    ).first()
+    if library_exercise is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Exercise does not belong to you.")
+    if library_exercise.id == exercise.source_exercise_id:
+        return _serialize_session(session)
+    _replace_session_exercise(db, current_user.id, session, exercise, library_exercise)
+    db.commit()
+    db.refresh(session)
+    return _serialize_session(session)
+
+
 async def _complete_session(
     db: Session,
     user: User,
@@ -2581,83 +2766,276 @@ async def complete_session(
     return _serialize_session(session)
 
 
-def _session_context(session: ForgeWorkoutSession) -> dict:
+def _completion_review_context(db: Session, user: User, session: ForgeWorkoutSession) -> dict:
+    """Facts for the post-workout review: today's sets against targets and prior exposures."""
+    finished_at = session.completed_at or datetime.now(timezone.utc)
+    earlier_sessions = db.query(ForgeWorkoutSession).filter(
+        ForgeWorkoutSession.user_id == user.id,
+        ForgeWorkoutSession.status == "completed",
+        ForgeWorkoutSession.id != session.id,
+        ForgeWorkoutSession.completed_at < finished_at,
+        ForgeWorkoutSession.completed_at >= finished_at - timedelta(days=180),
+    ).order_by(ForgeWorkoutSession.completed_at.desc()).all()
+
+    def working_rows(exercise: ForgeSessionExercise) -> list[dict]:
+        return [
+            {"actual_weight_kg": item.actual_weight_kg, "actual_reps": item.actual_reps}
+            for item in exercise.sets
+            if item.set_type == "working" and item.completed and isinstance(item.actual_reps, int) and item.actual_reps > 0
+        ]
+
+    exercises = []
+    total_volume = 0.0
+    for exercise in session.exercises:
+        key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
+        today_rows = working_rows(exercise)
+        total_volume += sum((row["actual_weight_kg"] or 0) * row["actual_reps"] for row in today_rows)
+        previous = None
+        prior_best_e1rm = None
+        prior_best_weight = None
+        for earlier in earlier_sessions:
+            match = next((item for item in earlier.exercises if key and _native_progression_key(item.source_exercise_id, item.source_machine_profile_id) == key), None)
+            if match is None:
+                continue
+            rows = working_rows(match)
+            if not rows:
+                continue
+            e1rm = _best_e1rm(rows)
+            top = max((row["actual_weight_kg"] or 0 for row in rows), default=0)
+            if previous is None:
+                previous = {
+                    "days_ago": (finished_at.date() - (earlier.completed_at or earlier.started_at).date()).days,
+                    "sets": rows,
+                    "best_e1rm_kg": e1rm,
+                    "session_note": match.session_note,
+                }
+            if e1rm is not None:
+                prior_best_e1rm = max(prior_best_e1rm or 0, e1rm)
+            prior_best_weight = max(prior_best_weight or 0, top)
+        today_e1rm = _best_e1rm(today_rows)
+        today_top = max((row["actual_weight_kg"] or 0 for row in today_rows), default=None)
+        exercises.append({
+            "name": exercise.name,
+            "machine_profile": exercise.machine_profile_name,
+            "session_note": exercise.session_note,
+            "sets": [
+                {
+                    "type": item.set_type,
+                    "target_weight_kg": item.target_weight_kg,
+                    "target_reps": item.target_reps,
+                    "actual_weight_kg": item.actual_weight_kg,
+                    "actual_reps": item.actual_reps,
+                    "completed": item.completed,
+                }
+                for item in exercise.sets
+            ],
+            "today_best_e1rm_kg": today_e1rm,
+            "previous_exposure": previous,
+            "e1rm_record": bool(today_e1rm and prior_best_e1rm and today_e1rm > prior_best_e1rm),
+            "weight_record": bool(today_top and prior_best_weight and today_top > prior_best_weight),
+        })
+    all_sets = [item for exercise in session.exercises for item in exercise.sets]
+    duration = (finished_at - session.started_at).total_seconds() / 60 if session.started_at else None
     return {
-        "session_id": str(session.id),
-        "name": session.name,
-        "exercises": [
-            {
-                "id": str(exercise.id),
-                "name": exercise.name,
-                "machine_profile": exercise.machine_profile_name,
-                "sets": [
-                    {
-                        "id": str(set_data.id),
-                        "target": {"weight_kg": set_data.target_weight_kg, "reps": set_data.target_reps},
-                        "actual": {"weight_kg": set_data.actual_weight_kg, "reps": set_data.actual_reps},
-                        "completed": set_data.completed,
-                    }
-                    for set_data in exercise.sets
-                ],
-            }
-            for exercise in session.exercises
-        ],
+        "session": {
+            "name": session.name,
+            "duration_minutes": round(duration) if duration is not None else None,
+            "completed_sets": sum(1 for item in all_sets if item.completed),
+            "total_sets": len(all_sets),
+            "working_volume_kg": round(total_volume),
+            "coach_headline": (session.start_coaching or {}).get("headline") if isinstance(session.start_coaching, dict) else None,
+        },
+        "exercises": exercises,
     }
 
 
-def _validate_session_action(action: dict | None, session: ForgeWorkoutSession, user_id: UUID, db: Session) -> dict | None:
-    if not isinstance(action, dict) or action.get("type") not in {"adjust_set", "add_set", "add_exercise"}:
-        return None
-    payload = action.get("payload")
-    if not isinstance(payload, dict):
-        return None
-    session_set_ids = {str(set_data.id) for exercise in session.exercises for set_data in exercise.sets}
-    session_exercise_ids = {str(exercise.id) for exercise in session.exercises}
-    if action["type"] == "adjust_set":
-        if str(payload.get("session_set_id")) not in session_set_ids:
-            return None
-        if not isinstance(payload.get("target_reps"), int) or not 1 <= payload["target_reps"] <= 200:
-            return None
-        if payload.get("target_weight_kg") is not None and not isinstance(payload["target_weight_kg"], (int, float)):
-            return None
-    elif action["type"] == "add_set":
-        if str(payload.get("session_exercise_id")) not in session_exercise_ids:
-            return None
-        if not isinstance(payload.get("target_reps"), int) or not 1 <= payload["target_reps"] <= 200:
-            return None
-    else:
+@router.post("/sessions/{session_id}/completion-review", response_model=ForgeSessionResponse)
+async def generate_session_completion_review(
+    session_id: UUID,
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Write (once) the AI review of a completed workout."""
+    session = _owned_session(db, current_user.id, session_id)
+    if session.status != "completed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Das Training ist noch nicht abgeschlossen.")
+    if session.completion_review is None or force:
+        context = _completion_review_context(db, current_user, session)
         try:
-            exercise_id = UUID(str(payload.get("exercise_id")))
-        except (ValueError, TypeError):
+            review = await generate_forge_session_review(context, current_user.language or "de")
+        except ForgeCoachingGenerationError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        session.completion_review = review
+        db.commit()
+        db.refresh(session)
+    return _serialize_session(session)
+
+
+def _pending_actions(proposed: dict | None) -> list[dict]:
+    """Normalize stored proposals. Legacy messages hold a single {type, title, payload}."""
+    if not isinstance(proposed, dict):
+        return []
+    if isinstance(proposed.get("actions"), list):
+        return [item for item in proposed["actions"] if isinstance(item, dict)]
+    payload = proposed.get("payload") if isinstance(proposed.get("payload"), dict) else {}
+    title = str(proposed.get("title") or "")
+    if proposed.get("type") == "adjust_set":
+        return [{"type": "adjust_sets", "title": title, "payload": {"changes": [{
+            "session_set_id": payload.get("session_set_id"),
+            "target_weight_kg": payload.get("target_weight_kg"),
+            "target_reps": payload.get("target_reps"),
+        }]}}]
+    if proposed.get("type") == "add_set":
+        return [{"type": "add_set", "title": title, "payload": {**payload, "set_type": "working"}}]
+    if proposed.get("type") == "add_exercise":
+        return [{"type": "add_exercise", "title": title, "payload": {"exercise_id": payload.get("exercise_id"), "working_sets": 1}}]
+    return []
+
+
+def _apply_session_agent_action(db: Session, user: User, session: ForgeWorkoutSession, action: dict) -> None:
+    """Re-validate and apply one confirmed chat proposal against the current session state."""
+    invalid = HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Ein Vorschlag passt nicht mehr zur aktuellen Session.")
+    payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+    action_type = action.get("type")
+
+    def as_uuid(value: object) -> UUID:
+        try:
+            return UUID(str(value))
+        except (TypeError, ValueError):
+            raise invalid
+
+    def session_exercise(value: object) -> ForgeSessionExercise:
+        found = next((item for item in session.exercises if str(item.id) == str(value)), None)
+        if found is None:
+            raise invalid
+        return found
+
+    def library_exercise(value: object) -> ForgeExercise:
+        found = db.query(ForgeExercise).filter(ForgeExercise.id == as_uuid(value), ForgeExercise.user_id == user.id).first()
+        if found is None:
+            raise invalid
+        return found
+
+    def reps(value: object) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 200:
+            raise invalid
+        return value
+
+    def weight(value: object) -> float | None:
+        if value is None:
             return None
-        if db.query(ForgeExercise).filter(ForgeExercise.id == exercise_id, ForgeExercise.user_id == user_id).first() is None:
-            return None
-    return action
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or not 0 <= value <= 1000:
+            raise invalid
+        return float(value)
+
+    if action_type == "adjust_sets":
+        sets = {str(item.id): item for exercise in session.exercises for item in exercise.sets}
+        changes = payload.get("changes") if isinstance(payload.get("changes"), list) else []
+        if not changes:
+            raise invalid
+        for change in changes:
+            set_data = sets.get(str((change or {}).get("session_set_id")))
+            if set_data is None:
+                raise invalid
+            set_data.target_weight_kg = weight(change.get("target_weight_kg"))
+            set_data.target_reps = reps(change.get("target_reps"))
+    elif action_type == "add_set":
+        exercise = session_exercise(payload.get("session_exercise_id"))
+        exercise.sets.append(ForgeSessionSet(
+            position=len(exercise.sets),
+            set_type="warmup" if payload.get("set_type") == "warmup" else "working",
+            target_weight_kg=weight(payload.get("target_weight_kg")),
+            target_reps=reps(payload.get("target_reps")),
+        ))
+    elif action_type == "add_exercise":
+        library = library_exercise(payload.get("exercise_id"))
+        machine_profile = _last_used_machine_profiles(db, user.id, [library.id]).get(library.id)
+        working_sets = payload.get("working_sets") if isinstance(payload.get("working_sets"), int) else 3
+        added = ForgeSessionExercise(
+            source_exercise_id=library.id,
+            source_machine_profile_id=machine_profile.id if machine_profile else None,
+            name=library.name,
+            icon=library.icon,
+            equipment=library.equipment,
+            primary_muscle_group=library.primary_muscle_group,
+            secondary_muscle_groups=library.secondary_muscle_groups or [],
+            machine_profile_name=machine_profile.name if machine_profile else None,
+            machine_profile_snapshot=_machine_profile_snapshot(machine_profile),
+            position=len(session.exercises),
+        )
+        for position in range(max(1, min(8, working_sets))):
+            added.sets.append(ForgeSessionSet(position=position, set_type="working", target_reps=10))
+        _apply_live_session_exercise_guidance(db, user.id, added, library, machine_profile)
+        session.exercises.append(added)
+        db.flush()
+    elif action_type == "replace_exercise":
+        exercise = session_exercise(payload.get("session_exercise_id"))
+        library = library_exercise(payload.get("exercise_id"))
+        if library.id != exercise.source_exercise_id:
+            _replace_session_exercise(db, user.id, session, exercise, library)
+    elif action_type == "remove_exercise":
+        exercise = session_exercise(payload.get("session_exercise_id"))
+        session.exercises.remove(exercise)
+        db.flush()
+        remaining = sorted(session.exercises, key=lambda item: item.position)
+        for temporary_position, item in enumerate(remaining, start=1):
+            item.position = -temporary_position
+        db.flush()
+        for position, item in enumerate(remaining):
+            item.position = position
+        db.flush()
+    elif action_type == "reorder_exercises":
+        ids = payload.get("session_exercise_ids") if isinstance(payload.get("session_exercise_ids"), list) else []
+        _reorder_session_exercises(db, session, [as_uuid(value) for value in ids])
+    elif action_type == "set_machine_profile":
+        exercise = session_exercise(payload.get("session_exercise_id"))
+        profile = _session_machine_profile(db, user.id, exercise.source_exercise_id, as_uuid(payload.get("machine_profile_id")))
+        _assign_session_machine_profile(db, user.id, session, exercise, profile)
+    elif action_type == "create_machine_profile":
+        try:
+            data = ForgeMachineProfileResourceInput(
+                name=payload.get("name") or "",
+                model=payload.get("model"),
+                notes=payload.get("notes"),
+                loading_system=payload.get("loading_system") or "unknown",
+                load_basis=payload.get("load_basis") or "unknown",
+                available_weights_kg=payload.get("available_weights_kg") or [],
+                exercise_ids=[as_uuid(value) for value in payload.get("exercise_ids") or []],
+            )
+        except ValueError:
+            raise invalid
+        profile = ForgeMachineProfile(user_id=user.id)
+        _apply_profile_resource_input(db, profile, data, user.id)
+        db.add(profile)
+        db.flush()
+        if payload.get("assign_to_session_exercise_id"):
+            exercise = session_exercise(payload["assign_to_session_exercise_id"])
+            _assign_session_machine_profile(db, user.id, session, exercise, profile)
+    elif action_type == "set_session_note":
+        exercise = session_exercise(payload.get("session_exercise_id"))
+        exercise.session_note = (str(payload.get("note") or "").strip()[:2000]) or None
+    else:
+        raise invalid
 
 
 @router.post("/sessions/{session_id}/chat", response_model=ForgeSessionResponse)
 async def session_chat(session_id: UUID, data: ForgeSessionChatRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
+    if session.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Der Session-Chat ist nur während des Trainings verfügbar.")
+    history = [{"role": message.role, "content": message.content} for message in session.messages[-12:]]
     user_message = ForgeSessionMessage(session_id=session.id, role="user", content=data.message.strip())
     db.add(user_message)
     db.flush()
-    history = [{"role": message.role, "content": message.content} for message in session.messages[-12:]]
-    library = db.query(ForgeExercise).filter(ForgeExercise.user_id == current_user.id).all()
-    catalog = [{"id": str(exercise.id), "name": exercise.name, "primary_muscle_group": exercise.primary_muscle_group} for exercise in library]
-    response = await generate_forge_session_chat(
-        data.message.strip(),
-        _session_context(session),
-        catalog,
-        history,
-        current_user.language or "de",
-    )
-    action = _validate_session_action(response.get("action"), session, current_user.id, db)
+    response = await run_session_agent(db, current_user, session, data.message.strip(), history)
+    actions = response.get("actions") or []
     assistant_message = ForgeSessionMessage(
         session_id=session.id,
         role="assistant",
         content=response.get("message") or "Ich konnte dafür gerade keinen sicheren Vorschlag bilden.",
-        proposed_action=action,
-        action_status="pending" if action else None,
+        proposed_action={"actions": actions, "tools_used": response.get("tools_used") or []} if actions or response.get("tools_used") else None,
+        action_status="pending" if actions else None,
     )
     db.add(assistant_message)
     db.commit()
@@ -2678,38 +3056,12 @@ async def apply_session_action(session_id: UUID, data: ForgeApplySessionActionRe
     ).first()
     if message is None:
         raise _not_found("Pending action not found")
-    action = _validate_session_action(message.proposed_action, session, current_user.id, db)
-    if action is None:
+    actions = _pending_actions(message.proposed_action)
+    if not actions:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This action is no longer valid.")
-    payload = action["payload"]
-    if action["type"] == "adjust_set":
-        set_data = db.query(ForgeSessionSet).filter(ForgeSessionSet.id == UUID(payload["session_set_id"])).first()
-        set_data.target_weight_kg = payload.get("target_weight_kg")
-        set_data.target_reps = payload["target_reps"]
-    elif action["type"] == "add_set":
-        exercise = db.query(ForgeSessionExercise).filter(ForgeSessionExercise.id == UUID(payload["session_exercise_id"])).first()
-        exercise.sets.append(ForgeSessionSet(
-            position=len(exercise.sets),
-            set_type="working",
-            target_weight_kg=payload.get("target_weight_kg"),
-            target_reps=payload["target_reps"],
-            note=payload.get("note"),
-        ))
-    else:
-        exercise = db.query(ForgeExercise).filter(ForgeExercise.id == UUID(payload["exercise_id"]), ForgeExercise.user_id == current_user.id).first()
-        session_exercise = ForgeSessionExercise(
-            source_exercise_id=exercise.id,
-            name=exercise.name,
-            icon=exercise.icon,
-            equipment=exercise.equipment,
-            primary_muscle_group=exercise.primary_muscle_group,
-            secondary_muscle_groups=exercise.secondary_muscle_groups or [],
-            position=len(session.exercises),
-            notes=payload.get("notes"),
-        )
-        session_exercise.sets.append(ForgeSessionSet(position=0, set_type="working", target_reps=payload.get("target_reps", 10)))
-        _apply_live_session_exercise_guidance(db, current_user.id, session_exercise, exercise, None)
-        session.exercises.append(session_exercise)
+    # All proposals of one reply are applied together or not at all.
+    for action in actions:
+        _apply_session_agent_action(db, current_user, session, action)
     message.action_status = "applied"
     db.commit()
     db.refresh(session)

@@ -98,7 +98,7 @@ async def get_training_plan() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_latest_workout() -> dict[str, Any]:
-    """Read the most recently completed workout with notes and completed sets."""
+    """Read the most recently completed workout with notes, in-workout exercise notes (session_note) and completed sets."""
     return await _call("get_latest_workout")
 
 
@@ -107,7 +107,7 @@ async def get_workouts(
     limit: Annotated[int, Field(ge=1, le=30)] = 20,
     days: Annotated[int, Field(ge=1, le=365)] = 365,
 ) -> dict[str, Any]:
-    """Read recent completed Forge workouts within a bounded time window."""
+    """Read recent completed Forge workouts (sets, notes and in-workout exercise notes) within a bounded time window."""
     return await _call("get_workouts", {"limit": limit, "days": days})
 
 
@@ -116,7 +116,7 @@ async def get_exercise_history(
     exercise_name: Annotated[str, Field(min_length=1, max_length=120)],
     limit: Annotated[int, Field(ge=1, le=30)] = 20,
 ) -> dict[str, Any]:
-    """Read completed-set history for an exercise by its exact name."""
+    """Read completed-set history for an exercise by its exact name, including in-workout notes."""
     return await _call("get_exercise_history", {"exercise_name": exercise_name, "limit": limit})
 
 

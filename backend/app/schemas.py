@@ -301,6 +301,7 @@ class ForgeExerciseHistorySessionResponse(BaseModel):
     started_at: Any
     machine_profile_id: Optional[UUID] = None
     machine_profile_name: Optional[str] = None
+    session_note: Optional[str] = None
     sets: list[ForgeExerciseHistorySetResponse]
 
 
@@ -516,6 +517,7 @@ class ForgeSessionExerciseResponse(BaseModel):
     machine_profile_name: Optional[str] = None
     machine_profile_snapshot: Optional[ForgeMachineProfileSnapshotResponse] = None
     notes: Optional[str] = None
+    session_note: Optional[str] = None
     coach_guidance: Optional[ForgeSessionCoachGuidanceResponse] = None
     addition_coaching: Optional[ForgeSessionAdditionCoachingResponse] = None
     position: int
@@ -540,6 +542,7 @@ class ForgeSessionResponse(BaseModel):
     started_at: Any
     completed_at: Optional[Any] = None
     start_coaching: Optional[ForgeSessionStartCoachingResponse] = None
+    completion_review: Optional[dict] = None
     exercises: list[ForgeSessionExerciseResponse]
     messages: list[ForgeSessionMessageResponse] = Field(default_factory=list)
 
@@ -601,6 +604,15 @@ class ForgeApplySessionActionRequest(BaseModel):
 class ForgeSessionExerciseUpdate(BaseModel):
     machine_profile_id: Optional[UUID] = None
     notes: Optional[str] = Field(None, max_length=500)
+    session_note: Optional[str] = Field(None, max_length=2000)
+
+
+class ForgeSessionExerciseReplaceRequest(BaseModel):
+    exercise_id: UUID
+
+
+class ForgeSessionExerciseOrderRequest(BaseModel):
+    session_exercise_ids: list[UUID] = Field(..., min_length=1, max_length=30)
 
 
 # ============ Private Forge Progress Photos ============

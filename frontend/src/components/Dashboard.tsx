@@ -33,20 +33,32 @@ type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInf
 function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
     if (entries.length < 2) return null;
 
-    const values = entries.map(e => e.weight_kg);
-    const rawMin = Math.min(...values);
-    const rawMax = Math.max(...values);
-    const spread = rawMax - rawMin || 0.5;
-    const yMin = Math.floor((rawMin - spread * 0.2) * 10) / 10;
-    const yMax = Math.ceil((rawMax + spread * 0.2) * 10) / 10;
+    // Daily weigh-ins swing with water and food; the line shows a centred 7-day trend
+    // (±3 days by date, so gaps between weigh-ins are handled correctly).
+    const DAY = 86_400_000;
+    const times = entries.map(e => new Date(`${e.date}T12:00:00`).getTime());
+    const trend = entries.map((_, index) => {
+        const nearby = entries.filter((__, other) => Math.abs(times[other] - times[index]) <= 3 * DAY);
+        return Math.round((nearby.reduce((sum, item) => sum + item.weight_kg, 0) / nearby.length) * 100) / 100;
+    });
+
+    // A minimum visible span keeps tiny fluctuations from filling the whole chart height.
+    const MIN_SPAN_KG = 3;
+    const rawMin = Math.min(...trend);
+    const rawMax = Math.max(...trend);
+    const centre = (rawMin + rawMax) / 2;
+    const span = Math.max(rawMax - rawMin, MIN_SPAN_KG) * 1.2;
+    const yMin = Math.floor((centre - span / 2) * 10) / 10;
+    const yMax = Math.ceil((centre + span / 2) * 10) / 10;
 
     // 3 evenly-spaced ticks
     const mid = Math.round(((yMin + yMax) / 2) * 10) / 10;
     const yTicks = [yMin, mid, yMax];
 
-    const data = entries.map(e => ({
+    const data = entries.map((e, index) => ({
         date: e.date,
-        kg: e.weight_kg,
+        kg: trend[index],
+        actual: e.weight_kg,
     }));
 
     return (
@@ -84,7 +96,9 @@ function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
                     }}
                     itemStyle={{ color: SAND }}
                     labelStyle={{ color: 'rgba(242,236,226,0.45)', marginBottom: 2, fontSize: 10 }}
-                    formatter={(v: number | undefined) => v != null ? `${v.toFixed(1)} kg` : ''}
+                    formatter={(v: number | undefined, _name: unknown, item: { payload?: { actual?: number } }) => v != null
+                        ? `${v.toFixed(1)} kg Trend${item?.payload?.actual != null ? ` · gewogen ${item.payload.actual.toFixed(1)} kg` : ''}`
+                        : ''}
                     labelFormatter={(label: unknown) => {
                         const s = String(label);
                         return new Date(`${s}T12:00:00`).toLocaleDateString('de-DE', {
@@ -94,10 +108,10 @@ function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
                     cursor={{ stroke: 'rgba(232,197,138,0.3)', strokeWidth: 1 }}
                 />
                 <Area
-                    type="monotone"
+                    type="basis"
                     dataKey="kg"
                     stroke={SAND}
-                    strokeWidth={2}
+                    strokeWidth={2.2}
                     fill="url(#wgrad)"
                     dot={false}
                     activeDot={{ r: 3.5, fill: SAND, strokeWidth: 0 }}
@@ -332,6 +346,7 @@ export default function Dashboard() {
                             <div>
                                 <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{homeRoutine ? forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran' : 'Ruhetag'}</p>
                                 <h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{homeRoutine?.name ?? 'Heute ist kein Training geplant'}</h2>
+                                {homeRoutine?.description?.trim() && <p className="mt-1.5 whitespace-pre-line text-[13px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.72)' }}>{homeRoutine.description.trim()}</p>}
                                 <p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{homeRoutine ? homeRoutine.plan_type === 'course' ? `Kurs · ${homeRoutine.default_duration_minutes} Min. · ohne Tracking` : `${homeRoutine.exercises.length} Übungen · ${forgeToday?.mode === 'rotation' ? 'Rotation' : 'Wochenplan'}` : 'Du kannst trotzdem ein alternatives Training starten.'}</p>
                             </div>
                             <Dumbbell size={22} style={{ color: SAND }} />

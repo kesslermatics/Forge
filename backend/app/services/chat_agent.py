@@ -79,7 +79,7 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_latest_workout",
-            "description": "Read the most recently completed Forge workout, its plan description, notes, and actual completed sets.",
+            "description": "Read the most recently completed Forge workout, its plan description, notes, the user's in-workout exercise notes (session_note: pain, form, machine occupied, ...), and actual completed sets.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -87,7 +87,7 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_workouts",
-            "description": "Read recent completed Forge workouts including their plan descriptions, notes, and actual sets. Use limit up to 30 and optionally restrict by days.",
+            "description": "Read recent completed Forge workouts including their plan descriptions, notes, the user's in-workout exercise notes (session_note), and actual sets. Use limit up to 30 and optionally restrict by days.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -235,6 +235,8 @@ def _workout_summary(workout: dict) -> dict:
                 "title": exercise.get("title"),
                 "muscle_group": exercise.get("muscle_group"),
                 "notes": (exercise.get("notes") or "")[:500],
+                "session_note": (exercise.get("session_note") or "")[:2000],
+                "machine_profile": exercise.get("machine_profile") or "",
                 "sets": [
                     {
                         "weight_kg": item.get("weight_kg"),
@@ -311,6 +313,8 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
                         "exercise": exercise.get("title"),
                         "muscle_group": exercise.get("muscle_group"),
                         "notes": (exercise.get("notes") or "")[:500],
+                        "session_note": (exercise.get("session_note") or "")[:2000],
+                        "machine_profile": exercise.get("machine_profile") or "",
                         "sets": exercise.get("sets", [])[:20],
                     })
         return {"exercise_name": args.get("exercise_name"), "sessions": matches[:limit]}
@@ -477,7 +481,7 @@ async def run_chat_agent(
             tool_choice="auto",
             temperature=0.45,
             max_tokens=4096,
-            extra_body={"reasoning": {"effort": "high"}},
+            extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
         )
 
         choice = response.choices[0]

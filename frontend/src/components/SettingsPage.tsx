@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { createMonthlyChallengeCheckin, createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
+import { getCurrentMonthlyChallenges, createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
 import type { GoogleHealthStatus, PersonalApiKey, UserInfo } from '../api/api';
 import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Sparkles, Dumbbell, KeyRound, Plus, Trash2, Unplug } from 'lucide-react';
 import ApiKeyCreatedDialog from './ApiKeyCreatedDialog';
@@ -104,10 +104,11 @@ export default function SettingsPage() {
     const handleCreateCheckin = async () => {
         setCheckinMsg(null); setCreatingCheckin(true);
         try {
-            await createMonthlyChallengeCheckin();
-            setCheckinMsg({ type: 'success', text: 'Monats-Challenges und der heutige Daily Check-in sind bereit.' });
+            // Loading the current cycle creates it if needed and syncs Yazio days; no AI call.
+            await getCurrentMonthlyChallenges();
+            setCheckinMsg({ type: 'success', text: 'Monats-Challenges sind aktuell.' });
         } catch (caught: unknown) {
-            setCheckinMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Daily Check-in konnte nicht erstellt werden.' });
+            setCheckinMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Monats-Challenges konnten nicht aktualisiert werden.' });
         } finally { setCreatingCheckin(false); }
     };
 
@@ -194,7 +195,7 @@ export default function SettingsPage() {
         </Card>
 
         <Card icon={<Sparkles size={15} style={{ color: SAND }} />} title="Monats-Challenges">
-            <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Erstelle jetzt deine fünf Ziele für den aktuellen Monat und den heutigen Daily Check-in. Der Button betrifft nur deinen Account und ist pro Tag sicher wiederholbar.</p>
+            <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Erstellt deine fünf Ziele für den aktuellen Monat, falls sie noch fehlen, und aktualisiert den Fortschritt. Der Button betrifft nur deinen Account und ist beliebig wiederholbar.</p>
             <FeedMsg msg={checkinMsg} />
             <button type="button" onClick={() => void handleCreateCheckin()} disabled={creatingCheckin} className="btn-forge w-full text-[14px]">{creatingCheckin ? <><Loader2 size={15} className="animate-spin" />Erstellt…</> : <><Sparkles size={15} />Monat jetzt auswerten</>}</button>
         </Card>

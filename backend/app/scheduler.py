@@ -1,7 +1,7 @@
 """Background scheduling for Forge-native morning briefings and workout tips."""
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -13,7 +13,6 @@ from app.models import MorningBriefing, User, WeightEntry, WorkoutReview
 from app.services.aggregator import gather_user_context
 from app.services.ai_service import generate_daily_briefing, generate_workout_tips
 from app.services.forge_session_adapter import completed_forge_workouts, forge_plan_template
-from app.services.monthly_challenge_service import berlin_today, generate_daily_challenge_checkin
 
 logger = logging.getLogger(__name__)
 
@@ -179,38 +178,13 @@ async def workout_review_job():
         db.close()
 
 
-async def monthly_challenge_checkin_job():
-    """Refresh the completed previous day at 03:00 Europe/Berlin."""
-    logger.info("Starting monthly challenge daily check-ins")
-    db: Session = SessionLocal()
-    checkin_date = berlin_today() - timedelta(days=1)
-    try:
-        users = db.query(User).all()
-        generated = 0
-        for user in users:
-            try:
-                await generate_daily_challenge_checkin(db, user, today=checkin_date, refresh=True)
-                generated += 1
-            except Exception as exc:
-                db.rollback()
-                logger.error("Monthly challenge check-in failed for %s: %s", user.username, exc)
-            await asyncio.sleep(1)
-        logger.info("Monthly challenge check-ins complete: %d/%d", generated, len(users))
-    except Exception as exc:
-        logger.error("Monthly challenge check-in job crashed: %s", exc)
-    finally:
-        db.close()
-
-
 def start_scheduler():
-    """Start daily Forge-native briefing, monthly check-ins, and hourly workout reviews."""
-    scheduler.add_job(
-        monthly_challenge_checkin_job,
-        trigger=CronTrigger(hour=3, minute=0, timezone="Europe/Berlin"),
-        id="daily_monthly_challenge_checkin",
-        name="Generate monthly challenge check-ins for all users",
-        replace_existing=True,
-    )
+    """Start the daily Forge-native briefing and hourly workout reviews.
+
+    The former 03:00 monthly-challenge check-in job is gone: its AI text is no longer shown,
+    nutrition days are backfilled from Yazio when the challenges are loaded, and the daily
+    weight entry comes from the briefing job below.
+    """
     scheduler.add_job(
         daily_briefing_job,
         trigger=CronTrigger(hour=4, minute=0, timezone="Europe/Berlin"),
@@ -226,7 +200,7 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("Scheduler started – monthly check-ins at 03:00, briefings at 04:00 Europe/Berlin, Forge reviews hourly")
+    logger.info("Scheduler started – briefings at 04:00 Europe/Berlin, Forge reviews hourly")
 
 
 def stop_scheduler():

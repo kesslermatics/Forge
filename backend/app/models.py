@@ -2,7 +2,7 @@
 SQLAlchemy database models.
 """
 import uuid
-from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index, Table, CheckConstraint
+from sqlalchemy import Column, String, Float, Boolean, Date, DateTime, ForeignKey, Integer, JSON, UniqueConstraint, Index, Table, CheckConstraint, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -472,6 +472,8 @@ class ForgeWorkoutSession(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     # One immutable, server-validated Gemini briefing for this session snapshot.
     start_coaching = Column(JSON, nullable=True)
+    # AI review written once when the session is completed.
+    completion_review = Column(JSON, nullable=True)
 
     user = relationship("User", back_populates="forge_sessions")
     program = relationship("ForgeTrainingProgram", back_populates="sessions")
@@ -509,6 +511,8 @@ class ForgeSessionExercise(Base):
     machine_profile_snapshot = Column(JSON, nullable=True)
     notes = Column(String(500), nullable=True)
     coach_guidance = Column(JSON, nullable=True)
+    # Free-text note the user writes during the workout (pain, form, machine occupied, ...).
+    session_note = Column(Text, nullable=True)
     # Coaching generated after this exercise was deliberately added live.
     addition_coaching = Column(JSON, nullable=True)
     position = Column(Integer, nullable=False)

@@ -40,6 +40,7 @@ from migrate_fix_forge_decimal_weights import STATEMENTS as _forge_decimal_weigh
 from migrate_forge_central_machine_profiles import STATEMENTS as _forge_machine_profile_migrations
 from migrate_normalize_forge_machine_profiles import STARTUP_STATEMENTS as _forge_machine_profile_normalization_migrations
 from migrate_forge_rotation_repeatable_routines import STATEMENTS as _forge_rotation_migrations
+from migrate_add_forge_session_notes import STATEMENTS as _forge_session_note_migrations
 
 with engine.connect() as _conn:
     _legacy_migrations = [
@@ -68,6 +69,8 @@ with engine.begin() as _conn:
     for stmt in _forge_machine_profile_normalization_migrations:
         _conn.execute(_sql_text(stmt))
     for stmt in _forge_rotation_migrations:
+        _conn.execute(_sql_text(stmt))
+    for stmt in _forge_session_note_migrations:
         _conn.execute(_sql_text(stmt))
 
 # Forge course plans and Google Health are production capabilities. Do not hide
