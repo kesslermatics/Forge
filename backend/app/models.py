@@ -474,6 +474,10 @@ class ForgeWorkoutSession(Base):
     start_coaching = Column(JSON, nullable=True)
     # AI review written once when the session is completed.
     completion_review = Column(JSON, nullable=True)
+    # Free-text wish behind an ad-hoc session (e.g. "Rücken, 30 Minuten"), shown to the coach.
+    user_request = Column(Text, nullable=True)
+    # Short description: copied from the routine, or written by the AI for composed sessions.
+    description = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="forge_sessions")
     program = relationship("ForgeTrainingProgram", back_populates="sessions")

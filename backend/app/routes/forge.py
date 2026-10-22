@@ -42,8 +42,10 @@ from app.schemas import (
     ForgePlanInput,
     ForgePlanResponse,
     ForgePlanChangesResponse,
+    ForgeAiSessionRequest,
     ForgeCompleteCourseRequest,
     ForgeCompleteSessionRequest,
+    ForgeCustomSessionRequest,
     ForgeMachineProfileResourceInput,
     ForgeMachineProfileResponse,
     ForgeProgressPhotoListResponse,
@@ -79,6 +81,7 @@ from app.services.ai_service import (
     _compute_exercise_progression,
     generate_forge_exercise_draft,
     generate_forge_plan_draft,
+    generate_forge_session_composition,
     generate_forge_session_review,
     generate_forge_session_start_coaching,
 )
@@ -1109,6 +1112,8 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
         "completed_at": session.completed_at,
         "start_coaching": session.start_coaching,
         "completion_review": session.completion_review,
+        "user_request": session.user_request,
+        "description": session.description,
         "exercises": [
             {
                 "id": exercise.id,
@@ -1453,7 +1458,11 @@ def _session_coaching_context(
     return {
         "profile": coaching_profile,
         "coach_evidence": evidence,
-        "session": {"name": session.name, "exercises": [exercise_view(exercise) for exercise in selected]},
+        "session": {
+            "name": session.name,
+            **({"user_request": session.user_request} if session.user_request else {}),
+            "exercises": [exercise_view(exercise) for exercise in selected],
+        },
     }
 
 
@@ -2022,12 +2031,136 @@ async def start_session(data: ForgeStartSessionRequest, current_user: User = Dep
         program_id=program.id if program else None,
         source_plan_id=plan.id,
         name=plan.name,
+        description=(plan.description or "").strip() or None,
         status="active",
     )
     _snapshot_plan_into_session(plan, session, guidance_by_plan_exercise, last_used_profiles)
     db.add(session)
     db.commit()
     db.refresh(session)
+    return _serialize_session(session)
+
+
+def _ensure_no_active_session(db: Session, user_id: UUID) -> None:
+    active = db.query(ForgeWorkoutSession.id).filter(
+        ForgeWorkoutSession.user_id == user_id,
+        ForgeWorkoutSession.status == "active",
+    ).first()
+    if active is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Beende oder verwirf zuerst deine aktive Session.")
+
+
+def _last_set_structure(db: Session, user_id: UUID, exercise_id: UUID) -> list[str]:
+    """Set types of the newest completed exposure of an exercise (any machine profile)."""
+    latest = db.query(ForgeSessionExercise).join(
+        ForgeWorkoutSession, ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
+    ).filter(
+        ForgeWorkoutSession.user_id == user_id,
+        ForgeWorkoutSession.status == "completed",
+        ForgeSessionExercise.source_exercise_id == exercise_id,
+    ).order_by(ForgeWorkoutSession.completed_at.desc().nullslast()).first()
+    return [set_data.set_type for set_data in latest.sets] if latest is not None and latest.sets else []
+
+
+def _create_adhoc_session(
+    db: Session,
+    user: User,
+    name: str,
+    items: list[tuple[ForgeExercise, int | None, int | None]],
+    user_request: str | None = None,
+    description: str | None = None,
+) -> ForgeWorkoutSession:
+    """Create an active session without a routine.
+
+    Each item is (exercise, warm-up sets, working sets); ``None`` counts reuse the set
+    structure of the exercise's last session, or 3 working sets without history.
+    Targets start from history and are then decided by the normal session coaching.
+    """
+    _ensure_no_active_session(db, user.id)
+    profiles = _last_used_machine_profiles(db, user.id, [exercise.id for exercise, _, _ in items])
+    session = ForgeWorkoutSession(user_id=user.id, name=name[:255], status="active", user_request=user_request, description=description)
+    for position, (exercise, warmups, workings) in enumerate(items):
+        profile = profiles.get(exercise.id)
+        session_exercise = ForgeSessionExercise(
+            source_exercise_id=exercise.id,
+            source_machine_profile_id=profile.id if profile else None,
+            name=exercise.name,
+            icon=exercise.icon,
+            equipment=exercise.equipment,
+            primary_muscle_group=exercise.primary_muscle_group,
+            secondary_muscle_groups=exercise.secondary_muscle_groups or [],
+            machine_profile_name=profile.name if profile else None,
+            machine_profile_snapshot=_machine_profile_snapshot(profile),
+            position=position,
+        )
+        if warmups is None and workings is None:
+            structure = _last_set_structure(db, user.id, exercise.id) or ["working"] * 3
+        else:
+            structure = ["warmup"] * (warmups or 0) + ["working"] * (workings or 3)
+        for set_position, set_type in enumerate(structure):
+            session_exercise.sets.append(ForgeSessionSet(position=set_position, set_type=set_type, target_reps=10 if set_type == "working" else 8))
+        _apply_live_session_exercise_guidance(db, user.id, session_exercise, exercise, profile)
+        session.exercises.append(session_exercise)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.post("/sessions/custom", response_model=ForgeSessionResponse, status_code=status.HTTP_201_CREATED)
+async def start_custom_session(data: ForgeCustomSessionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Start a session from hand-picked library exercises; coaching then runs as for routines."""
+    exercise_ids = list(dict.fromkeys(data.exercise_ids))
+    exercises = _owned_exercises(db, current_user.id, exercise_ids)
+    name = (data.name or "").strip() or "Freies Training"
+    session = _create_adhoc_session(db, current_user, name, [(exercises[exercise_id], None, None) for exercise_id in exercise_ids])
+    return _serialize_session(session)
+
+
+@router.post("/sessions/ai", response_model=ForgeSessionResponse, status_code=status.HTTP_201_CREATED)
+async def start_ai_session(data: ForgeAiSessionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Let the model compose a session from the user's library for a free-text wish."""
+    _ensure_no_active_session(db, current_user.id)
+    library = db.query(ForgeExercise).filter(ForgeExercise.user_id == current_user.id).order_by(ForgeExercise.name).all()
+    if not library:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Lege zuerst Übungen in deiner Bibliothek an.")
+    # How recently and how often each exercise was trained helps the model pick realistic options.
+    since = datetime.now(timezone.utc) - timedelta(days=120)
+    usage_rows = db.query(ForgeSessionExercise.source_exercise_id, ForgeWorkoutSession.completed_at).join(
+        ForgeWorkoutSession, ForgeSessionExercise.session_id == ForgeWorkoutSession.id,
+    ).filter(
+        ForgeWorkoutSession.user_id == current_user.id,
+        ForgeWorkoutSession.status == "completed",
+        ForgeWorkoutSession.completed_at >= since,
+    ).all()
+    usage: dict[UUID, list[datetime]] = {}
+    for exercise_id, completed_at in usage_rows:
+        if exercise_id is not None and completed_at is not None:
+            usage.setdefault(exercise_id, []).append(completed_at)
+    now = datetime.now(timezone.utc)
+    catalog = [
+        {
+            "exercise_id": str(exercise.id),
+            "name": exercise.name,
+            "equipment": exercise.equipment,
+            "primary_muscle_group": exercise.primary_muscle_group,
+            "secondary_muscle_groups": exercise.secondary_muscle_groups or [],
+            "machine_profiles": [profile.name for profile in exercise.machine_profiles if not profile.is_archived],
+            "sessions_last_120d": len(usage.get(exercise.id, [])),
+            "days_since_last": (now - max(usage[exercise.id])).days if usage.get(exercise.id) else None,
+        }
+        for exercise in library
+    ]
+    try:
+        composition = await generate_forge_session_composition(data.prompt.strip(), catalog, current_user.language or "de")
+    except ForgeCoachingGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    by_id = {str(exercise.id): exercise for exercise in library}
+    items = [(by_id[item["exercise_id"]], item["warmup_sets"], item["working_sets"]) for item in composition["exercises"]]
+    session = _create_adhoc_session(
+        db, current_user, composition["name"], items,
+        user_request=data.prompt.strip(), description=composition.get("description"),
+    )
     return _serialize_session(session)
 
 

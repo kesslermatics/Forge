@@ -1109,6 +1109,10 @@ export interface ForgeSession {
   completed_at: string | null;
   start_coaching: ForgeSessionStartCoaching | null;
   completion_review: ForgeSessionCompletionReview | null;
+  /** Free-text wish behind an AI-composed session. */
+  user_request?: string | null;
+  /** Routine description, or the AI's description for composed sessions. */
+  description?: string | null;
   exercises: ForgeSessionExercise[];
   messages: ForgeSessionMessage[];
 }
@@ -1134,6 +1138,12 @@ export const deleteForgeProgram = (id: string) =>
   apiRequest<void>(`/api/forge/programs/${id}`, { method: 'DELETE' });
 export const getForgeToday = () => apiRequest<ForgeToday>('/api/forge/today', { cache: 'no-store' });
 
+/** Start a session from hand-picked exercises (no routine); coaching runs as usual afterwards. */
+export const startForgeCustomSession = (exercise_ids: string[], name?: string | null) =>
+  apiRequest<ForgeSession>('/api/forge/sessions/custom', { method: 'POST', body: JSON.stringify({ exercise_ids, name: name ?? null }) });
+/** Let the AI compose a session from the library for a free-text wish, then start it. */
+export const startForgeAiSession = (prompt: string) =>
+  apiRequest<ForgeSession>('/api/forge/sessions/ai', { method: 'POST', body: JSON.stringify({ prompt }) });
 export const startForgeSession = (plan_id: string, program_id?: string | null) =>
   apiRequest<ForgeSession>('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ plan_id, program_id: program_id ?? null }) });
 export const completeForgeCourse = (planId: string, program_id?: string | null) =>

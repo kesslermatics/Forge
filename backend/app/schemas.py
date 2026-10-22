@@ -543,6 +543,8 @@ class ForgeSessionResponse(BaseModel):
     completed_at: Optional[Any] = None
     start_coaching: Optional[ForgeSessionStartCoachingResponse] = None
     completion_review: Optional[dict] = None
+    user_request: Optional[str] = None
+    description: Optional[str] = None
     exercises: list[ForgeSessionExerciseResponse]
     messages: list[ForgeSessionMessageResponse] = Field(default_factory=list)
 
@@ -563,6 +565,15 @@ class ForgeSessionSummaryResponse(BaseModel):
 class ForgeStartSessionRequest(BaseModel):
     plan_id: UUID
     program_id: Optional[UUID] = None
+
+
+class ForgeCustomSessionRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=120)
+    exercise_ids: list[UUID] = Field(..., min_length=1, max_length=20)
+
+
+class ForgeAiSessionRequest(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=1000)
 
 
 class ForgeCompleteCourseRequest(BaseModel):

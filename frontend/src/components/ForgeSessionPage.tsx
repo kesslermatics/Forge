@@ -659,6 +659,7 @@ export default function ForgeSessionPage() {
         <div className="min-w-0 flex-1">
           <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{active ? 'Live Session' : 'Abgeschlossen'}</p>
           <h1 className="truncate text-[20px] font-semibold tracking-tight" style={{ color: TEXT }}>{session.name}</h1>
+          {session.description && <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug" style={{ color: DIM }}>{session.description}</p>}
         </div>
         <div className="text-right">
           <p className="text-[18px] font-semibold tabular-nums" style={{ color: TEXT }} aria-label="Trainingsdauer">{formatClock(session.started_at, session.completed_at, now)}</p>

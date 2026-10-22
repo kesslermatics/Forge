@@ -1,4 +1,4 @@
-"""Add the live-workout exercise note and the AI completion review to Forge sessions.
+"""Add the live-workout exercise note, the AI completion review and the ad-hoc session wish.
 
 Runs automatically on startup (idempotent). Manual run from backend:
   python migrate_add_forge_session_notes.py
@@ -11,6 +11,8 @@ from app.database import engine
 STATEMENTS = [
     "ALTER TABLE forge_session_exercises ADD COLUMN IF NOT EXISTS session_note TEXT;",
     "ALTER TABLE forge_workout_sessions ADD COLUMN IF NOT EXISTS completion_review JSON;",
+    "ALTER TABLE forge_workout_sessions ADD COLUMN IF NOT EXISTS user_request TEXT;",
+    "ALTER TABLE forge_workout_sessions ADD COLUMN IF NOT EXISTS description TEXT;",
 ]
 
 

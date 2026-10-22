@@ -14,12 +14,12 @@ import type {
 } from '../api/api';
 import {
     RefreshCw, Loader2, Flame,
-    Dumbbell, Scale, X, ChevronRight, Clock3, Pencil,
+    Dumbbell, Scale, Pencil,
 } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import MonthlyChallengesCard from './MonthlyChallengesCard';
 import ConfirmDialog from './ConfirmDialog';
-import ForgeSheet from './ForgeSheet';
+import ForgeAlternativeStartSheet from './ForgeAlternativeStartSheet';
 import ForgePlanImagePreview from './ForgePlanImagePreview';
 
 const SAND = '#e8c58a';
@@ -274,7 +274,8 @@ export default function Dashboard() {
     const availableTrainingPlans = forgeToday?.program?.routines
         .map((routine) => routine.plan)
         .filter((plan, index, plans) => plans.findIndex((candidate) => candidate.id === plan.id) === index) ?? [];
-    const canStartForgeTraining = Boolean(homeRoutine || availableTrainingPlans.length > 0);
+    // Empty and AI-composed sessions are always possible, so the card is shown once today's data is loaded.
+    const canStartForgeTraining = Boolean(forgeToday);
 
     const handleStartRoutine = async (routine: NonNullable<ForgeToday['routine']>) => {
         if (startingSession) return;
@@ -335,7 +336,7 @@ export default function Dashboard() {
                 const completedSets = activeForgeSession.exercises.flatMap((exercise) => exercise.sets).filter((set) => set.completed).length;
                 const totalSets = activeForgeSession.exercises.flatMap((exercise) => exercise.sets).length;
                 return <section className="card-forge p-5 forge-anim forge-d1" style={{ borderColor: `${SAND}44` }}>
-                    <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Aktive Session</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{activeForgeSession.name}</h2><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · sicher gespeichert</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
+                    <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Aktive Session</p><h2 className="text-[20px] font-semibold tracking-tight mt-1" style={{ color: '#f2ece0' }}>{activeForgeSession.name}</h2>{activeForgeSession.description && <p className="mt-1.5 whitespace-pre-line text-[13px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.72)' }}>{activeForgeSession.description}</p>}<p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>{completedSets}/{totalSets} Sätze abgeschlossen · sicher gespeichert</p></div><Dumbbell size={22} style={{ color: SAND }} /></div>
                     <div className="grid grid-cols-2 gap-2 mt-4"><button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge flex items-center justify-center gap-2"><Dumbbell size={15} />Fortsetzen</button><button onClick={() => setDiscardDialogOpen(true)} disabled={startingSession} className="tap rounded-xl text-[12px] font-medium cursor-pointer disabled:opacity-50" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Verwerfen</button></div>
                 </section>;
             })() : canStartForgeTraining && (
@@ -352,11 +353,11 @@ export default function Dashboard() {
                             <Dumbbell size={22} style={{ color: SAND }} />
                         </div>
                         {homeRoutine && <button onClick={() => void handleStartRoutine(homeRoutine)} disabled={startingSession} className="btn-forge mt-4 flex w-full min-w-0 items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Kurs als erledigt markieren' : 'Training starten'}</button>}
-                        {availableTrainingPlans.length > (homeRoutine ? 1 : 0) && <button onClick={() => setAlternativePickerOpen(true)} disabled={startingSession} className="tap mt-2 w-full rounded-xl py-2.5 text-[11px] font-medium" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Alternatives Training starten</button>}
+                        <button onClick={() => setAlternativePickerOpen(true)} disabled={startingSession} className="tap mt-2 w-full rounded-xl py-2.5 text-[11px] font-medium" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Alternatives Training starten</button>
                     </div>
                 </section>
             )}
-            {alternativePickerOpen && forgeToday && availableTrainingPlans.length > 0 && <ForgeSheet label="Anderes Training" onClose={() => setAlternativePickerOpen(false)}><div className="p-1"><div className="flex items-start justify-between gap-3"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Einmalige Auswahl</p><h2 id="alternative-workout-title" className="mt-1 text-[20px] font-semibold" style={{ color: '#f2ece0' }}>Anderes Training</h2><p className="mt-1 text-[11px]" style={{ color: TEXT_DIM }}>Deine dauerhafte Routine bleibt unverändert.</p></div><button onClick={() => setAlternativePickerOpen(false)} className="tap flex h-8 w-8 items-center justify-center rounded-full" aria-label="Auswahl schließen" style={{ color: TEXT_DIM, background: 'rgba(255,247,235,0.05)' }}><X size={16} /></button></div><div className="mt-4 space-y-2">{availableTrainingPlans.map((option) => <button key={option.id} onClick={() => void handleStartRoutine(option)} disabled={startingSession} className="tap flex w-full items-center gap-3 rounded-2xl p-4 text-left disabled:opacity-55" style={{ border: `1px solid ${option.id === homeRoutine?.id ? `${SAND}55` : CARD_BORDER}`, background: option.id === homeRoutine?.id ? 'rgba(232,197,138,0.07)' : 'rgba(255,247,235,0.025)' }}><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}>{option.plan_type === 'course' ? <Clock3 size={18} /> : <Dumbbell size={18} />}</span><span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-medium" style={{ color: '#f2ece0' }}>{option.name}</span><span className="mt-0.5 block text-[10px]" style={{ color: TEXT_DIM }}>{option.plan_type === 'course' ? `Kurs · ${option.default_duration_minutes} Min.` : `${option.exercises.length} Übungen`}{option.id === homeRoutine?.id ? ' · vorgeschlagen' : ''}</span></span><ChevronRight size={16} style={{ color: SAND }} /></button>)}</div></div></ForgeSheet>}
+            {alternativePickerOpen && <ForgeAlternativeStartSheet plans={availableTrainingPlans} suggestedPlanId={homeRoutine?.id ?? null} startingPlan={startingSession} onStartPlan={(plan) => void handleStartRoutine(plan)} onSessionCreated={(session) => { setActiveForgeSession(session); setAlternativePickerOpen(false); navigate(`/forge/session/${session.id}?prepare=1`); }} onCreateExercise={() => navigate(`/forge/exercises/new?returnTo=${encodeURIComponent('/dashboard')}`)} onClose={() => setAlternativePickerOpen(false)} />}
             {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}
             <ConfirmDialog open={discardDialogOpen} busy={startingSession} destructive title="Aktive Session verwerfen?" description="Bereits eingetragene Sätze gehen verloren und können nicht wiederhergestellt werden." confirmLabel="Session verwerfen" onCancel={() => setDiscardDialogOpen(false)} onConfirm={() => { setDiscardDialogOpen(false); void handleDiscardForgeSession(); }} />
 
