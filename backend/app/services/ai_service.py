@@ -10,7 +10,7 @@ import math
 import re
 import time
 from datetime import date, timedelta
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
 
@@ -2231,8 +2231,63 @@ session_exercise_id and exactly one proposal per session_set_id.
   motivating gym talk is welcome. No headings, lists, safety disclaimers, and never call it a prediction or analysis."""
 
 
-async def generate_forge_session_start_coaching(session_context: dict, language: str = "de") -> dict:
-    """Generate complete AI coaching for every warm-up and working set."""
+ForgeProgressCallback = Callable[[dict], Awaitable[None]]
+
+
+async def _stream_forge_coaching(
+    messages: list[dict],
+    *,
+    total_exercises: int,
+    total_sets: int,
+    attempt: int,
+    on_event: ForgeProgressCallback,
+) -> tuple[str, object]:
+    """Stream one coaching answer and report real progress while the JSON is written.
+
+    Progress is counted from the streamed text itself: every ``"recommendation"`` key is one
+    finished exercise decision, every ``"session_set_id"`` one set proposal.
+    """
+    stream = await _openai_client().chat.completions.create(
+        model=settings.openai_model,
+        messages=messages,
+        max_tokens=65536,
+        response_format={"type": "json_object"},
+        extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    parts: list[str] = []
+    usage = None
+    writing = False
+    reported = (-1, -1)
+    async for chunk in stream:
+        usage = getattr(chunk, "usage", None) or usage
+        if not chunk.choices:
+            continue
+        piece = getattr(chunk.choices[0].delta, "content", None)
+        if not piece:
+            continue
+        parts.append(piece)
+        if not writing:
+            writing = True
+            await on_event({"type": "ai", "phase": "writing", "attempt": attempt, "done_exercises": 0, "total_exercises": total_exercises, "done_sets": 0, "total_sets": total_sets})
+        text = "".join(parts)
+        done = (min(text.count('"recommendation"'), total_exercises), min(text.count('"session_set_id"'), total_sets))
+        if done != reported:
+            reported = done
+            await on_event({"type": "ai", "phase": "writing", "attempt": attempt, "done_exercises": done[0], "total_exercises": total_exercises, "done_sets": done[1], "total_sets": total_sets})
+    return "".join(parts).strip(), usage
+
+
+async def generate_forge_session_start_coaching(
+    session_context: dict,
+    language: str = "de",
+    on_event: ForgeProgressCallback | None = None,
+) -> dict:
+    """Generate complete AI coaching for every warm-up and working set.
+
+    With ``on_event`` the answer is streamed and progress events are emitted.
+    """
     if not settings.openai_api_key:
         raise ForgeCoachingGenerationError("Forge KI-Coaching ist ohne konfigurierten OpenRouter API-Key nicht verfügbar.")
     system_prompt = FORGE_SESSION_COACHING_PROMPT + _language_instruction(language)
@@ -2276,18 +2331,29 @@ async def generate_forge_session_start_coaching(session_context: dict, language:
             user_content = json.dumps(request_payload, ensure_ascii=False, separators=(",", ":"), default=str)
             attempt_started = time.monotonic()
             try:
-                client = _openai_client()
-                response = await client.chat.completions.create(
-                    model=settings.openai_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    max_tokens=65536,
-                    response_format={"type": "json_object"},
-                    extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
-                )
-                usage = getattr(response, "usage", None)
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ]
+                if on_event is None:
+                    response = await _openai_client().chat.completions.create(
+                        model=settings.openai_model,
+                        messages=messages,
+                        max_tokens=65536,
+                        response_format={"type": "json_object"},
+                        extra_body={"reasoning": {"effort": settings.openai_reasoning_effort}},
+                    )
+                    usage = getattr(response, "usage", None)
+                    raw = (response.choices[0].message.content or "").strip()
+                else:
+                    await on_event({"type": "ai", "phase": "thinking", "attempt": attempt + 1})
+                    raw, usage = await _stream_forge_coaching(
+                        messages,
+                        total_exercises=len(completion_contract["required_exercise_ids"]),
+                        total_sets=len(completion_contract["required_set_ids"]),
+                        attempt=attempt + 1,
+                        on_event=on_event,
+                    )
                 logger.info(
                     "Forge session coaching attempt %s/%s: %.1fs, model=%s, effort=%s, system=%s chars, payload=%s chars, "
                     "prompt_tokens=%s, completion_tokens=%s",
@@ -2301,7 +2367,6 @@ async def generate_forge_session_start_coaching(session_context: dict, language:
                     getattr(usage, "prompt_tokens", None),
                     getattr(usage, "completion_tokens", None),
                 )
-                raw = (response.choices[0].message.content or "").strip()
                 if not raw:
                     raise ValueError("The model returned an empty response")
                 parsed = json.loads(_clean_json(raw))
@@ -2316,6 +2381,8 @@ async def generate_forge_session_start_coaching(session_context: dict, language:
                     max_attempts,
                     exc,
                 )
+                if on_event is not None and attempt + 1 < max_attempts:
+                    await on_event({"type": "retry", "attempt": attempt + 1, "reason": "validation" if isinstance(exc, ValueError) else "provider"})
         if last_error is not None:
             raise last_error
         raise ValueError("The model returned no response")

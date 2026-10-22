@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Check, Minus, Plus, Trash2 } from 'lucide-react';
 import type { ForgeSessionExercise, ForgeSessionSet } from '../../api/api';
-import { BORDER, DIM, FAINT, SAND, TEXT, displayLoad, formatKg, haptic, weightChips } from './shared';
+import { BORDER, DIM, SAND, SET_ROW_COLUMNS, TEXT, formatKg, haptic, stepWeight } from './shared';
 
 const SWIPE_DELETE_THRESHOLD = 96;
 
@@ -24,6 +24,21 @@ interface Props {
   onToggleType: () => void;
 }
 
+function StepButton({ label, disabled, onClick, children }: { label: string; disabled: boolean; onClick: () => void; children: React.ReactNode }) {
+  return <button
+    type="button"
+    aria-label={label}
+    disabled={disabled}
+    onClick={(event) => { event.stopPropagation(); haptic(5); onClick(); }}
+    className="tap flex h-11 w-7 shrink-0 items-center justify-center rounded-lg disabled:opacity-25"
+    style={{ color: DIM }}
+  >{children}</button>;
+}
+
+/**
+ * One set: weight and reps with small −/+ steppers. The coach target is the placeholder,
+ * so checking an untouched set logs exactly the target.
+ */
 export default function SetRow({
   set, label, exercise, active, readOnly, pending, justChecked, weightDraft,
   onActivate, onWeightInput, onWeightPick, onWeightBlur, onReps, onToggle, onDelete, onToggleType,
@@ -37,9 +52,11 @@ export default function SetRow({
   const weightValue = weightDraft ?? (set.actual_weight_kg != null ? formatKg(set.actual_weight_kg) : '');
   const currentWeight = set.actual_weight_kg ?? set.target_weight_kg;
   const currentReps = set.actual_reps ?? set.target_reps;
-  const chips = weightChips(exercise, currentWeight);
   const bodyweight = exercise.equipment === 'none';
-  const canSwipe = !readOnly && !pending;
+  const locked = readOnly || pending;
+  const canSwipe = !locked;
+  const weightDown = stepWeight(exercise, currentWeight, -1);
+  const weightUp = stepWeight(exercise, currentWeight, 1);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!canSwipe || (event.target as HTMLElement).closest('[data-noswipe]')) return;
@@ -78,6 +95,8 @@ export default function SetRow({
     }
   };
 
+  const fieldStyle = { background: 'rgba(255,247,235,0.045)', border: '1px solid rgba(255,247,235,0.09)' };
+
   return <div className={`relative overflow-hidden rounded-2xl ${leaving ? 'forge-row-leave' : 'forge-row-enter'}`}>
     {canSwipe && <div aria-hidden="true" className="absolute inset-0 flex items-center justify-end gap-2 pr-5 text-[12px] font-semibold" style={{ background: dx <= -SWIPE_DELETE_THRESHOLD ? 'rgba(220,38,38,0.85)' : 'rgba(220,38,38,0.35)', color: '#fff1f2', opacity: dx < 0 ? 1 : 0 }}><Trash2 size={16} />Löschen</div>}
     <div
@@ -96,54 +115,63 @@ export default function SetRow({
         borderRadius: 16,
       }}
     >
-      <div className="grid items-center gap-1.5 px-2.5 py-2.5" style={{ gridTemplateColumns: '38px minmax(0,1fr) 78px 54px 46px' }}>
+      <div className="grid items-center gap-1.5 px-2 py-2" style={{ gridTemplateColumns: SET_ROW_COLUMNS }}>
         <button
           type="button"
           data-noswipe
-          disabled={readOnly || pending}
+          disabled={locked}
           onClick={(event) => { event.stopPropagation(); onToggleType(); }}
           aria-label={warmup ? 'Aufwärmsatz – tippen für Arbeitssatz' : `Arbeitssatz ${label} – tippen für Aufwärmsatz`}
           className="tap flex h-9 w-9 items-center justify-center rounded-xl text-[13px] font-semibold disabled:opacity-70"
           style={{ color: warmup ? '#16130f' : SAND, background: warmup ? SAND : 'rgba(232,197,138,0.08)', border: `1px solid ${warmup ? SAND : 'rgba(232,197,138,0.22)'}` }}
         >{warmup ? 'W' : label}</button>
-        <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-wider" style={{ color: FAINT }}>Ziel</p>
-          <p className="truncate text-[13px] font-medium tabular-nums" style={{ color: set.completed ? DIM : TEXT }}>{displayLoad(set.target_weight_kg, set.target_reps, exercise.equipment)}</p>
+
+        <div data-noswipe className="flex min-w-0 items-center rounded-xl" style={fieldStyle}>
+          <StepButton label="Gewicht eine Stufe runter" disabled={locked || weightDown == null} onClick={() => { if (weightDown != null) onWeightPick(weightDown); }}><Minus size={14} /></StepButton>
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">Gewicht in kg</span>
+            <input
+              value={weightValue}
+              disabled={locked}
+              inputMode="decimal"
+              enterKeyHint="next"
+              onFocus={onActivate}
+              onChange={(event) => onWeightInput(event.target.value)}
+              onBlur={onWeightBlur}
+              placeholder={set.target_weight_kg != null ? formatKg(set.target_weight_kg) : bodyweight ? 'BW' : 'kg'}
+              className="h-11 w-full min-w-0 bg-transparent text-center text-[15px] font-semibold tabular-nums outline-none placeholder:font-medium placeholder:text-[rgba(242,236,226,0.4)]"
+              style={{ color: TEXT }}
+            />
+          </label>
+          <StepButton label="Gewicht eine Stufe hoch" disabled={locked || weightUp == null} onClick={() => { if (weightUp != null) onWeightPick(weightUp); }}><Plus size={14} /></StepButton>
         </div>
-        <label data-noswipe className="block">
-          <span className="sr-only">Gewicht in kg</span>
-          <input
-            value={weightValue}
-            disabled={readOnly || pending}
-            inputMode="decimal"
-            enterKeyHint="next"
-            onFocus={onActivate}
-            onChange={(event) => onWeightInput(event.target.value)}
-            onBlur={onWeightBlur}
-            placeholder={set.target_weight_kg != null ? formatKg(set.target_weight_kg) : bodyweight ? 'BW' : 'kg'}
-            className="input-forge !h-11 !px-1.5 !py-0 text-center text-[15px] font-semibold tabular-nums"
-          />
-        </label>
-        <label data-noswipe className="block">
-          <span className="sr-only">Wiederholungen</span>
-          <input
-            value={set.actual_reps ?? ''}
-            disabled={readOnly || pending}
-            inputMode="numeric"
-            enterKeyHint="done"
-            onFocus={onActivate}
-            onChange={(event) => {
-              const raw = event.target.value.replace(/\D/g, '').slice(0, 3);
-              onReps(raw ? Math.min(200, Number(raw)) : null);
-            }}
-            placeholder={set.target_reps != null ? String(set.target_reps) : 'Wdh.'}
-            className="input-forge !h-11 !px-1 !py-0 text-center text-[15px] font-semibold tabular-nums"
-          />
-        </label>
+
+        <div data-noswipe className="flex min-w-0 items-center rounded-xl" style={fieldStyle}>
+          <StepButton label="Eine Wiederholung weniger" disabled={locked || !currentReps || currentReps <= 1} onClick={() => onReps(Math.max(1, (currentReps ?? 1) - 1))}><Minus size={14} /></StepButton>
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">Wiederholungen</span>
+            <input
+              value={set.actual_reps ?? ''}
+              disabled={locked}
+              inputMode="numeric"
+              enterKeyHint="done"
+              onFocus={onActivate}
+              onChange={(event) => {
+                const raw = event.target.value.replace(/\D/g, '').slice(0, 3);
+                onReps(raw ? Math.min(200, Number(raw)) : null);
+              }}
+              placeholder={set.target_reps != null ? String(set.target_reps) : 'Wdh.'}
+              className="h-11 w-full min-w-0 bg-transparent text-center text-[15px] font-semibold tabular-nums outline-none placeholder:font-medium placeholder:text-[rgba(242,236,226,0.4)]"
+              style={{ color: TEXT }}
+            />
+          </label>
+          <StepButton label="Eine Wiederholung mehr" disabled={locked || (currentReps ?? 0) >= 200} onClick={() => onReps(Math.min(200, (currentReps ?? 0) + 1))}><Plus size={14} /></StepButton>
+        </div>
+
         <button
           type="button"
           data-noswipe
-          disabled={readOnly || pending}
+          disabled={locked}
           onClick={(event) => { event.stopPropagation(); onToggle(); }}
           aria-pressed={set.completed}
           aria-label={set.completed ? 'Satz wieder öffnen' : 'Satz abhaken'}
@@ -151,30 +179,6 @@ export default function SetRow({
           style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM, border: `1px solid ${set.completed ? SAND : 'rgba(255,247,235,0.1)'}` }}
         ><Check size={20} strokeWidth={2.6} /></button>
       </div>
-
-      {active && !set.completed && !readOnly && <div data-noswipe className="forge-expand space-y-2 px-2.5 pb-3">
-        {chips.length > 0 && <div className="flex gap-1.5 overflow-x-auto pb-0.5" style={{ scrollbarWidth: 'none' }} role="group" aria-label="Gewicht wählen">
-          {chips.map((value) => {
-            const selected = currentWeight != null && Math.abs(value - currentWeight) < 1e-6;
-            const isTarget = set.target_weight_kg != null && Math.abs(value - set.target_weight_kg) < 1e-6;
-            return <button
-              key={value}
-              type="button"
-              onClick={() => { haptic(6); onWeightPick(value); }}
-              className="tap shrink-0 rounded-full px-3.5 py-2 text-[13px] font-semibold tabular-nums"
-              style={{ color: selected ? '#16130f' : TEXT, background: selected ? SAND : 'rgba(255,247,235,0.05)', border: `1px solid ${selected ? SAND : isTarget ? 'rgba(232,197,138,0.5)' : 'rgba(255,247,235,0.1)'}` }}
-            >{formatKg(value)} kg</button>;
-          })}
-        </div>}
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px]" style={{ color: DIM }}>Wiederholungen</span>
-          <div className="flex items-center gap-1.5">
-            <button type="button" aria-label="Eine Wiederholung weniger" disabled={!currentReps || currentReps <= 1} onClick={() => { haptic(5); onReps(Math.max(1, (currentReps ?? 1) - 1)); }} className="tap flex h-10 w-12 items-center justify-center rounded-xl disabled:opacity-30" style={{ color: TEXT, background: 'rgba(255,247,235,0.06)', border: '1px solid rgba(255,247,235,0.1)' }}><Minus size={17} /></button>
-            <span className="w-9 text-center text-[16px] font-semibold tabular-nums" style={{ color: TEXT }}>{currentReps ?? '–'}</span>
-            <button type="button" aria-label="Eine Wiederholung mehr" onClick={() => { haptic(5); onReps(Math.min(200, (currentReps ?? 0) + 1)); }} className="tap flex h-10 w-12 items-center justify-center rounded-xl" style={{ color: TEXT, background: 'rgba(255,247,235,0.06)', border: '1px solid rgba(255,247,235,0.1)' }}><Plus size={17} /></button>
-          </div>
-        </div>
-      </div>}
       {pending && <span className="sr-only">Wird gespeichert</span>}
     </div>
   </div>;

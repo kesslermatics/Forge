@@ -1,11 +1,14 @@
 """Native Forge exercise library, plans, and explicit-save AI drafts."""
+import asyncio
+import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -84,6 +87,7 @@ from app.services.yazio_service import fetch_yazio_coaching_trends, resolve_yazi
 from app.services.google_health_service import export_completed_session
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
+logger = logging.getLogger(__name__)
 
 
 async def _yazio_coaching_context(user: User) -> dict:
@@ -2038,20 +2042,125 @@ async def generate_session_start_coaching(
     session = _owned_session(db, current_user.id, session_id)
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")
-    _apply_last_used_profiles_to_session(db, current_user.id, session)
-    if session.start_coaching is None or force:
-        coaching_profile = await _forge_coaching_profile(db, current_user)
-        context = _session_coaching_context(db, current_user, session, coaching_profile)
-        try:
-            coaching = await generate_forge_session_start_coaching(context, current_user.language or "de")
-        except ForgeCoachingGenerationError as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-        _apply_forge_set_proposals(session, coaching)
-        coaching.pop("set_proposals", None)
-        session.start_coaching = coaching
-        db.commit()
-        db.refresh(session)
+    try:
+        await _run_start_coaching(db, current_user, session, force=force)
+    except ForgeCoachingGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return _serialize_session(session)
+
+
+async def _run_start_coaching(
+    db: Session,
+    user: User,
+    session: ForgeWorkoutSession,
+    *,
+    force: bool = False,
+    on_event=None,
+) -> None:
+    """Build the context, ask the model and persist the briefing, reporting each real step."""
+    async def emit(event: dict) -> None:
+        if on_event is not None:
+            await on_event(event)
+
+    await emit({"type": "step", "id": "profiles", "status": "active"})
+    _apply_last_used_profiles_to_session(db, user.id, session)
+    await emit({"type": "step", "id": "profiles", "status": "done", "detail": f"{len(session.exercises)} Übungen"})
+    if session.start_coaching is not None and not force:
+        return
+
+    await emit({"type": "step", "id": "nutrition", "status": "active"})
+    coaching_profile = await _forge_coaching_profile(db, user)
+    rolling = ((coaching_profile.get("yazio") or {}).get("rolling") or {}).get("14d") or {}
+    nutrition_detail = (
+        f"{rolling.get('logged_days', 0)} von 14 Tagen geloggt"
+        if (coaching_profile.get("yazio") or {}).get("source") not in (None, "unavailable")
+        else "Yazio nicht verfügbar"
+    )
+    await emit({"type": "step", "id": "nutrition", "status": "done", "detail": nutrition_detail})
+
+    await emit({"type": "step", "id": "history", "status": "active"})
+    context = _session_coaching_context(db, user, session, coaching_profile)
+    evidence = (context.get("coach_evidence") or {}).get("exercises") or []
+    with_history = sum(1 for item in evidence if item.get("history_count"))
+    await emit({"type": "step", "id": "history", "status": "done", "detail": f"Verlauf für {with_history} von {len(evidence)} Übungen"})
+
+    await emit({"type": "step", "id": "ai", "status": "active"})
+    coaching = await generate_forge_session_start_coaching(context, user.language or "de", on_event=on_event)
+    await emit({"type": "step", "id": "ai", "status": "done"})
+
+    await emit({"type": "step", "id": "save", "status": "active"})
+    _apply_forge_set_proposals(session, coaching)
+    coaching.pop("set_proposals", None)
+    session.start_coaching = coaching
+    db.commit()
+    db.refresh(session)
+    await emit({"type": "step", "id": "save", "status": "done"})
+
+
+@router.post("/sessions/{session_id}/start-coaching/stream")
+async def stream_session_start_coaching(
+    session_id: UUID,
+    request: Request,
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Same as ``start-coaching`` but streams the real preparation steps as Server-Sent Events."""
+    session = _owned_session(db, current_user.id, session_id)
+    if session.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions do not need a new start briefing.")
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_event(event: dict) -> None:
+        await queue.put(event)
+
+    async def run() -> None:
+        try:
+            await _run_start_coaching(db, current_user, session, force=force, on_event=on_event)
+            await queue.put({"type": "completed", "session": ForgeSessionResponse.model_validate(_serialize_session(session)).model_dump(mode="json")})
+        except asyncio.CancelledError:
+            db.rollback()
+            raise
+        except ForgeCoachingGenerationError as exc:
+            db.rollback()
+            await queue.put({"type": "error", "message": str(exc)})
+        except Exception:
+            logger.exception("Forge start coaching stream failed")
+            db.rollback()
+            await queue.put({"type": "error", "message": "Das KI-Coaching konnte nicht erstellt werden."})
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(run())
+
+    async def event_stream():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    # Keep proxies from closing an idle connection while the model thinks.
+                    if await request.is_disconnected():
+                        task.cancel()
+                        break
+                    yield ": keep-alive\n\n"
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/sessions/active", response_model=ForgeSessionResponse | None)

@@ -9,8 +9,10 @@ import {
   deleteForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, dismissForgeSessionAction,
   generateForgeSessionCompletionReview, generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
   getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, reorderForgeSessionExercises,
-  replaceForgeSessionExercise, sendForgeSessionChat, updateForgeSessionExercise, updateForgeSessionSet,
+  replaceForgeSessionExercise, sendForgeSessionChat, streamForgeSessionStartCoaching, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
+import { applyCoachingEvent, initialCoachingProgress } from './forgeSession/coachingProgress';
+import type { CoachingProgress } from './forgeSession/coachingProgress';
 import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionExercise, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
 import ForgeSessionLoader from './ForgeSessionLoader';
 import ForgeExercisePicker from './ForgeExercisePicker';
@@ -22,7 +24,7 @@ import SessionCoachSheet from './forgeSession/SessionCoachSheet';
 import ExerciseOverviewSheet from './forgeSession/ExerciseOverviewSheet';
 import CompletionSummary from './forgeSession/CompletionSummary';
 import {
-  BORDER, DIM, SAND, TEXT, coachDecisionFor, errorMessage, exerciseDone, formatClock, haptic, isTempId,
+  BORDER, DIM, SAND, SET_ROW_COLUMNS, TEXT, coachDecisionFor, errorMessage, exerciseDone, formatClock, haptic, isTempId,
   needsCoaching, parseWeightInput, toUpdateInput,
 } from './forgeSession/shared';
 
@@ -45,6 +47,7 @@ export default function ForgeSessionPage() {
   const [slide, setSlide] = useState<'left' | 'right' | null>(null);
   const [loading, setLoading] = useState(true);
   const [preparing, setPreparing] = useState(false);
+  const [coachingProgress, setCoachingProgress] = useState<CoachingProgress | null>(null);
   const [startCoachingError, setStartCoachingError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -222,12 +225,29 @@ export default function ForgeSessionPage() {
   // ── loading ────────────────────────────────────────────────────
   const prepareCoaching = useCallback(async (id: string) => {
     setPreparing(true); setStartCoachingError(null);
+    setCoachingProgress(initialCoachingProgress(Date.now()));
+    let receivedEvents = false;
     try {
-      commitSession(await generateForgeSessionStartCoaching(id, false));
+      const prepared = await streamForgeSessionStartCoaching(id, (event) => {
+        receivedEvents = true;
+        setCoachingProgress((current) => (current ? applyCoachingEvent(current, event, Date.now()) : current));
+      });
+      commitSession(prepared);
     } catch (caught: unknown) {
-      setStartCoachingError(errorMessage(caught, 'Das KI-Coaching konnte nicht erstellt werden.'));
+      if (receivedEvents) {
+        setStartCoachingError(errorMessage(caught, 'Das KI-Coaching konnte nicht erstellt werden.'));
+      } else {
+        // Streaming unavailable (e.g. a proxy): fall back to the plain request without live steps.
+        setCoachingProgress(null);
+        try {
+          commitSession(await generateForgeSessionStartCoaching(id, false));
+        } catch (fallbackError: unknown) {
+          setStartCoachingError(errorMessage(fallbackError, 'Das KI-Coaching konnte nicht erstellt werden.'));
+        }
+      }
     } finally {
       setPreparing(false);
+      setCoachingProgress(null);
     }
   }, [commitSession]);
 
@@ -610,7 +630,7 @@ export default function ForgeSessionPage() {
   };
 
   // ── render ─────────────────────────────────────────────────────
-  if (loading) return <ForgeSessionLoader preparing={preparing} />;
+  if (loading) return <ForgeSessionLoader preparing={preparing} progress={coachingProgress} />;
   if (!session) return <div className="card-forge p-6 text-center text-[13px]" style={{ color: '#fca5a5' }}>{toast || 'Session nicht gefunden.'}</div>;
 
   const active = session.status === 'active';
@@ -692,8 +712,8 @@ export default function ForgeSessionPage() {
           </div>
         </aside>}
 
-        <div className="grid items-center gap-1.5 px-[22px] pb-1.5 text-[10px] uppercase tracking-wider" style={{ gridTemplateColumns: '38px minmax(0,1fr) 78px 54px 46px', color: 'rgba(242,236,226,0.35)' }}>
-          <span>Satz</span><span>Ziel</span><span className="text-center">kg</span><span className="text-center">Wdh.</span><span />
+        <div className="grid items-center gap-1.5 px-[21px] pb-1.5 text-[10px] uppercase tracking-wider" style={{ gridTemplateColumns: SET_ROW_COLUMNS, color: 'rgba(242,236,226,0.35)' }}>
+          <span>Satz</span><span className="text-center">kg</span><span className="text-center">Wdh.</span><span />
         </div>
         <div className="space-y-1.5 px-3">
           {activeExercise.sets.map((set, index) => {
@@ -721,7 +741,7 @@ export default function ForgeSessionPage() {
 
         {active && <div className="px-3 pt-2">
           <button type="button" onClick={addSet} disabled={exerciseBusy} className="tap flex h-11 w-full items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium disabled:opacity-50" style={{ color: SAND, border: `1px dashed ${SAND}55` }}><Plus size={16} />Satz hinzufügen</button>
-          <p className="mt-1.5 text-center text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Satz nach links wischen zum Löschen · W/Nummer tippen zum Umschalten</p>
+          <p className="mt-1.5 text-center text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Graue Werte sind das Coach-Ziel · nach links wischen zum Löschen · W/Nummer tippen zum Umschalten</p>
         </div>}
 
         {active && exerciseDone(activeExercise) && nextExercise && <div className="forge-msg-in px-3 pt-3">

@@ -1144,6 +1144,57 @@ export const listForgeSessions = (limit = 50, offset = 0) =>
 export const getForgeSession = (id: string) => apiRequest<ForgeSession>(`/api/forge/sessions/${id}`);
 export const generateForgeSessionStartCoaching = (id: string, force = false) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${id}/start-coaching${force ? '?force=true' : ''}`, { method: 'POST' });
+
+export type ForgeCoachingStepId = 'profiles' | 'nutrition' | 'history' | 'ai' | 'save';
+export type ForgeCoachingStreamEvent =
+  | { type: 'step'; id: ForgeCoachingStepId; status: 'active' | 'done'; detail?: string }
+  | { type: 'ai'; phase: 'thinking'; attempt: number }
+  | { type: 'ai'; phase: 'writing'; attempt: number; done_exercises: number; total_exercises: number; done_sets: number; total_sets: number }
+  | { type: 'retry'; attempt: number; reason: 'validation' | 'provider' }
+  | { type: 'completed'; session: ForgeSession }
+  | { type: 'error'; message: string };
+
+/** Streams the real preparation steps of the session briefing and resolves with the prepared session. */
+export const streamForgeSessionStartCoaching = async (
+  id: string,
+  onEvent: (event: ForgeCoachingStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<ForgeSession> => {
+  const token = getToken();
+  const headers = new Headers({ Accept: 'text/event-stream' });
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${API_URL}/api/forge/sessions/${id}/start-coaching/stream`, { method: 'POST', headers, signal });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw new Error(apiErrorMessage(payload, `Error ${response.status}`));
+  }
+  if (!response.body) throw new Error('Der Fortschritts-Stream ist nicht verfügbar.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const outcome: { session: ForgeSession | null; failure: string | null } = { session: null, failure: null };
+  const consume = (block: string) => {
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('');
+    if (!data) return;
+    const event = JSON.parse(data) as ForgeCoachingStreamEvent;
+    if (event.type === 'completed') outcome.session = event.session;
+    if (event.type === 'error') outcome.failure = event.message;
+    onEvent(event);
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? '';
+    blocks.forEach(consume);
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer);
+  if (outcome.failure) throw new Error(outcome.failure);
+  if (!outcome.session) throw new Error('Die Vorbereitung wurde unterbrochen.');
+  return outcome.session;
+};
 export const deleteForgeSession = (id: string) =>
   apiRequest<void>(`/api/forge/sessions/${id}`, { method: 'DELETE' });
 export const addForgeSessionExercise = (sessionId: string, data: { exercise_id?: string; name?: string; machine_profile_id?: string | null; notes?: string | null; sets: ForgeSessionSetInput[] }) =>

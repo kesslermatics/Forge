@@ -47,16 +47,27 @@ export const isTempId = (id: string) => id.startsWith('tmp-');
 export const availableWeights = (exercise: ForgeSessionExercise) =>
   [...(exercise.machine_profile_snapshot?.available_weights_kg ?? [])].filter((value) => value > 0).sort((a, b) => a - b);
 
-/** Weight chips around the current value: the machine stack, or plain ±2.5 kg steps. */
-export const weightChips = (exercise: ForgeSessionExercise, current: number | null) => {
+/** Shared set-row columns so the header lines up with every row: set · kg · reps · check. */
+export const SET_ROW_COLUMNS = '36px minmax(0,1fr) minmax(0,1fr) 44px';
+
+const FREE_WEIGHT_STEP = 2.5;
+
+/**
+ * Next weight up or down: the neighbouring stack weight of the machine profile, or ±2.5 kg
+ * without a weight list. Returns null when there is no further step in that direction.
+ */
+export const stepWeight = (exercise: ForgeSessionExercise, current: number | null, direction: 1 | -1): number | null => {
   const stack = availableWeights(exercise);
   if (stack.length) {
-    if (current == null) return stack.slice(0, 5);
-    const index = stack.reduce((best, value, position) => (Math.abs(value - current) < Math.abs(stack[best] - current) ? position : best), 0);
-    return stack.slice(Math.max(0, index - 2), index + 3);
+    if (current == null) return direction > 0 ? stack[0] : null;
+    const next = direction > 0
+      ? stack.find((value) => value > current + 1e-6)
+      : [...stack].reverse().find((value) => value < current - 1e-6);
+    return next ?? null;
   }
-  if (current == null || exercise.equipment === 'none') return [];
-  return [current - 5, current - 2.5, current, current + 2.5, current + 5].filter((value) => value > 0);
+  const base = current ?? 0;
+  const next = Math.round((base + direction * FREE_WEIGHT_STEP) * 100) / 100;
+  return next >= 0 ? next : null;
 };
 
 export const workingSets = (exercise: ForgeSessionExercise) => exercise.sets.filter((set) => set.set_type === 'working');
