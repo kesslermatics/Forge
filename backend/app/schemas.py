@@ -574,8 +574,6 @@ ForgePlanChangeKind = Literal[
     "exercise_added",
     "exercise_removed",
     "exercise_reordered",
-    "profile_changed",
-    "notes_changed",
     "sets_changed",
 ]
 

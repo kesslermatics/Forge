@@ -1486,22 +1486,31 @@ def _match_session_plan_exercises(
     return matches, still_unmatched, list(unmatched_plan.values())
 
 
-def _session_set_signature(session_exercise: ForgeSessionExercise) -> list[tuple]:
-    return [
-        (item.set_type, item.target_reps, (item.note or "").strip())
-        for item in sorted(session_exercise.sets, key=lambda item: item.position)
-    ]
+_SET_TYPE_LABELS = {"warmup": "Aufwärmsätze", "working": "Arbeitssätze"}
 
 
-def _plan_set_signature(plan_exercise: ForgePlanExercise) -> list[tuple]:
-    return [
-        (
-            item.set_type,
-            item.coach_suggested_reps if item.coach_suggested_reps is not None else item.current_reps,
-            (item.note or "").strip(),
-        )
-        for item in sorted(plan_exercise.sets, key=lambda item: item.position)
-    ]
+def _moved_exercise_ids(old_ranks: list[int]) -> set[int]:
+    """Return indexes (in new order) that must have moved, i.e. outside a longest increasing subsequence.
+
+    Moving one exercise shifts every exercise in between; reporting only the minimal
+    set of moved exercises keeps the review readable.
+    """
+    count = len(old_ranks)
+    if count == 0:
+        return set()
+    best_len = [1] * count
+    previous = [-1] * count
+    for i in range(count):
+        for j in range(i):
+            if old_ranks[j] < old_ranks[i] and best_len[j] + 1 > best_len[i]:
+                best_len[i] = best_len[j] + 1
+                previous[i] = j
+    end = max(range(count), key=lambda index: best_len[index])
+    stable: set[int] = set()
+    while end != -1:
+        stable.add(end)
+        end = previous[end]
+    return set(range(count)) - stable
 
 
 def _plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> tuple[dict, ForgeTrainingPlan | None]:
@@ -1517,85 +1526,59 @@ def _plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> t
 
     matches, added_to_session, removed_from_session = _match_session_plan_exercises(session, plan)
     changes: list[dict] = []
+    # Like the Hevy "update routine" prompt, only the structure counts: which exercises,
+    # in which order, and how many warm-up / working sets. Weights, reps, notes and the
+    # coach's per-session targets are session data and never appear here.
     for session_exercise in added_to_session:
         changes.append({
             "kind": "exercise_added",
             "label": session_exercise.name,
-            "detail": "Exercise exists in the session but not in the current source plan.",
+            "detail": "Übung wird zum Plan hinzugefügt.",
         })
     for plan_exercise in removed_from_session:
         changes.append({
             "kind": "exercise_removed",
             "label": plan_exercise.exercise.name,
-            "detail": "Exercise exists in the current source plan but not in the session.",
+            "detail": "Übung wird aus dem Plan entfernt.",
         })
-    for session_exercise in session.exercises:
-        plan_exercise = matches.get(session_exercise.id)
-        if plan_exercise is None:
-            continue
-        label = session_exercise.name
-        if session_exercise.position != plan_exercise.position:
-            changes.append({
-                "kind": "exercise_reordered",
-                "label": label,
-                "detail": f"Position changed from {plan_exercise.position + 1} to {session_exercise.position + 1}.",
-            })
-        if session_exercise.source_machine_profile_id != plan_exercise.machine_profile_id:
-            changes.append({
-                "kind": "profile_changed",
-                "label": label,
-                "detail": "Das ausgewählte Maschinenprofil unterscheidet sich vom aktuellen Trainingstag.",
-            })
-        if (session_exercise.notes or "").strip() != (plan_exercise.notes or "").strip():
-            changes.append({
-                "kind": "notes_changed",
-                "label": label,
-                "detail": "Exercise notes differ from the current source plan.",
-            })
-        session_sets = sorted(session_exercise.sets, key=lambda item: item.position)
-        plan_sets = sorted(plan_exercise.sets, key=lambda item: item.position)
-        for position in range(max(len(session_sets), len(plan_sets))):
-            session_set = session_sets[position] if position < len(session_sets) else None
-            plan_set = plan_sets[position] if position < len(plan_sets) else None
-            set_type = session_set.set_type if session_set is not None else plan_set.set_type
-            set_name = "Aufwärmsatz" if set_type == "warmup" else "Arbeitssatz"
-            set_label = f"{label} · {set_name} {position + 1}"
-            if session_set is None:
-                changes.append({
-                    "kind": "sets_changed",
-                    "label": set_label,
-                    "detail": "Dieser Satz wird aus dem Plan entfernt.",
-                })
-                continue
-            if plan_set is None:
-                changes.append({
-                    "kind": "sets_changed",
-                    "label": set_label,
-                    "detail": "Dieser Satz wird zum Plan hinzugefügt.",
-                })
-                continue
 
-            details: list[str] = []
-            if session_set.set_type != plan_set.set_type:
-                previous_type = "Aufwärmsatz" if plan_set.set_type == "warmup" else "Arbeitssatz"
-                details.append(f"Satztyp: {previous_type} → {set_name}")
-            plan_reps = plan_set.coach_suggested_reps if plan_set.coach_suggested_reps is not None else plan_set.current_reps
-            if session_set.target_reps != plan_reps:
-                previous_reps = f"{plan_reps} Wdh." if plan_reps is not None else "keine Vorgabe"
-                next_reps = f"{session_set.target_reps} Wdh." if session_set.target_reps is not None else "keine Vorgabe"
-                details.append(f"Ziel-Wdh.: {previous_reps} → {next_reps}")
-            plan_note = (plan_set.note or "").strip()
-            session_note = (session_set.note or "").strip()
-            if session_note != plan_note:
-                previous_note = f"„{plan_note}“" if plan_note else "keine Notiz"
-                next_note = f"„{session_note}“" if session_note else "keine Notiz"
-                details.append(f"Notiz: {previous_note} → {next_note}")
-            if details:
-                changes.append({
-                    "kind": "sets_changed",
-                    "label": set_label,
-                    "detail": " · ".join(details),
-                })
+    # Order is compared only among exercises present on both sides, so adding or
+    # removing an exercise does not make every later exercise look "moved".
+    matched_session = sorted((item for item in session.exercises if item.id in matches), key=lambda item: item.position)
+    plan_rank = {
+        plan_exercise.id: rank
+        for rank, plan_exercise in enumerate(sorted(matches.values(), key=lambda item: item.position))
+    }
+    old_ranks = [plan_rank[matches[item.id].id] for item in matched_session]
+    for index in sorted(_moved_exercise_ids(old_ranks)):
+        changes.append({
+            "kind": "exercise_reordered",
+            "label": matched_session[index].name,
+            "detail": f"Reihenfolge: Position {old_ranks[index] + 1} → {index + 1}.",
+        })
+
+    for session_exercise in matched_session:
+        plan_exercise = matches[session_exercise.id]
+        session_types = [item.set_type for item in sorted(session_exercise.sets, key=lambda item: item.position)]
+        plan_types = [item.set_type for item in sorted(plan_exercise.sets, key=lambda item: item.position)]
+        if session_types == plan_types:
+            continue
+        details = [
+            f"{label}: {plan_types.count(set_type)} → {session_types.count(set_type)}"
+            for set_type, label in _SET_TYPE_LABELS.items()
+            if plan_types.count(set_type) != session_types.count(set_type)
+        ]
+        if not details:
+            names = {"warmup": "Aufwärmsatz", "working": "Arbeitssatz"}
+            details.append(
+                "Satzreihenfolge: " + ", ".join(names[item] for item in plan_types)
+                + " → " + ", ".join(names[item] for item in session_types)
+            )
+        changes.append({
+            "kind": "sets_changed",
+            "label": session_exercise.name,
+            "detail": " · ".join(details),
+        })
 
     can_apply = session.status == "active"
     for session_exercise in session.exercises:
@@ -1618,6 +1601,44 @@ def _plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> t
                 can_apply = False
 
     return {"has_changes": bool(changes), "can_apply": can_apply, "changes": changes}, plan
+
+
+def _sync_plan_set_structure(db: Session, plan_exercise: ForgePlanExercise, session_exercise: ForgeSessionExercise) -> None:
+    """Align a plan exercise's set list (count, order, warm-up/working type) with the session.
+
+    Existing plan sets of the same type are reused in order, so their stored weights, reps
+    and notes survive; only genuinely new sets are created from the session's targets.
+    """
+    reusable: dict[str, list[ForgePlanSet]] = {}
+    for plan_set in sorted(plan_exercise.sets, key=lambda item: item.position):
+        reusable.setdefault(plan_set.set_type, []).append(plan_set)
+
+    ordered: list[ForgePlanSet] = []
+    for session_set in sorted(session_exercise.sets, key=lambda item: item.position):
+        candidates = reusable.get(session_set.set_type) or []
+        if candidates:
+            ordered.append(candidates.pop(0))
+        else:
+            ordered.append(ForgePlanSet(
+                set_type=session_set.set_type,
+                current_reps=session_set.target_reps,
+                note=session_set.note,
+            ))
+
+    kept = [item for item in ordered if item.id is not None]
+    # Move kept sets out of the way first: (plan_exercise_id, position) is unique.
+    for temporary_position, plan_set in enumerate(kept, start=1):
+        plan_set.position = -temporary_position
+    for leftovers in reusable.values():
+        for plan_set in leftovers:
+            plan_exercise.sets.remove(plan_set)
+    db.flush()
+
+    for position, plan_set in enumerate(ordered):
+        plan_set.position = position
+        if plan_set.id is None:
+            plan_exercise.sets.append(plan_set)
+    db.flush()
 
 
 def _apply_session_plan_changes(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> None:
@@ -1652,29 +1673,19 @@ def _apply_session_plan_changes(db: Session, user_id: UUID, session: ForgeWorkou
             ).one_or_none()
         plan_exercise = matches.get(session_exercise.id)
         if plan_exercise is None:
+            # Only brand-new exercises take profile and notes from the session; for existing
+            # exercises the review never showed them, so the plan keeps its own values.
             plan_exercise = ForgePlanExercise(exercise=library_exercise)
+            plan_exercise.machine_profile = profile
+            plan_exercise.notes = session_exercise.notes
             plan.exercises.append(plan_exercise)
         plan_exercise.position = position
-        plan_exercise.machine_profile = profile
-        plan_exercise.notes = session_exercise.notes
-        plan_exercise.sets.clear()
         desired.append((session_exercise, plan_exercise))
     db.flush()
 
     for session_exercise, plan_exercise in desired:
         session_exercise.source_plan_exercise_id = plan_exercise.id
-        for position, session_set in enumerate(sorted(session_exercise.sets, key=lambda item: item.position)):
-            plan_exercise.sets.append(ForgePlanSet(
-                position=position,
-                set_type=session_set.set_type,
-                previous_weight_kg=None,
-                previous_reps=None,
-                current_weight_kg=None,
-                current_reps=session_set.target_reps,
-                coach_suggested_weight_kg=None,
-                coach_suggested_reps=None,
-                note=session_set.note,
-            ))
+        _sync_plan_set_structure(db, plan_exercise, session_exercise)
 
 
 def _session_machine_profile(
