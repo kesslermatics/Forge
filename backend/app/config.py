@@ -59,9 +59,15 @@ class Settings(BaseSettings):
         "https://forge.kesslermatics.com,http://localhost:*,http://127.0.0.1:*",
     )
 
-    # Private Forge progress-photo storage. In production this must be a mounted persistent volume.
-    # Keep empty by default so uploads never silently use ephemeral container storage.
-    photo_storage_dir: str = os.getenv("PHOTO_STORAGE_DIR", "")
+    # Private object storage (S3-compatible, e.g. Cloudflare R2) for progress photos and plan images.
+    # Empty by default so uploads never silently fall back to ephemeral container storage.
+    s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "")
+    s3_bucket: str = os.getenv("S3_BUCKET", "")
+    s3_access_key_id: str = os.getenv("S3_ACCESS_KEY_ID", "")
+    s3_secret_access_key: str = os.getenv("S3_SECRET_ACCESS_KEY", "")
+    s3_region: str = os.getenv("S3_REGION", "auto")
+    # Objects live under this prefix so the bucket can also hold other data (e.g. backups).
+    s3_key_prefix: str = os.getenv("S3_KEY_PREFIX", "photos/")
 
     class Config:
         env_file = ".env"

@@ -28,6 +28,9 @@ httpx>=0.26.0
 python-multipart==0.0.20
 Pillow==11.1.0
 
+# S3-compatible object storage (Cloudflare R2) for progress photos
+boto3==1.43.0
+
 # AI / OpenAI
 openai>=1.50.0
 

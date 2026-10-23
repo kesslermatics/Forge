@@ -135,8 +135,13 @@ JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=10080  # 7 days
 
 # Required only when progress-photo uploads are enabled.
-# Use a private, persistent directory; never a publicly served directory.
-PHOTO_STORAGE_DIR=/absolute/private/forge-progress-photos
+# Private S3-compatible bucket (e.g. Cloudflare R2). Endpoint without bucket name.
+S3_ENDPOINT_URL=https://<account-id>.eu.r2.cloudflarestorage.com
+S3_BUCKET=forge
+S3_REGION=auto
+S3_KEY_PREFIX=photos/
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
 
 # Optional server-level Yazio example values. Individual users connect Yazio
 # through the authenticated application settings instead.
@@ -348,7 +353,7 @@ Forge runs as one Dokploy project with three services, all built from this repos
 | Service | Source | Notes |
 | --- | --- | --- |
 | Postgres | Dokploy database | Use its **internal** connection URL as `DATABASE_URL` |
-| Backend | `backend/Dockerfile` (build path `/backend`) | Port 8000, health check `/health`, volume mounted at `/data` for progress photos |
+| Backend | `backend/Dockerfile` (build path `/backend`) | Port 8000, health check `/health`, progress photos in a private S3/R2 bucket (`S3_*` env vars) |
 | Frontend | `frontend/Dockerfile` (build path `/frontend`) | nginx on port 80, SPA fallback, build arg `VITE_API_URL` |
 
 Routing on `forge.kesslermatics.com`:

@@ -8,10 +8,11 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.dependencies import get_current_user
@@ -70,9 +71,9 @@ from app.schemas import (
 from app.services.progress_photo_storage import (
     PhotoStorageUnavailable,
     delete_progress_photo as delete_progress_photo_file,
+    ensure_storage_available,
     prepare_progress_photo,
     read_progress_photo,
-    storage_root,
     storage_unavailable_error,
     write_progress_photo,
 )
@@ -959,13 +960,13 @@ async def replace_plan_image(
     """Normalize and attach one private image to an owned training-day plan."""
     plan = _owned_plan(db, current_user.id, plan_id)
     try:
-        storage_root()
+        ensure_storage_available()
     except PhotoStorageUnavailable as error:
         raise storage_unavailable_error(error)
     normalized, width, height, digest = prepare_progress_photo(await image.read())
     storage_key = plan.image_storage_key or f"{current_user.id}/plans/{plan.id}.webp"
     try:
-        write_progress_photo(storage_key, normalized)
+        await run_in_threadpool(write_progress_photo, storage_key, normalized)
         plan.image_storage_key = storage_key
         plan.image_content_type = "image/webp"
         plan.image_byte_size = len(normalized)
@@ -991,13 +992,13 @@ async def get_plan_image(
     if not plan.image_storage_key:
         raise _not_found("Training plan image not found")
     try:
-        image_path = read_progress_photo(plan.image_storage_key)
+        image_bytes = await run_in_threadpool(read_progress_photo, plan.image_storage_key)
     except PhotoStorageUnavailable as error:
         raise storage_unavailable_error(error)
     except FileNotFoundError:
         raise _not_found("Training plan image not found")
-    return FileResponse(
-        image_path,
+    return Response(
+        content=image_bytes,
         media_type=plan.image_content_type or "image/webp",
         headers={"Cache-Control": "private, no-store, max-age=0", "X-Content-Type-Options": "nosniff"},
     )
@@ -2422,7 +2423,7 @@ async def create_progress_photo(
     if view not in {"front", "side", "back", "other"}:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="View must be front, side, back, or other.")
     try:
-        storage_root()
+        ensure_storage_available()
     except PhotoStorageUnavailable as error:
         raise storage_unavailable_error(error)
     normalized, width, height, digest = prepare_progress_photo(await image.read())
@@ -2441,7 +2442,7 @@ async def create_progress_photo(
     )
     photo.storage_key = f"{current_user.id}/{photo.id}.webp"
     try:
-        write_progress_photo(photo.storage_key, normalized)
+        await run_in_threadpool(write_progress_photo, photo.storage_key, normalized)
         db.add(photo)
         db.commit()
         db.refresh(photo)
@@ -2461,13 +2462,13 @@ async def get_progress_photo_image(
     """Serve a photo only after JWT authentication and owner lookup; never publish a URL."""
     photo = _owned_progress_photo(db, current_user.id, photo_id)
     try:
-        photo_path = read_progress_photo(photo.storage_key)
+        photo_bytes = await run_in_threadpool(read_progress_photo, photo.storage_key)
     except PhotoStorageUnavailable as error:
         raise storage_unavailable_error(error)
     except FileNotFoundError:
         raise _not_found("Progress photo image not found")
-    return FileResponse(
-        photo_path,
+    return Response(
+        content=photo_bytes,
         media_type=photo.content_type,
         headers={"Cache-Control": "private, no-store, max-age=0", "X-Content-Type-Options": "nosniff"},
     )
@@ -2502,12 +2503,12 @@ async def replace_progress_photo_image(
 ):
     photo = _owned_progress_photo(db, current_user.id, photo_id)
     try:
-        storage_root()
+        ensure_storage_available()
     except PhotoStorageUnavailable as error:
         raise storage_unavailable_error(error)
     normalized, width, height, digest = prepare_progress_photo(await image.read())
     try:
-        write_progress_photo(photo.storage_key, normalized)
+        await run_in_threadpool(write_progress_photo, photo.storage_key, normalized)
         photo.content_type = "image/webp"
         photo.byte_size = len(normalized)
         photo.width = width
@@ -2534,7 +2535,7 @@ async def delete_progress_photo(
     try:
         delete_progress_photo_file(storage_key)
     except PhotoStorageUnavailable:
-        # The record is gone; an unavailable backend volume cannot make it publicly reachable.
+        # The record is gone; unreachable object storage cannot make the image publicly reachable.
         pass
 
 

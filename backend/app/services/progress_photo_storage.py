@@ -1,20 +1,29 @@
-"""Private image handling for Forge progress photos.
+"""Private image handling for Forge progress photos and training-plan images.
 
 Images are normalized server-side before persistence so original filenames, EXIF/GPS
 metadata, and unsupported formats never become durable application data.
+
+Normalized images are stored in a private S3-compatible bucket (Cloudflare R2 in
+production). Objects are never public; they are only streamed through the
+authenticated API after an owner lookup.
 """
 from __future__ import annotations
 
+import logging
+from functools import lru_cache
 from hashlib import sha256
 from io import BytesIO
-from pathlib import Path
-import os
 import warnings
 
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, status
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 MAX_INPUT_BYTES = 10 * 1024 * 1024
 MAX_DECODED_PIXELS = 40_000_000
@@ -22,36 +31,61 @@ MAX_DECODED_PIXELS = 40_000_000
 MAX_DIMENSION = 1920
 WEBP_QUALITY = 82
 _ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+_MISSING_OBJECT_CODES = {"NoSuchKey", "NotFound", "404"}
 
 
 class PhotoStorageUnavailable(Exception):
-    """The deployment has not supplied a durable private storage location."""
+    """The deployment has not supplied (or cannot reach) private object storage."""
 
 
-def storage_root() -> Path:
-    configured_root = settings.photo_storage_dir.strip()
-    if not configured_root:
+def ensure_storage_available() -> None:
+    """Fail fast with a clear message when the S3 settings are incomplete."""
+    required = (
+        ("S3_ENDPOINT_URL", settings.s3_endpoint_url),
+        ("S3_BUCKET", settings.s3_bucket),
+        ("S3_ACCESS_KEY_ID", settings.s3_access_key_id),
+        ("S3_SECRET_ACCESS_KEY", settings.s3_secret_access_key),
+    )
+    missing = [name for name, value in required if not value.strip()]
+    if missing:
         raise PhotoStorageUnavailable(
-            "Private image uploads are not configured. Set PHOTO_STORAGE_DIR to a mounted persistent volume."
+            "Private image uploads are not configured. Set " + ", ".join(missing) + "."
         )
-    root = Path(configured_root).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    if not root.is_dir():
-        raise PhotoStorageUnavailable("PHOTO_STORAGE_DIR is not a directory.")
-    return root
+
+
+@lru_cache(maxsize=1)
+def _client():
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint_url.strip(),
+        aws_access_key_id=settings.s3_access_key_id.strip(),
+        aws_secret_access_key=settings.s3_secret_access_key.strip(),
+        region_name=(settings.s3_region.strip() or "auto"),
+        config=Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+            retries={"max_attempts": 3, "mode": "standard"},
+            connect_timeout=5,
+            read_timeout=30,
+            # Cloudflare R2 does not accept the optional CRC32 trailers newer boto3 adds by default.
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
+    )
 
 
 def storage_unavailable_error(error: Exception) -> HTTPException:
     return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error))
 
 
-def _safe_path(root: Path, storage_key: str) -> Path:
-    candidate = (root / storage_key).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as error:
-        raise ValueError("Invalid private photo storage key.") from error
-    return candidate
+def _object_key(storage_key: str) -> str:
+    """Map a database storage key to a bucket key, rejecting anything that could escape the prefix."""
+    key = storage_key.strip()
+    parts = key.split("/")
+    if not key or key.startswith("/") or "\\" in key or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("Invalid private photo storage key.")
+    prefix = settings.s3_key_prefix.strip().strip("/")
+    return f"{prefix}/{key}" if prefix else key
 
 
 def prepare_progress_photo(source: bytes) -> tuple[bytes, int, int, str]:
@@ -92,38 +126,47 @@ def prepare_progress_photo(source: bytes) -> tuple[bytes, int, int, str]:
         )
 
 
-def write_progress_photo(storage_key: str, content: bytes) -> Path:
-    root = storage_root()
-    destination = _safe_path(root, storage_key)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+def write_progress_photo(storage_key: str, content: bytes) -> None:
+    """Store (or overwrite) one normalized image. Blocking network call: run it in a threadpool."""
+    ensure_storage_available()
     try:
-        temporary.write_bytes(content)
-        os.replace(temporary, destination)
-    finally:
-        if temporary.exists():
-            temporary.unlink(missing_ok=True)
-    return destination
+        _client().put_object(
+            Bucket=settings.s3_bucket.strip(),
+            Key=_object_key(storage_key),
+            Body=content,
+            ContentType="image/webp",
+            CacheControl="private, no-store",
+        )
+    except (BotoCoreError, ClientError):
+        logger.exception("Could not write private image %s to object storage", storage_key)
+        raise storage_unavailable_error(PhotoStorageUnavailable("Photo storage is temporarily unavailable."))
 
 
-def read_progress_photo(storage_key: str) -> Path:
-    root = storage_root()
-    photo_path = _safe_path(root, storage_key)
-    if not photo_path.is_file():
-        raise FileNotFoundError(storage_key)
-    return photo_path
+def read_progress_photo(storage_key: str) -> bytes:
+    """Return the stored image bytes. Blocking network call: run it in a threadpool.
+
+    Raises FileNotFoundError when the object does not exist and PhotoStorageUnavailable
+    when storage is misconfigured or unreachable.
+    """
+    ensure_storage_available()
+    try:
+        response = _client().get_object(Bucket=settings.s3_bucket.strip(), Key=_object_key(storage_key))
+        with response["Body"] as body:
+            return body.read()
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") in _MISSING_OBJECT_CODES:
+            raise FileNotFoundError(storage_key) from error
+        logger.exception("Could not read private image %s from object storage", storage_key)
+        raise PhotoStorageUnavailable("Photo storage is temporarily unavailable.") from error
+    except BotoCoreError as error:
+        logger.exception("Could not read private image %s from object storage", storage_key)
+        raise PhotoStorageUnavailable("Photo storage is temporarily unavailable.") from error
 
 
 def delete_progress_photo(storage_key: str) -> None:
+    """Best-effort delete. A missing object or unreachable storage must not break the caller."""
+    ensure_storage_available()
     try:
-        photo_path = _safe_path(storage_root(), storage_key)
-        photo_path.unlink(missing_ok=True)
-        parent = photo_path.parent
-        root = storage_root()
-        if parent != root:
-            parent.rmdir()
-    except FileNotFoundError:
-        return
-    except OSError:
-        # A leftover empty directory or a file already removed must not expose inaccessible data.
-        return
+        _client().delete_object(Bucket=settings.s3_bucket.strip(), Key=_object_key(storage_key))
+    except (BotoCoreError, ClientError):
+        logger.warning("Could not delete private image %s from object storage", storage_key, exc_info=True)
