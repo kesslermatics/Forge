@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     google_health_client_id: str = os.getenv("GOOGLE_HEALTH_CLIENT_ID", "")
     google_health_client_secret: str = os.getenv("GOOGLE_HEALTH_CLIENT_SECRET", "")
     google_health_redirect_uri: str = os.getenv("GOOGLE_HEALTH_REDIRECT_URI", "")
-    frontend_url: str = os.getenv("FRONTEND_URL", "https://coach.kesslermatics.com")
+    frontend_url: str = os.getenv("FRONTEND_URL", "https://forge.kesslermatics.com")
     # Comma-separated list of additional allowed CORS origins, e.g.
     # "https://forge.kesslermatics.com,https://other.example.com"
     extra_cors_origins: str = os.getenv("EXTRA_CORS_ORIGINS", "")
@@ -44,19 +44,19 @@ class Settings(BaseSettings):
     # Public Streamable HTTP MCP endpoint and transport allowlists.
     mcp_server_url: str = os.getenv(
         "MCP_SERVER_URL",
-        "https://hevy-ai-coach-production.up.railway.app/mcp",
+        "https://forge.kesslermatics.com/mcp",
     )
     mcp_issuer_url: str = os.getenv(
         "MCP_ISSUER_URL",
-        "https://hevy-ai-coach-production.up.railway.app",
+        "https://forge.kesslermatics.com",
     )
     mcp_allowed_hosts: str = os.getenv(
         "MCP_ALLOWED_HOSTS",
-        "hevy-ai-coach-production.up.railway.app,localhost:*,127.0.0.1:*",
+        "forge.kesslermatics.com,localhost:*,127.0.0.1:*",
     )
     mcp_allowed_origins: str = os.getenv(
         "MCP_ALLOWED_ORIGINS",
-        "https://coach.kesslermatics.com,http://localhost:*,http://127.0.0.1:*",
+        "https://forge.kesslermatics.com,http://localhost:*,http://127.0.0.1:*",
     )
 
     # Private Forge progress-photo storage. In production this must be a mounted persistent volume.

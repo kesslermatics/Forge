@@ -221,10 +221,10 @@ Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-
 
 ## Personal API keys and MCP
 
-The Railway FastAPI backend serves the same ten read-only context tools used by the built-in Coach directly over **Streamable HTTP** at:
+The FastAPI backend serves the same ten read-only context tools used by the built-in Coach directly over **Streamable HTTP** at:
 
 ```text
-https://hevy-ai-coach-production.up.railway.app/mcp
+https://forge.kesslermatics.com/mcp
 ```
 
 Available tools cover profile/current Yazio goal, training plans, workouts, exercise history, nutrition, steps/activity, weight history, and saved coaching memory. MCP runs in the same backend process and calls the account-scoped Coach dispatcher directly—there is no second MCP service, subprocess, database credential, or HTTP loopback adapter.
@@ -246,11 +246,11 @@ Authorization: Bearer forge_live_REPLACE_WITH_THE_ONE_TIME_VALUE
 
 The browser JWT is a separate credential and is not intended for remote MCP connections.
 
-### Railway configuration
+### Deployment configuration (Dokploy)
 
-The existing backend start command remains unchanged. `mcp==2.0.1` is installed with `backend/requirements.txt`, and the FastAPI app mounts MCP under `/mcp`.
+`mcp==2.0.1` is installed with `backend/requirements.txt`, and the FastAPI app mounts MCP under `/mcp`.
 
-The current Railway hostname works with the checked-in defaults. For another backend hostname, set:
+The `forge.kesslermatics.com` hostname works with the checked-in defaults. For another backend hostname, set:
 
 ```dotenv
 MCP_SERVER_URL=https://your-backend.example.com/mcp
@@ -285,7 +285,7 @@ async with httpx2.AsyncClient(
     timeout=httpx2.Timeout(30.0, read=300.0),
 ) as http_client:
     transport = streamable_http_client(
-        "https://hevy-ai-coach-production.up.railway.app/mcp",
+        "https://forge.kesslermatics.com/mcp",
         http_client=http_client,
     )
     async with Client(transport) as forge:
@@ -321,7 +321,7 @@ For another agent framework or MCP host, configure the remote URL plus header. A
 ```json
 {
   "name": "forge-coach",
-  "url": "https://hevy-ai-coach-production.up.railway.app/mcp",
+  "url": "https://forge.kesslermatics.com/mcp",
   "headers": {
     "Authorization": "Bearer ${FORGE_API_KEY}"
   }
@@ -340,6 +340,24 @@ Production rules:
 6. If a key is exposed, revoke it in Forge Settings and create a replacement.
 
 Implementation follows the [official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk), its [ASGI mounting example](https://github.com/modelcontextprotocol/python-sdk/blob/main/examples/stories/starlette_mount/server.py), and the [authenticated Streamable HTTP client guide](https://py.sdk.modelcontextprotocol.io/client/transports/). Content based on those sources was rephrased for compliance with licensing restrictions.
+
+## Deployment (Dokploy / Docker)
+
+Forge runs as one Dokploy project with three services, all built from this repository:
+
+| Service | Source | Notes |
+| --- | --- | --- |
+| Postgres | Dokploy database | Use its **internal** connection URL as `DATABASE_URL` |
+| Backend | `backend/Dockerfile` (build path `/backend`) | Port 8000, health check `/health`, volume mounted at `/data` for progress photos |
+| Frontend | `frontend/Dockerfile` (build path `/frontend`) | nginx on port 80, SPA fallback, build arg `VITE_API_URL` |
+
+Routing on `forge.kesslermatics.com`:
+
+- `/` goes to the frontend.
+- `/api` goes to the backend with the `/api` prefix stripped.
+- `/mcp` goes to the backend unchanged.
+
+Copy `backend/.env.example` into the backend application's environment and `frontend/.env.example` into the frontend's **Build Args** (Vite inlines `VITE_*` at build time). Keep `ENCRYPTION_KEY` identical across hosts or stored integration credentials cannot be decrypted.
 
 ## Security and privacy
 

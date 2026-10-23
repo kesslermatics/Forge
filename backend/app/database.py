@@ -9,9 +9,9 @@ from app.config import settings
 
 def _normalise_db_url(url: str) -> str:
     """
-    Railway (and other PaaS) typically provide a plain `postgresql://` or
-    `postgres://` URL.  SQLAlchemy 2 on Python 3.13 resolves that to the
-    psycopg3 dialect (`psycopg`) by default, but we ship `psycopg2-binary`.
+    Hosting platforms (e.g. Dokploy) typically provide a plain `postgresql://`
+    or `postgres://` URL.  SQLAlchemy 2 can resolve that to the psycopg3
+    dialect (`psycopg`) by default, but we ship `psycopg2-binary`.
     Force the psycopg2 dialect so the connection always works regardless of
     what the platform injects.
     """

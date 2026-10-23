@@ -2,7 +2,7 @@
  * API utility for communicating with the FastAPI backend.
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://hevy-ai-coach-production.up.railway.app';
+const API_URL = import.meta.env.VITE_API_URL || 'https://forge.kesslermatics.com/api';
 
 /* ── Token helpers ──────────────────────────────────────── */
 
