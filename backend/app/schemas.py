@@ -381,6 +381,21 @@ class ForgeExerciseDraftRequest(BaseModel):
     allowed_icons: list[str] = Field(default_factory=list, max_length=2500)
 
 
+class ForgePlanEditExercise(BaseModel):
+    exercise_id: UUID
+    machine_profile_id: Optional[UUID] = None
+    warmup_sets: int = Field(0, ge=0, le=6)
+    working_sets: int = Field(3, ge=1, le=12)
+    notes: Optional[str] = Field(None, max_length=500)
+
+
+class ForgePlanEditDraftRequest(BaseModel):
+    instructions: str = Field(..., min_length=3, max_length=2000)
+    name: str = Field("", max_length=255)
+    description: Optional[str] = Field(None, max_length=500)
+    exercises: list[ForgePlanEditExercise] = Field(default_factory=list, max_length=30)
+
+
 class ForgePlanDraftRequest(BaseModel):
     instructions: str = Field(..., min_length=3, max_length=2000)
     exercise_ids: list[UUID] = Field(..., min_length=1, max_length=30)

@@ -927,9 +927,29 @@ export const updateForgeExercise = (id: string, data: ForgeExerciseInput) =>
 export const deleteForgeExercise = (id: string) =>
   apiRequest<void>(`/api/forge/exercises/${id}`, { method: 'DELETE' });
 export const generateForgeExerciseDraft = (instructions: string, allowed_icons: string[]) =>
-  apiRequest<{ draft: ForgeExerciseInput }>('/api/forge/drafts/exercise', {
+  apiRequest<{ draft: ForgeExerciseInput & { duplicate_of?: string | null } }>('/api/forge/drafts/exercise', {
     method: 'POST', body: JSON.stringify({ instructions, allowed_icons }),
   });
+
+/** Structure-only view of a training-day exercise used by the editor and the AI rework. */
+export interface ForgePlanStructureExercise {
+  exercise_id: string;
+  machine_profile_id: string | null;
+  warmup_sets: number;
+  working_sets: number;
+  notes: string | null;
+}
+
+export interface ForgePlanEditDraft {
+  name: string;
+  description: string | null;
+  summary: string;
+  exercises: ForgePlanStructureExercise[];
+}
+
+/** Ask the AI to rework an unsaved plan structure; nothing is persisted. */
+export const generateForgePlanEditDraft = (data: { instructions: string; name: string; description: string | null; exercises: ForgePlanStructureExercise[] }) =>
+  apiRequest<{ draft: ForgePlanEditDraft }>('/api/forge/drafts/plan-edit', { method: 'POST', body: JSON.stringify(data) });
 
 export const getForgePlans = () => apiRequest<ForgePlan[]>('/api/forge/plans');
 export const createForgePlan = (data: ForgePlanInput) =>

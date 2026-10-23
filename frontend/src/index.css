@@ -416,3 +416,18 @@ button:focus { outline: none; }
   .forge-slide-left, .forge-slide-right, .forge-row-enter, .forge-row-leave, .forge-expand, .forge-msg-in,
   .forge-toast, .forge-fab, .forge-skeleton, .forge-typing span { animation: none; }
 }
+
+/* ── Sheets & sortable lists ─────────────────────────── */
+@keyframes forge-sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes forge-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.forge-sheet-backdrop { animation: forge-fade-in 0.18s ease-out both; }
+.forge-sheet-panel { animation: forge-sheet-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.forge-sortable-item { transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1); -webkit-touch-callout: none; user-select: none; }
+.forge-sortable-item.is-dragging { transition: none; position: relative; z-index: 20; }
+.forge-sortable-item.is-dragging > * { box-shadow: 0 18px 40px -12px rgba(0,0,0,0.75), 0 0 0 1px rgba(232,197,138,0.45); transform: scale(1.02); }
+.forge-chip-row { scrollbar-width: none; }
+.forge-chip-row::-webkit-scrollbar { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .forge-sheet-backdrop, .forge-sheet-panel { animation: none; }
+  .forge-sortable-item { transition: none; }
+}

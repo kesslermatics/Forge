@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Dumbbell, Loader2, TrendingUp } from 'lucide-react';
+import { ArrowLeft, Dumbbell, Loader2, Pencil, Trash2, TrendingUp } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { getForgeExerciseHistory } from '../api/api';
-import type { ForgeExerciseHistory, ForgeExerciseHistorySet } from '../api/api';
+import { deleteForgeExercise, getForgeExerciseHistory, getForgeExercises } from '../api/api';
+import type { ForgeExercise, ForgeExerciseHistory, ForgeExerciseHistorySet } from '../api/api';
+import ConfirmDialog from './ConfirmDialog';
+import ExerciseFormSheet from './forge/ExerciseFormSheet';
+import { equipmentLabel, muscleLabel } from './forge/labels';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
@@ -30,6 +33,10 @@ export default function ForgeExerciseHistoryPage() {
   const [history, setHistory] = useState<ForgeExerciseHistory | null>(null);
   const [machineProfileId, setMachineProfileId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [library, setLibrary] = useState<ForgeExercise[] | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!exerciseId) return;
@@ -56,11 +63,36 @@ export default function ForgeExerciseHistoryPage() {
   if (!history) return <div className="card-forge p-6 text-center text-[13px]" style={{ color: '#fca5a5' }}>{error}</div>;
 
   const { exercise, sessions } = history;
+
+  const openEditor = () => {
+    setEditing(true);
+    if (!library) getForgeExercises().then(setLibrary).catch(() => setLibrary([]));
+  };
+
+  const remove = async () => {
+    setDeleting(true);
+    try { await deleteForgeExercise(exercise.id); navigate('/forge/exercises', { replace: true }); }
+    catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Die Übung wird noch verwendet und kann nicht gelöscht werden.'); setConfirmDelete(false); }
+    finally { setDeleting(false); }
+  };
+
+  const chip = (active: boolean, label: string, onClick: () => void) => <button key={label} type="button" onClick={onClick} aria-pressed={active} className="tap h-9 shrink-0 rounded-full px-3.5 text-[12.5px]" style={{ color: active ? '#16130f' : TEXT, background: active ? SAND : 'rgba(255,247,235,0.05)', border: `1px solid ${active ? SAND : 'rgba(232,197,138,0.12)'}` }}>{label}</button>;
+
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start gap-3">
-      <button onClick={() => navigate('/forge')} className="tap mt-1 cursor-pointer" style={{ color: DIM }} aria-label="Zurück zu Übungen"><ArrowLeft size={18} /></button>
-      <div className="min-w-0 flex-1"><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Übungshistorie</p><h1 className="text-[23px] font-semibold tracking-tight mt-1 truncate" style={{ color: TEXT }}>{exercise.name}</h1><p className="text-[11px] mt-1" style={{ color: DIM }}>{exercise.primary_muscle_group} · {sessions.length} abgeschlossene {sessions.length === 1 ? 'Session' : 'Sessions'}</p>{exercise.machine_profiles.length > 0 && <select value={machineProfileId ?? ''} onChange={(event) => setMachineProfileId(event.target.value || null)} className="mt-2 bg-transparent text-[11px] outline-none cursor-pointer" style={{ color: SAND }}><option value="">Alle Maschinenprofile</option>{exercise.machine_profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.model ? ` · ${profile.model}` : ''}</option>)}</select>}</div>
+      <button type="button" onClick={() => navigate('/forge/exercises')} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }} aria-label="Zurück zur Übungsbibliothek"><ArrowLeft size={19} /></button>
+      <div className="min-w-0 flex-1">
+        <h1 className="text-[23px] font-semibold leading-tight tracking-tight" style={{ color: TEXT }}>{exercise.name}</h1>
+        <p className="mt-1 text-[12px]" style={{ color: DIM }}>{muscleLabel(exercise.primary_muscle_group)}{exercise.secondary_muscle_groups.length ? ` + ${exercise.secondary_muscle_groups.map(muscleLabel).join(', ')}` : ''} · {equipmentLabel(exercise.equipment)}</p>
+        <p className="mt-0.5 text-[12px]" style={{ color: DIM }}>{sessions.length} abgeschlossene {sessions.length === 1 ? 'Session' : 'Sessions'}</p>
+      </div>
+      <button type="button" onClick={openEditor} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }} aria-label="Übung bearbeiten"><Pencil size={17} /></button>
+      <button type="button" onClick={() => setConfirmDelete(true)} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }} aria-label="Übung löschen"><Trash2 size={17} /></button>
     </header>
+    {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
+    {exercise.machine_profiles.length > 0 && <div className="forge-chip-row -mx-4 flex gap-1.5 overflow-x-auto px-4">{chip(!machineProfileId, 'Alle Geräte', () => setMachineProfileId(null))}{exercise.machine_profiles.map((profile) => chip(machineProfileId === profile.id, profile.name, () => setMachineProfileId(profile.id)))}</div>}
+    {editing && library && <ExerciseFormSheet exercise={exercise} library={library} onClose={() => setEditing(false)} onSaved={(saved) => { setEditing(false); setHistory({ ...history, exercise: saved }); }} />}
+    <ConfirmDialog open={confirmDelete} busy={deleting} destructive title="Übung löschen?" description={`„${exercise.name}“ wird aus der Bibliothek entfernt. Übungen, die in Plänen oder Sessions stecken, können nicht gelöscht werden.`} confirmLabel="Löschen" onCancel={() => setConfirmDelete(false)} onConfirm={() => void remove()} />
 
     <section className="card-forge p-4" style={{ borderColor: `${SAND}24` }}>
       <div className="flex items-start justify-between gap-3 mb-4"><div><p className="text-[10px] uppercase tracking-widest" style={{ color: SAND }}>Leistungsentwicklung</p><p className="text-[12px] mt-1" style={{ color: DIM }}>Schwerster geloggter Satz und beste geschätzte 1RM je Session.</p></div><TrendingUp size={18} style={{ color: SAND }} /></div>
@@ -69,7 +101,7 @@ export default function ForgeExerciseHistoryPage() {
     </section>
 
     <section className="space-y-2"><div className="flex items-center justify-between px-1"><h2 className="text-[14px] font-semibold" style={{ color: TEXT }}>Geloggte Sätze</h2><span className="text-[11px]" style={{ color: DIM }}>{sessions.length} Einträge</span></div>
-      {sessions.length ? sessions.map((session) => <article key={`${session.id}-${session.machine_profile_id ?? 'unprofiled'}`} className="card-forge overflow-hidden"><div className="p-4 flex items-start justify-between gap-3"><div><p className="text-[13px] font-medium" style={{ color: TEXT }}>{session.name}</p><p className="text-[11px] mt-1" style={{ color: DIM }}>{fullDate(session.completed_at || session.started_at)}{session.machine_profile_name ? ` · ${session.machine_profile_name}` : ''}</p></div><span className="text-[10px] uppercase tracking-wider" style={{ color: SAND }}>{session.sets.filter((set) => set.actual_weight_kg != null && set.actual_reps != null).length} Sätze</span></div><div className="border-t" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '52px 1fr 1fr', color: DIM }}><span>Satz</span><span className="text-center">Geloggte Leistung</span><span className="text-right">e1RM</span></div>{session.sets.map((set, index) => { const e1rm = estimatedOneRepMax(set); return <div key={set.position} className="grid px-4 py-2.5 text-[12px] tabular-nums" style={{ gridTemplateColumns: '52px 1fr 1fr', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}><span style={{ color: DIM }}>{set.set_type === 'warmup' ? 'Warm-up' : `Satz ${set.position + 1}`}</span><span className="text-center font-medium" style={{ color: set.actual_weight_kg != null && set.actual_reps != null ? TEXT : DIM }}>{formatLoad(set.actual_weight_kg, set.actual_reps)}</span><span className="text-right" style={{ color: e1rm != null ? MINT : DIM }}>{e1rm != null ? `${e1rm.toFixed(1)} kg` : '—'}</span>{set.note && <p className="col-span-3 pt-1 text-[10px]" style={{ color: DIM }}>{set.note}</p>}</div>; })}</div></article>) : <div className="card-forge p-6 text-center text-[12px]" style={{ color: DIM }}>Schließe eine Forge-Session mit dieser Übung ab, dann erscheint sie hier.</div>}
+      {sessions.length ? sessions.map((session) => <article key={`${session.id}-${session.machine_profile_id ?? 'unprofiled'}`} className="card-forge overflow-hidden"><div className="p-4 flex items-start justify-between gap-3"><div><p className="text-[13px] font-medium" style={{ color: TEXT }}>{session.name}</p><p className="text-[11px] mt-1" style={{ color: DIM }}>{fullDate(session.completed_at || session.started_at)}{session.machine_profile_name ? ` · ${session.machine_profile_name}` : ''}</p>{session.session_note && <p className="mt-1.5 text-[12px] leading-snug" style={{ color: 'rgba(242,236,226,0.75)' }}>Notiz: {session.session_note}</p>}</div><span className="text-[10px] uppercase tracking-wider" style={{ color: SAND }}>{session.sets.filter((set) => set.actual_weight_kg != null && set.actual_reps != null).length} Sätze</span></div><div className="border-t" style={{ borderColor: 'rgba(255,247,235,0.06)' }}><div className="grid px-4 py-2 text-[9px] uppercase tracking-wider" style={{ gridTemplateColumns: '52px 1fr 1fr', color: DIM }}><span>Satz</span><span className="text-center">Geloggte Leistung</span><span className="text-right">e1RM</span></div>{session.sets.map((set, index) => { const e1rm = estimatedOneRepMax(set); return <div key={set.position} className="grid px-4 py-2.5 text-[12px] tabular-nums" style={{ gridTemplateColumns: '52px 1fr 1fr', background: index % 2 ? 'transparent' : 'rgba(255,247,235,0.025)' }}><span style={{ color: DIM }}>{set.set_type === 'warmup' ? 'Warm-up' : `Satz ${set.position + 1}`}</span><span className="text-center font-medium" style={{ color: set.actual_weight_kg != null && set.actual_reps != null ? TEXT : DIM }}>{formatLoad(set.actual_weight_kg, set.actual_reps)}</span><span className="text-right" style={{ color: e1rm != null ? MINT : DIM }}>{e1rm != null ? `${e1rm.toFixed(1)} kg` : '—'}</span>{set.note && <p className="col-span-3 pt-1 text-[10px]" style={{ color: DIM }}>{set.note}</p>}</div>; })}</div></article>) : <div className="card-forge p-6 text-center text-[12px]" style={{ color: DIM }}>Schließe eine Forge-Session mit dieser Übung ab, dann erscheint sie hier.</div>}
     </section>
   </div>;
 }

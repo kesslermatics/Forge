@@ -1,45 +1,80 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, Pencil, Plus, Save, Trash2, Wrench, X } from 'lucide-react';
-import { createForgeMachineProfile, deleteForgeMachineProfile, getForgeMachineProfiles, updateForgeMachineProfile } from '../api/api';
-import type { ForgeLoadBasis, ForgeLoadingSystem, ForgeMachineProfile, ForgeMachineProfileInput } from '../api/api';
-import ConfirmDialog from './ConfirmDialog';
+import { ArrowLeft, ChevronRight, Loader2, Plus, Settings2 } from 'lucide-react';
+import { getForgeExercises, getForgeMachineProfiles } from '../api/api';
+import type { ForgeExercise, ForgeMachineProfile } from '../api/api';
+import MachineProfileFormSheet from './forge/MachineProfileFormSheet';
+import { formatKg, loadBasisLabel, loadingLabel } from './forge/labels';
 
-const SAND = '#e8c58a'; const TEXT = '#f2ece0'; const DIM = 'rgba(242,236,226,0.48)'; const BORDER = 'rgba(232,197,138,0.11)';
-type Draft = ForgeMachineProfileInput & { weightsText: string };
-const blank = (): Draft => ({ name: '', model: '', notes: '', loading_system: 'unknown', load_basis: 'unknown', available_weights_kg: [], weightsText: '' });
-const loadingLabels: Record<ForgeLoadingSystem, string> = { selectorized: 'Steckgewicht / Wählstapel', plate_loaded: 'Scheibenbeladen', fixed: 'Feste Last', other: 'Sonstiges', unknown: 'Unbekannt' };
-const basisLabels: Record<ForgeLoadBasis, string> = { displayed_total: 'Angezeigtes Gesamtgewicht', per_side: 'Gewicht je Seite', unknown: 'Unbekannt' };
-const formatWeight = (value: number) => new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(value);
-function parseWeights(text: string): number[] {
-  if (!text.trim()) return [];
-  const tokens = text.trim().split(/,\s+|;\s*|\n+/).map((token) => token.trim().replace(/\s*kg$/i, '').replace(',', '.'));
-  if (tokens.some((token) => !token || !/^\d+(?:\.\d+)?$/.test(token))) throw new Error('Trenne Stufen mit Komma und Leerzeichen, z. B. 5, 12,5, 20.');
-  const values = tokens.map(Number);
-  if (values.length > 100) throw new Error('Es sind höchstens 100 Gewichtsstufen erlaubt.');
-  if (values.some((value) => !Number.isFinite(value) || value <= 0 || value > 1000)) throw new Error('Gewichtsstufen müssen größer als 0 und höchstens 1000 kg sein.');
-  return [...new Set(values.map((value) => Math.round(value * 1000) / 1000))].sort((a, b) => a - b);
-}
+const SAND = '#e8c58a'; const TEXT = '#f2ece0'; const DIM = 'rgba(242,236,226,0.5)'; const BORDER = 'rgba(232,197,138,0.12)';
+
+const weightSummary = (weights: number[]) => {
+  if (!weights.length) return 'Keine Gewichtsstufen';
+  const sorted = [...weights].sort((a, b) => a - b);
+  return `${sorted.length} Stufen · ${formatKg(sorted[0])}–${formatKg(sorted.at(-1)!)} kg`;
+};
 
 export default function ForgeMachineProfilesPage() {
-  const navigate = useNavigate(); const [params] = useSearchParams(); const returnTo = params.get('returnTo') || '/forge/exercises';
-  const [profiles, setProfiles] = useState<ForgeMachineProfile[]>([]); const [editingId, setEditingId] = useState<string | null>(null); const [draft, setDraft] = useState<Draft | null>(null);
-  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState<string | null>(null); const [pendingDelete, setPendingDelete] = useState<ForgeMachineProfile | null>(null);
-  useEffect(() => { getForgeMachineProfiles().then(setProfiles).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Geräteprofile konnten nicht geladen werden.')).finally(() => setLoading(false)); }, []);
-  const edit = (profile?: ForgeMachineProfile) => { setEditingId(profile?.id ?? null); setDraft(profile ? { name: profile.name, model: profile.model, notes: profile.notes, loading_system: profile.loading_system, load_basis: profile.load_basis, available_weights_kg: profile.available_weights_kg, weightsText: profile.available_weights_kg.map(formatWeight).join(', ') } : blank()); setError(null); };
-  const save = async () => { if (!draft?.name.trim()) { setError('Gib dem Profil einen Namen.'); return; } setSaving(true); setError(null); try { const payload: ForgeMachineProfileInput = { name: draft.name, model: draft.model, notes: draft.notes, loading_system: draft.loading_system, load_basis: draft.load_basis, available_weights_kg: parseWeights(draft.weightsText) }; const saved = editingId ? await updateForgeMachineProfile(editingId, payload) : await createForgeMachineProfile(payload); setProfiles((current) => [...current.filter((item) => item.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name))); setDraft(null); setEditingId(null); } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Profil konnte nicht gespeichert werden.'); } finally { setSaving(false); } };
-  const remove = async () => { if (!pendingDelete) return; setSaving(true); setError(null); try { await deleteForgeMachineProfile(pendingDelete.id); setProfiles((current) => current.filter((item) => item.id !== pendingDelete.id)); setPendingDelete(null); } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Profil wird noch verwendet und kann nicht gelöscht werden.'); setPendingDelete(null); } finally { setSaving(false); } };
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const returnTo = params.get('returnTo') || '/forge/exercises';
+  const [profiles, setProfiles] = useState<ForgeMachineProfile[]>([]);
+  const [exercises, setExercises] = useState<ForgeExercise[]>([]);
+  const [editing, setEditing] = useState<ForgeMachineProfile | 'new' | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([getForgeMachineProfiles(), getForgeExercises()])
+      .then(([loadedProfiles, loadedExercises]) => { setProfiles(loadedProfiles); setExercises(loadedExercises); })
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Geräteprofile konnten nicht geladen werden.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const names = useMemo(() => new Map(exercises.map((exercise) => [exercise.id, exercise.name])), [exercises]);
+
+  const saved = (profile: ForgeMachineProfile) => {
+    setProfiles((current) => [...current.filter((item) => item.id !== profile.id), profile].sort((a, b) => a.name.localeCompare(b.name)));
+    setEditing(null);
+    // Linked exercises may have changed; refresh their profile lists.
+    getForgeExercises().then(setExercises).catch(() => undefined);
+  };
+
   if (loading) return <div className="flex justify-center py-24"><Loader2 className="animate-spin" style={{ color: SAND }} /></div>;
-  return <div className="space-y-4 forge-anim"><header className="flex items-start gap-3"><button onClick={() => navigate(returnTo)} className="tap mt-1 flex h-9 w-9 items-center justify-center rounded-full" aria-label="Zurück zur Übungsbibliothek" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={18} /></button><div className="min-w-0 flex-1"><p className="text-[10px] uppercase tracking-[0.18em]" style={{ color: SAND }}>Zentrale Verwaltung</p><h1 className="mt-1 text-[25px] font-semibold" style={{ color: TEXT }}>Geräteprofile</h1><p className="mt-1 text-[11px]" style={{ color: DIM }}>Einmal anlegen, mehreren Übungen zuweisen.</p></div><button onClick={() => edit()} className="tap flex h-9 w-9 items-center justify-center rounded-full" style={{ color: SAND, border: `1px solid ${BORDER}` }} aria-label="Maschinenprofil anlegen"><Plus size={17} /></button></header>
+
+  return <div className="space-y-4 forge-anim">
+    <header className="flex items-center gap-3">
+      <button type="button" onClick={() => navigate(returnTo)} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" aria-label="Zurück" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
+      <div className="min-w-0 flex-1"><h1 className="text-[24px] font-semibold tracking-tight" style={{ color: TEXT }}>Geräteprofile</h1><p className="text-[12px]" style={{ color: DIM }}>Damit der Coach die echten Stufen deiner Geräte kennt</p></div>
+      <button type="button" onClick={() => setEditing('new')} className="tap flex h-11 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold" style={{ color: '#16130f', background: SAND }}><Plus size={16} />Neu</button>
+    </header>
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
-    {draft && <section className="card-forge space-y-3 p-4" style={{ borderColor: `${SAND}44` }}><div className="flex items-center justify-between"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{editingId ? 'Profil bearbeiten' : 'Neues Profil'}</p><h2 className="mt-1 text-[15px] font-semibold" style={{ color: TEXT }}>Maschine beschreiben</h2></div><button onClick={() => setDraft(null)} className="tap p-1" style={{ color: DIM }}><X size={16} /></button></div>
-      <label className="block text-[10px]" style={{ color: DIM }}>Profilname<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} className="input-forge mt-1 w-full" placeholder="z. B. Studio Leg Press" /></label>
-      <label className="block text-[10px]" style={{ color: DIM }}>Hersteller / Modell<input value={draft.model ?? ''} onChange={(event) => setDraft({ ...draft, model: event.target.value })} className="input-forge mt-1 w-full" placeholder="Optional" /></label>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="block text-[10px]" style={{ color: DIM }}>Ladeprinzip<select value={draft.loading_system} onChange={(event) => setDraft({ ...draft, loading_system: event.target.value as ForgeLoadingSystem })} className="input-forge mt-1 w-full">{Object.entries(loadingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="block text-[10px]" style={{ color: DIM }}>Lastbasis<select value={draft.load_basis} onChange={(event) => setDraft({ ...draft, load_basis: event.target.value as ForgeLoadBasis })} className="input-forge mt-1 w-full">{Object.entries(basisLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
-      <label className="block text-[10px]" style={{ color: DIM }}>Verfügbare Gewichtsstufen (kg)<input value={draft.weightsText} onChange={(event) => setDraft({ ...draft, weightsText: event.target.value })} className="input-forge mt-1 w-full" inputMode="decimal" placeholder="5, 12,5, 20, 27,5" /><span className="mt-1 block leading-relaxed">Mit Komma und Leerzeichen trennen; Dezimalkomma ist erlaubt. Duplikate werden entfernt und Stufen sortiert.</span></label>
-      <label className="block text-[10px]" style={{ color: DIM }}>Notizen<textarea value={draft.notes ?? ''} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} className="input-forge mt-1 w-full resize-none text-[12px]" rows={3} placeholder="Technik, Sitzposition oder Besonderheiten" /></label>
-      <button onClick={() => void save()} disabled={saving} className="btn-forge flex w-full items-center justify-center gap-2">{saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Profil speichern</button></section>}
-    <section className="space-y-2">{profiles.map((profile) => <article key={profile.id} className="card-forge flex items-start gap-3 p-4"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}><Wrench size={18} /></div><div className="min-w-0 flex-1"><h2 className="text-[14px] font-medium" style={{ color: TEXT }}>{profile.name}</h2><p className="mt-0.5 text-[10px]" style={{ color: DIM }}>{profile.model || 'Kein Modell hinterlegt'} · {loadingLabels[profile.loading_system]} · {basisLabels[profile.load_basis]}</p>{profile.available_weights_kg.length > 0 && <p className="mt-2 text-[11px]" style={{ color: SAND }}>Stufen: {profile.available_weights_kg.map(formatWeight).join(' · ')} kg</p>}{profile.notes && <p className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed" style={{ color: DIM }}>{profile.notes}</p>}</div><button onClick={() => edit(profile)} className="tap p-1" style={{ color: SAND }} aria-label={`${profile.name} bearbeiten`}><Pencil size={15} /></button><button onClick={() => setPendingDelete(profile)} className="tap p-1" style={{ color: DIM }} aria-label={`${profile.name} entfernen`}><Trash2 size={15} /></button></article>)}{!profiles.length && !draft && <button onClick={() => edit()} className="w-full rounded-2xl border border-dashed p-7 text-center" style={{ borderColor: `${SAND}44`, color: SAND }}><Plus size={20} className="mx-auto" /><span className="mt-2 block text-[12px]">Erstes Maschinenprofil anlegen</span></button>}</section>
-    <ConfirmDialog open={Boolean(pendingDelete)} busy={saving} destructive title="Maschinenprofil entfernen?" description={pendingDelete ? `„${pendingDelete.name}“ wird aus Übungen und Trainingstagen entfernt. Falls es in einer vergangenen oder laufenden Session vorkommt, archiviert Forge es, damit dein Verlauf unverändert bleibt.` : ''} confirmLabel="Profil entfernen" onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} />
+
+    <section className="space-y-2">{profiles.map((profile) => {
+      const linked = profile.exercise_ids.map((id) => names.get(id)).filter(Boolean);
+      const incomplete = !profile.available_weights_kg.length || profile.loading_system === 'unknown' || profile.load_basis === 'unknown';
+      return <button key={profile.id} type="button" onClick={() => setEditing(profile)} className="card-forge tap flex w-full items-start gap-3 p-4 text-left">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}><Settings2 size={18} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[15px] font-medium" style={{ color: TEXT }}>{profile.name}</span>
+          <span className="mt-0.5 block truncate text-[12px]" style={{ color: DIM }}>{[profile.model, loadingLabel(profile.loading_system), loadBasisLabel(profile.load_basis)].filter(Boolean).join(' · ')}</span>
+          <span className="mt-1 block text-[12px] tabular-nums" style={{ color: SAND }}>{weightSummary(profile.available_weights_kg)}</span>
+          <span className="mt-1 block truncate text-[11.5px]" style={{ color: DIM }}>{linked.length ? `Für ${linked.join(', ')}` : 'Noch keiner Übung zugeordnet'}</span>
+          {incomplete && <span className="mt-2 inline-block rounded-full px-2.5 py-1 text-[10.5px]" style={{ color: '#f4c48a', background: 'rgba(244,180,106,0.1)' }}>Unvollständig – Stufen oder Ladeart ergänzen</span>}
+        </span>
+        <ChevronRight size={17} className="mt-3 shrink-0" style={{ color: 'rgba(242,236,226,0.3)' }} />
+      </button>;
+    })}</section>
+
+    {!profiles.length && <button type="button" onClick={() => setEditing('new')} className="w-full rounded-2xl border border-dashed p-7 text-center" style={{ borderColor: `${SAND}55`, color: SAND }}><Plus size={20} className="mx-auto" /><span className="mt-2 block text-[13px]">Erstes Geräteprofil anlegen</span><span className="mt-1 block text-[11.5px]" style={{ color: DIM }}>z. B. deinen Latzug mit allen Gewichtsstufen</span></button>}
+    <p className="px-1 text-[11.5px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.38)' }}>Ein Profil kann mehreren Übungen gehören, z. B. ein Kabelturm für Rudern, Latzug und Trizepsdrücken. <span style={{ color: BORDER }}>·</span></p>
+
+    {editing && <MachineProfileFormSheet
+      profile={editing === 'new' ? null : editing}
+      exercises={exercises}
+      onClose={() => setEditing(null)}
+      onSaved={saved}
+      onDeleted={(id) => { setProfiles((current) => current.filter((item) => item.id !== id)); setEditing(null); }}
+    />}
   </div>;
 }

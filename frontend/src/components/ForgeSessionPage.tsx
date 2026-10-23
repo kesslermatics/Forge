@@ -15,7 +15,8 @@ import { applyCoachingEvent, initialCoachingProgress } from './forgeSession/coac
 import type { CoachingProgress } from './forgeSession/coachingProgress';
 import type { ForgeExercise, ForgeMachineProfile, ForgePlanChanges, ForgeSession, ForgeSessionExercise, ForgeSessionSet, ForgeSessionSetInput } from '../api/api';
 import ForgeSessionLoader from './ForgeSessionLoader';
-import ForgeExercisePicker from './ForgeExercisePicker';
+import ExercisePickerSheet from './forge/ExercisePickerSheet';
+import { muscleLabel } from './forge/labels';
 import ForgeSheet from './ForgeSheet';
 import ConfirmDialog from './ConfirmDialog';
 import SetRow from './forgeSession/SetRow';
@@ -644,9 +645,6 @@ export default function ForgeSessionPage() {
   const canPickProfile = Boolean(activeExercise?.source_exercise_id && (activeExercise.equipment === 'machine' || activeExercise.equipment === 'cable'));
   const nextExercise = session.exercises[activeIndex + 1];
   const replaceTarget = session.exercises.find((exercise) => exercise.id === replaceForId) ?? null;
-  const replaceOptions = replaceTarget
-    ? [...library].filter((item) => item.id !== replaceTarget.source_exercise_id).sort((a, b) => Number(b.primary_muscle_group === replaceTarget.primary_muscle_group) - Number(a.primary_muscle_group === replaceTarget.primary_muscle_group))
-    : [];
   const setLabels = activeExercise
     ? activeExercise.sets.map((_set, index) => String(activeExercise.sets.slice(0, index + 1).filter((item) => item.set_type === 'working').length || ''))
     : [];
@@ -699,7 +697,7 @@ export default function ForgeSessionPage() {
             <h2 className="text-[21px] font-semibold leading-tight" style={{ color: TEXT }}>{activeExercise.name}</h2>
             {canPickProfile ? <button type="button" disabled={!active || exerciseBusy} onClick={() => setProfileSheetOpen(true)} className="tap mt-1.5 flex min-h-9 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium disabled:opacity-60" style={{ color: SAND, background: 'rgba(232,197,138,0.08)', border: `1px solid ${SAND}33` }}>
               {exerciseBusy && <Loader2 size={12} className="animate-spin" />}{activeExercise.machine_profile_name ?? (profileOptions.length ? 'Gerät wählen' : 'Kein Geräteprofil')}<ChevronDown size={13} />
-            </button> : <p className="mt-1 text-[12px]" style={{ color: DIM }}>{activeExercise.primary_muscle_group}</p>}
+            </button> : <p className="mt-1 text-[12px]" style={{ color: DIM }}>{muscleLabel(activeExercise.primary_muscle_group)}</p>}
           </div>
           {active && <button type="button" onClick={() => setMenuOpen(true)} aria-label="Übungsoptionen" className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><MoreHorizontal size={20} /></button>}
         </div>
@@ -830,15 +828,26 @@ export default function ForgeSessionPage() {
       </div>
     </ForgeSheet>}
 
-    {addOpen && <ForgeSheet label="Übung zur Session hinzufügen" onClose={() => setAddOpen(false)}>
-      <div className="mb-2 flex justify-end"><button type="button" onClick={() => setAddOpen(false)} aria-label="Auswahl schließen" className="tap flex h-10 w-10 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><X size={17} /></button></div>
-      <ForgeExercisePicker exercises={library} onToggle={addExercise} onCreate={() => navigate(`/forge/exercises/new?returnTo=${encodeURIComponent(`/forge/session/${session.id}`)}`)} title="Zur Session hinzufügen" />
-    </ForgeSheet>}
+    {addOpen && <ExercisePickerSheet
+      title="Übung hinzufügen"
+      exercises={library}
+      disabledIds={session.exercises.map((exercise) => exercise.source_exercise_id).filter((id): id is string => Boolean(id))}
+      disabledLabel="In Session"
+      onExerciseCreated={(exercise) => setLibrary((current) => [...current, exercise])}
+      onPick={addExercise}
+      onClose={() => setAddOpen(false)}
+    />}
 
-    {replaceTarget && <ForgeSheet label="Übung ersetzen" onClose={() => setReplaceForId(null)}>
-      <div className="mb-2 flex items-center justify-between gap-3"><p className="text-[12px]" style={{ color: DIM }}>Ersetzt <span style={{ color: TEXT }}>{replaceTarget.name}</span> · gleiche Muskelgruppe zuerst</p><button type="button" onClick={() => setReplaceForId(null)} aria-label="Ersetzen abbrechen" className="tap flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><X size={17} /></button></div>
-      <ForgeExercisePicker exercises={replaceOptions} onToggle={(exercise) => replaceExercise(replaceTarget.id, exercise)} onCreate={() => navigate(`/forge/exercises/new?returnTo=${encodeURIComponent(`/forge/session/${session.id}`)}`)} title="Ersetzen durch" />
-    </ForgeSheet>}
+    {replaceTarget && <ExercisePickerSheet
+      title={`${replaceTarget.name} ersetzen`}
+      exercises={library}
+      disabledIds={replaceTarget.source_exercise_id ? [replaceTarget.source_exercise_id] : []}
+      disabledLabel="Aktuell"
+      preferMuscle={replaceTarget.primary_muscle_group}
+      onExerciseCreated={(exercise) => setLibrary((current) => [...current, exercise])}
+      onPick={(exercise) => replaceExercise(replaceTarget.id, exercise)}
+      onClose={() => setReplaceForId(null)}
+    />}
 
     {overviewOpen && <ExerciseOverviewSheet exercises={session.exercises} activeIndex={activeIndex} readOnly={!active} onJump={(index) => { setOverviewOpen(false); goTo(index); }} onMove={moveExercise} onClose={() => setOverviewOpen(false)} />}
 

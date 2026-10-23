@@ -357,7 +357,7 @@ export default function Dashboard() {
                     </div>
                 </section>
             )}
-            {alternativePickerOpen && <ForgeAlternativeStartSheet plans={availableTrainingPlans} suggestedPlanId={homeRoutine?.id ?? null} startingPlan={startingSession} onStartPlan={(plan) => void handleStartRoutine(plan)} onSessionCreated={(session) => { setActiveForgeSession(session); setAlternativePickerOpen(false); navigate(`/forge/session/${session.id}?prepare=1`); }} onCreateExercise={() => navigate(`/forge/exercises/new?returnTo=${encodeURIComponent('/dashboard')}`)} onClose={() => setAlternativePickerOpen(false)} />}
+            {alternativePickerOpen && <ForgeAlternativeStartSheet plans={availableTrainingPlans} suggestedPlanId={homeRoutine?.id ?? null} startingPlan={startingSession} onStartPlan={(plan) => void handleStartRoutine(plan)} onSessionCreated={(session) => { setActiveForgeSession(session); setAlternativePickerOpen(false); navigate(`/forge/session/${session.id}?prepare=1`); }} onClose={() => setAlternativePickerOpen(false)} />}
             {forgeError && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{forgeError}</div>}
             <ConfirmDialog open={discardDialogOpen} busy={startingSession} destructive title="Aktive Session verwerfen?" description="Bereits eingetragene Sätze gehen verloren und können nicht wiederhergestellt werden." confirmLabel="Session verwerfen" onCancel={() => setDiscardDialogOpen(false)} onConfirm={() => { setDiscardDialogOpen(false); void handleDiscardForgeSession(); }} />
 

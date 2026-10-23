@@ -6,6 +6,7 @@ import { Loader2, Home, UtensilsCrossed, Camera, Dumbbell, MessageSquare, UserRo
 import { LanguageContext } from '../i18n';
 import type { Lang } from '../i18n';
 import ForgeIcon from './ForgeIcon';
+import { hasLeaveGuard, requestLeave } from './forge/leaveGuard';
 
 const SAND = '#e8c58a';
 
@@ -46,7 +47,7 @@ export default function AppLayout() {
         <ScrollToTop />
         <div className="min-h-dvh flex flex-col" style={{ background: '#16130f' }}>
             <header className="sticky top-0 z-40 border-b" style={{ background: 'rgba(22,19,15,0.85)', backdropFilter: 'blur(20px)', borderColor: 'rgba(232,197,138,0.1)' }}>
-                <div className="max-w-2xl mx-auto flex items-center justify-between px-5 h-14"><div className="flex items-center gap-2.5"><ForgeIcon size="sm" /><span className="text-[17px] font-bold tracking-tight" style={{ color: SAND }}>Forge</span></div><button onClick={() => navigate('/settings')} className="tap w-9 h-9 rounded-full flex items-center justify-center cursor-pointer" style={{ color: SAND, background: 'rgba(232,197,138,0.10)', border: '1px solid rgba(232,197,138,0.18)' }} aria-label="Profil und Einstellungen öffnen"><UserRound size={18} /></button></div>
+                <div className="max-w-2xl mx-auto flex items-center justify-between px-5 h-14"><div className="flex items-center gap-2.5"><ForgeIcon size="sm" /><span className="text-[17px] font-bold tracking-tight" style={{ color: SAND }}>Forge</span></div><button onClick={() => requestLeave(() => navigate('/settings'))} className="tap w-9 h-9 rounded-full flex items-center justify-center cursor-pointer" style={{ color: SAND, background: 'rgba(232,197,138,0.10)', border: '1px solid rgba(232,197,138,0.18)' }} aria-label="Profil und Einstellungen öffnen"><UserRound size={18} /></button></div>
             </header>
             <main className="flex-1 w-full max-w-2xl mx-auto px-4 pt-6 pb-28"><Outlet context={{ user, refreshUser }} /></main>
             <nav className="fixed bottom-0 left-0 right-0 z-40" style={{ background: 'rgba(22,19,15,0.92)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(232,197,138,0.1)' }}>
@@ -57,5 +58,6 @@ export default function AppLayout() {
 }
 
 function Tab({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
-    return <NavLink to={to} className="relative flex flex-col items-center justify-center gap-1 tap">{({ isActive }) => <><span style={{ color: isActive ? SAND : 'rgba(255,247,235,0.35)', transition: 'color 0.2s' }}>{icon}</span><span className="text-[10px] font-medium tracking-wide" style={{ color: isActive ? SAND : 'rgba(255,247,235,0.3)', transition: 'color 0.2s' }}>{label}</span>{isActive && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full" style={{ background: SAND }} />}</>}</NavLink>;
+    const navigate = useNavigate();
+    return <NavLink to={to} onClick={(event) => { if (hasLeaveGuard()) { event.preventDefault(); requestLeave(() => navigate(to)); } }} className="relative flex flex-col items-center justify-center gap-1 tap">{({ isActive }) => <><span style={{ color: isActive ? SAND : 'rgba(255,247,235,0.35)', transition: 'color 0.2s' }}>{icon}</span><span className="text-[10px] font-medium tracking-wide" style={{ color: isActive ? SAND : 'rgba(255,247,235,0.3)', transition: 'color 0.2s' }}>{label}</span>{isActive && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full" style={{ background: SAND }} />}</>}</NavLink>;
 }

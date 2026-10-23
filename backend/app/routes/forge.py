@@ -39,6 +39,7 @@ from app.schemas import (
     ForgeExerciseInput,
     ForgeExerciseResponse,
     ForgePlanDraftRequest,
+    ForgePlanEditDraftRequest,
     ForgePlanInput,
     ForgePlanResponse,
     ForgePlanChangesResponse,
@@ -81,6 +82,7 @@ from app.services.ai_service import (
     _compute_exercise_progression,
     generate_forge_exercise_draft,
     generate_forge_plan_draft,
+    generate_forge_plan_edit,
     generate_forge_session_composition,
     generate_forge_session_review,
     generate_forge_session_start_coaching,
@@ -1029,12 +1031,76 @@ async def delete_plan_image(
 async def create_exercise_draft(
     data: ForgeExerciseDraftRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    library = db.query(ForgeExercise).filter(ForgeExercise.user_id == current_user.id).all()
     draft = await generate_forge_exercise_draft(
         data.instructions,
         current_user.language or "de",
         data.allowed_icons,
+        [
+            {"id": exercise.id, "name": exercise.name, "equipment": exercise.equipment, "primary_muscle_group": exercise.primary_muscle_group}
+            for exercise in library
+        ],
     )
+    return {"draft": draft}
+
+
+@router.post("/drafts/plan-edit", response_model=ForgeDraftResponse)
+async def create_plan_edit_draft(
+    data: ForgePlanEditDraftRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Let the model rework an unsaved plan structure. Nothing is persisted; the editor shows the result."""
+    library = db.query(ForgeExercise).filter(ForgeExercise.user_id == current_user.id).order_by(ForgeExercise.name).all()
+    by_id = {exercise.id: exercise for exercise in library}
+    for entry in data.exercises:
+        if entry.exercise_id not in by_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="One or more exercises do not belong to you.")
+    profiles = db.query(ForgeMachineProfile).filter(
+        ForgeMachineProfile.user_id == current_user.id,
+        ForgeMachineProfile.is_archived.is_(False),
+    ).all()
+    catalog = [
+        {
+            "exercise_id": str(exercise.id),
+            "name": exercise.name,
+            "equipment": exercise.equipment,
+            "primary_muscle_group": exercise.primary_muscle_group,
+            "secondary_muscle_groups": exercise.secondary_muscle_groups or [],
+        }
+        for exercise in library
+    ]
+    current = {
+        "name": data.name,
+        "description": data.description,
+        "exercises": [
+            {
+                "exercise_id": str(entry.exercise_id),
+                "name": by_id[entry.exercise_id].name,
+                "machine_profile_id": str(entry.machine_profile_id) if entry.machine_profile_id else None,
+                "warmup_sets": entry.warmup_sets,
+                "working_sets": entry.working_sets,
+                "notes": entry.notes,
+            }
+            for entry in data.exercises
+        ],
+    }
+    machine_profiles = [
+        {"machine_profile_id": str(profile.id), "name": profile.name, "exercise_ids": [str(item.id) for item in profile.exercises]}
+        for profile in profiles
+    ]
+    try:
+        draft = await generate_forge_plan_edit(data.instructions.strip(), current, catalog, machine_profiles, current_user.language or "de")
+    except ForgeCoachingGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    # Profiles are only kept where they are valid for that exercise's equipment.
+    valid_profile_ids = {str(profile.id) for profile in profiles}
+    for entry in draft["exercises"]:
+        exercise = by_id.get(UUID(entry["exercise_id"]))
+        if entry.get("machine_profile_id") not in valid_profile_ids or exercise is None or exercise.equipment not in {"machine", "cable"}:
+            entry["machine_profile_id"] = None
     return {"draft": draft}
 
 
@@ -1703,7 +1769,8 @@ def _sync_plan_set_structure(db: Session, plan_exercise: ForgePlanExercise, sess
         else:
             ordered.append(ForgePlanSet(
                 set_type=session_set.set_type,
-                current_reps=session_set.target_reps,
+                # Plans store structure only; weights and reps come from history and the coach.
+                current_reps=None,
                 note=session_set.note,
             ))
 
@@ -3363,11 +3430,13 @@ def _native_plan_template(
                         if plan_set.set_type == "warmup"
                         else None
                     ),
+                    # Plans only define structure. Without stored reps a neutral reference
+                    # (8 warm-up / 10 working) stands in until history or the coach decides.
                     "reps": (
                         plan_set.coach_suggested_reps
                         if plan_set.set_type == "warmup" and plan_set.coach_suggested_reps is not None
                         else plan_set.current_reps
-                    ),
+                    ) or (8 if plan_set.set_type == "warmup" else 10),
                 }
                 for plan_set in plan_exercise.sets
             ],

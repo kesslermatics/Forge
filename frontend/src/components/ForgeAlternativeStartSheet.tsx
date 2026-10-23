@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronRight, Clock3, Dumbbell, ListPlus, Loader2, Sparkles,
 import { getForgeExercises, startForgeAiSession, startForgeCustomSession } from '../api/api';
 import type { ForgeExercise, ForgePlan, ForgeSession } from '../api/api';
 import ForgeSheet from './ForgeSheet';
-import ForgeExercisePicker from './ForgeExercisePicker';
+import ExercisePickerSheet from './forge/ExercisePickerSheet';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
@@ -16,15 +16,13 @@ interface Props {
   startingPlan: boolean;
   onStartPlan: (plan: ForgePlan) => void;
   onSessionCreated: (session: ForgeSession) => void;
-  onCreateExercise: () => void;
   onClose: () => void;
 }
 
 /** One-off start options: another routine, an empty session with picked exercises, or an AI-composed session. */
-export default function ForgeAlternativeStartSheet({ plans, suggestedPlanId, startingPlan, onStartPlan, onSessionCreated, onCreateExercise, onClose }: Props) {
+export default function ForgeAlternativeStartSheet({ plans, suggestedPlanId, startingPlan, onStartPlan, onSessionCreated, onClose }: Props) {
   const [mode, setMode] = useState<'menu' | 'pick'>('menu');
   const [library, setLibrary] = useState<ForgeExercise[] | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState<'custom' | 'ai' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,13 +33,14 @@ export default function ForgeAlternativeStartSheet({ plans, suggestedPlanId, sta
     if (!library) getForgeExercises().then(setLibrary).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Übungen konnten nicht geladen werden.'));
   };
 
-  const toggle = (exercise: ForgeExercise) => setSelectedIds((ids) => (ids.includes(exercise.id) ? ids.filter((id) => id !== exercise.id) : [...ids, exercise.id]));
-
-  const startCustom = async () => {
-    if (!selectedIds.length || locked) return;
+  const startCustom = async (exerciseIds: string[]) => {
+    if (!exerciseIds.length || locked) return;
     setBusy('custom'); setError(null);
-    try { onSessionCreated(await startForgeCustomSession(selectedIds)); }
-    catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Session konnte nicht gestartet werden.'); }
+    try { onSessionCreated(await startForgeCustomSession(exerciseIds)); }
+    catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : 'Session konnte nicht gestartet werden.');
+      setMode('menu');
+    }
     finally { setBusy(null); }
   };
 
@@ -57,21 +56,21 @@ export default function ForgeAlternativeStartSheet({ plans, suggestedPlanId, sta
   const closeButton = <button type="button" onClick={onClose} disabled={busy !== null} className="tap flex h-10 w-10 shrink-0 items-center justify-center rounded-full disabled:opacity-40" aria-label="Auswahl schließen" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><X size={17} /></button>;
 
   if (mode === 'pick') {
-    return <ForgeSheet label="Leere Session starten" onClose={onClose}>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <button type="button" onClick={() => setMode('menu')} disabled={busy !== null} className="tap flex h-10 items-center gap-1.5 rounded-full px-3 text-[12px]" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><ArrowLeft size={15} />Zurück</button>
-        {closeButton}
-      </div>
-      {library ? <ForgeExercisePicker exercises={library} multiple selectedIds={selectedIds} onToggle={toggle} onCreate={onCreateExercise} title="Übungen auswählen" />
-        : !error && <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin" style={{ color: SAND }} /></div>}
-      {error && <p className="mt-3 rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>}
-      <div className="sticky bottom-0 -mx-4 -mb-4 mt-4 p-4" style={{ background: 'linear-gradient(180deg, rgba(29,25,19,0) 0%, #1d1913 30%)' }}>
-        <button type="button" onClick={() => void startCustom()} disabled={!selectedIds.length || locked} className="btn-forge flex h-12 w-full items-center justify-center gap-2 text-[14px] disabled:opacity-40">
-          {busy === 'custom' ? <Loader2 size={16} className="animate-spin" /> : <Dumbbell size={16} />}
-          {selectedIds.length ? `Session mit ${selectedIds.length} ${selectedIds.length === 1 ? 'Übung' : 'Übungen'} starten` : 'Übungen auswählen'}
-        </button>
-      </div>
+    if (!library) return <ForgeSheet label="Übungen laden" onClose={onClose}>
+      <div className="flex justify-between"><button type="button" onClick={() => setMode('menu')} className="tap flex h-10 items-center gap-1.5 rounded-full px-3 text-[12px]" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><ArrowLeft size={15} />Zurück</button>{closeButton}</div>
+      {error ? <p className="mt-3 rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>
+        : <div className="flex justify-center py-10"><Loader2 size={20} className="animate-spin" style={{ color: SAND }} /></div>}
     </ForgeSheet>;
+    return <ExercisePickerSheet
+      title="Leere Session starten"
+      multiple
+      exercises={library}
+      busy={busy !== null}
+      confirmLabel={(count) => (busy === 'custom' ? 'Session wird gestartet…' : count ? `Session mit ${count} ${count === 1 ? 'Übung' : 'Übungen'} starten` : 'Übungen auswählen')}
+      onExerciseCreated={(exercise) => setLibrary((current) => [...(current ?? []), exercise])}
+      onConfirm={(picked) => void startCustom(picked.map((exercise) => exercise.id))}
+      onClose={() => { if (busy === null) setMode('menu'); }}
+    />;
   }
 
   return <ForgeSheet label="Anderes Training" onClose={() => { if (busy === null) onClose(); }}>
