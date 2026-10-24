@@ -85,15 +85,22 @@ export default function ForgeProgressPhotosPage() {
   useEffect(() => {
     let current = true;
     const urls: string[] = [];
+    // Load each image independently: one missing file must not block the others.
     void Promise.all(photos.map(async (photo) => {
-      const blob = await fetchForgeProgressPhotoImage(photo.id);
-      const url = URL.createObjectURL(blob);
-      urls.push(url);
-      return [photo.id, url] as const;
-    })).then((pairs) => {
-      if (current) setImageUrls(Object.fromEntries(pairs));
-    }).catch(() => {
-      if (current) setError('Ein privates Bild konnte nicht geladen werden.');
+      try {
+        const blob = await fetchForgeProgressPhotoImage(photo.id);
+        const url = URL.createObjectURL(blob);
+        urls.push(url);
+        return [photo.id, url] as const;
+      } catch {
+        return null;
+      }
+    })).then((results) => {
+      if (!current) return;
+      const loaded = results.filter((entry): entry is readonly [string, string] => entry !== null);
+      setImageUrls(Object.fromEntries(loaded));
+      const missing = results.length - loaded.length;
+      if (missing > 0) setError(missing === 1 ? 'Ein privates Bild konnte nicht geladen werden.' : `${missing} private Bilder konnten nicht geladen werden.`);
     });
     return () => { current = false; urls.forEach((url) => URL.revokeObjectURL(url)); };
   }, [photos]);
