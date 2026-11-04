@@ -19,8 +19,16 @@ CoachToolName = Literal[
     "get_nutrition_day",
     "get_nutrition_range",
     "get_steps",
+    "get_sleep",
     "get_weight_history",
     "get_coaching_memory",
+    "get_volume_and_frequency_analysis",
+    "get_strength_progression_analytics",
+    "get_metabolic_trend_analysis",
+    "get_macro_adherence_score",
+    "get_sleep_and_performance_correlation",
+    "get_performance_correlations",
+    "project_goal_timeline",
 ]
 
 

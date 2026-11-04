@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session
 
 from app.encryption import decrypt_value
 from app.models import ChatConversation, ChatMessage, MorningBriefing, User, WeightEntry, WorkoutReview, GoogleHealthConnection
+from app.services.analytics_tools import ANALYTICS_DECLARATIONS, ANALYTICS_STATUS_TEXT, ANALYTICS_TOOLS
+from app.services.coach_range_tools import exercise_history_in_range, nutrition_in_range, workouts_in_range
 from app.services.forge_session_adapter import completed_forge_workouts, forge_training_plan_context
 from app.services.yazio_service import fetch_yazio_summary, resolve_yazio_goal_context
 from app.services.google_health_service import (
@@ -87,12 +89,21 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_workouts",
-            "description": "Read recent completed Forge workouts including their plan descriptions, notes, the user's in-workout exercise notes (session_note), and actual sets. Use limit up to 30 and optionally restrict by days.",
+            "description": (
+                "Read completed Forge workouts in a date range (start_date/end_date or the last `days`, max 730 days). "
+                "detail 'summary' gives one compact line per exercise (sets, top set, volume) and suits long ranges; "
+                "'full' returns every set with notes (max 15 workouts per call). Default 'auto' picks full for up to 10 workouts. "
+                "Results are paged: use offset/next_offset to continue."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 30},
-                    "days": {"type": "integer", "minimum": 1, "maximum": 365},
+                    "start_date": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
+                    "end_date": {"type": "string", "description": "YYYY-MM-DD, inclusive; default today"},
+                    "days": {"type": "integer", "minimum": 1, "maximum": 730, "description": "Last N days (used when start_date is omitted)"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 60},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "detail": {"type": "string", "enum": ["auto", "summary", "full"]},
                 },
                 "required": [],
             },
@@ -102,12 +113,15 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_exercise_history",
-            "description": "Read actual completed-set history for an exercise by its name, including workout descriptions and notes.",
+            "description": "Read completed-set history for an exercise by its exact name within a date range (default last 365 days, max 730), with notes, per-session best estimated 1RM and a summary.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "exercise_name": {"type": "string", "minLength": 1, "maxLength": 120},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                    "start_date": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
+                    "end_date": {"type": "string", "description": "YYYY-MM-DD, inclusive; default today"},
+                    "days": {"type": "integer", "minimum": 1, "maximum": 730},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 60, "description": "Most recent sessions to list"},
                 },
                 "required": ["exercise_name"],
             },
@@ -132,11 +146,19 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_nutrition_range",
-            "description": "Read compact daily nutrition totals for a recent date range. Maximum 14 days.",
+            "description": (
+                "Read nutrition for a date range (start_date/end_date or the last `days`, max 180 days). "
+                "Always includes a summary with averages and goal attainment over logged days. "
+                "granularity 'day' lists each day (max 31 days), 'week' or 'month' returns averaged periods; 'auto' chooses by range length. "
+                "Long ranges take longer because Yazio is queried per day."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "days": {"type": "integer", "minimum": 1, "maximum": 14},
+                    "start_date": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
+                    "end_date": {"type": "string", "description": "YYYY-MM-DD, inclusive; default today"},
+                    "days": {"type": "integer", "minimum": 1, "maximum": 180, "description": "Last N days (default 7)"},
+                    "granularity": {"type": "string", "enum": ["auto", "day", "week", "month"]},
                 },
                 "required": [],
             },
@@ -201,6 +223,10 @@ TOOL_DECLARATIONS = [
 ]
 
 
+TOOL_DECLARATIONS = TOOL_DECLARATIONS + ANALYTICS_DECLARATIONS
+TOOL_STATUS_TEXT.update(ANALYTICS_STATUS_TEXT)
+
+
 def tool_status_text(name: str) -> str:
     return TOOL_STATUS_TEXT.get(name, "Ich prüfe die passenden Daten.")
 
@@ -263,6 +289,10 @@ def _require_yazio(user: User) -> tuple[str, str] | None:
 
 async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> dict:
     """Execute one allow-listed read tool with server-owned identity."""
+    analytics_tool = ANALYTICS_TOOLS.get(name)
+    if analytics_tool is not None:
+        return await analytics_tool(db, user, args)
+
     if name == "get_user_profile":
         result = {
             "first_name": user.first_name,
@@ -288,36 +318,15 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
     if name == "get_training_plan":
         return {"plans": forge_training_plan_context(db, user.id) or []}
 
-    if name in {"get_latest_workout", "get_workouts", "get_exercise_history"}:
-        default_limit = 1 if name == "get_latest_workout" else 20
-        limit = _bounded_int(args.get("limit"), default_limit, 1, 30)
-        workouts = completed_forge_workouts(db, user.id, limit=max(limit, 30 if name == "get_exercise_history" else limit))
-        if name == "get_latest_workout":
-            return {"workout": _workout_summary(workouts[0]) if workouts else None}
-        if name == "get_workouts":
-            cutoff = date.today() - timedelta(days=_bounded_int(args.get("days"), 365, 1, 365))
-            filtered = [
-                workout for workout in workouts
-                if _parse_date(str(workout.get("start_time", ""))[:10], date.min) >= cutoff
-            ][:limit]
-            return {"workouts": [_workout_summary(workout) for workout in filtered]}
-        exercise_name = str(args.get("exercise_name", "")).strip().casefold()
-        matches = []
-        for workout in workouts:
-            for exercise in workout.get("exercises", []):
-                if exercise.get("title", "").strip().casefold() == exercise_name:
-                    matches.append({
-                        "workout_title": workout.get("title"),
-                        "date": str(workout.get("start_time", ""))[:10],
-                        "description": (workout.get("plan_description") or "")[:500],
-                        "exercise": exercise.get("title"),
-                        "muscle_group": exercise.get("muscle_group"),
-                        "notes": (exercise.get("notes") or "")[:500],
-                        "session_note": (exercise.get("session_note") or "")[:2000],
-                        "machine_profile": exercise.get("machine_profile") or "",
-                        "sets": exercise.get("sets", [])[:20],
-                    })
-        return {"exercise_name": args.get("exercise_name"), "sessions": matches[:limit]}
+    if name == "get_latest_workout":
+        workouts = completed_forge_workouts(db, user.id, limit=1)
+        return {"workout": _workout_summary(workouts[0]) if workouts else None}
+
+    if name == "get_workouts":
+        return workouts_in_range(db, user, args, _workout_summary)
+
+    if name == "get_exercise_history":
+        return exercise_history_in_range(db, user, args)
 
     credentials = _require_yazio(user)
     if name == "get_steps":
@@ -375,22 +384,7 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
         return result
 
     if name == "get_nutrition_range":
-        if credentials is None:
-            return {"available": False, "reason": "Yazio ist nicht verbunden."}
-        days = _bounded_int(args.get("days"), 7, 1, 14)
-        targets = [date.today() - timedelta(days=index) for index in range(days)]
-        results = await asyncio.gather(*[
-            fetch_yazio_summary(*credentials, target_date=target) for target in targets
-        ], return_exceptions=True)
-        compact = []
-        for target, result in zip(targets, results):
-            if isinstance(result, dict):
-                compact.append({
-                    "date": result.get("date", target.isoformat()),
-                    "totals": result.get("totals", {}),
-                    "goals": result.get("goals", {}),
-                })
-        return {"available": True, "days": list(reversed(compact))}
+        return await nutrition_in_range(user, args)
 
     if name == "get_weight_history":
         days = _bounded_int(args.get("days"), 90, 7, 365)

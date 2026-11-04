@@ -87,7 +87,7 @@ const translations = {
     'settings.languageEn': { de: 'Englisch', en: 'English' },
     'settings.languageUpdated': { de: 'Sprache geändert!', en: 'Language updated!' },
     'settings.apiKeysTitle': { de: 'API-Schlüssel & MCP', en: 'API keys & MCP' },
-    'settings.apiKeysDesc': { de: 'Erstelle einen dauerhaft gültigen Schlüssel für deinen persönlichen Forge-MCP-Server. Er gilt bis zum Widerruf und erlaubt nur lesenden Zugriff auf die Coach-Tools.', en: 'Create a non-expiring key for your personal Forge MCP server. It remains valid until revoked and only grants read access to Coach tools.' },
+    'settings.apiKeysDesc': { de: 'Erstelle einen dauerhaft gültigen Schlüssel für deinen persönlichen Forge-MCP-Server. Er gilt bis zum Widerruf und erlaubt das Lesen deiner Coach-Daten sowie das Bearbeiten von Trainingsplänen, Split und Übungen.', en: 'Create a non-expiring key for your personal Forge MCP server. It remains valid until revoked and can read your Coach data and edit training plans, your split and exercises.' },
     'settings.apiKeyName': { de: 'Name des Schlüssels', en: 'Key name' },
     'settings.apiKeyNamePlaceholder': { de: 'z. B. Mein Agenten-Chat', en: 'e.g. My agent chat' },
     'settings.apiKeyCreate': { de: 'API-Schlüssel erstellen', en: 'Create API key' },

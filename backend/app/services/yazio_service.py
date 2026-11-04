@@ -560,3 +560,67 @@ async def fetch_yazio_coaching_trends(
 
     profile = _parse_profile(raw_profile or {}, newest_summary_user) if raw_profile or newest_summary_user else {}
     return {"source": "yazio_daily_summary", "as_of": through_date.isoformat(), "profile": profile, "rolling": {"7d": aggregate(7), "14d": aggregate(14)}}
+
+
+async def fetch_nutrition_range(
+    email: str,
+    password: str,
+    start_date: date,
+    end_date: date,
+    *,
+    concurrency: int = 5,
+) -> Optional[dict]:
+    """Fetch compact per-day totals and goals for an inclusive date range with one login.
+
+    Only the daily-summary widget is used (no product resolution), so a day costs one
+    request. Returns ``None`` when the login fails; days that Yazio cannot serve are
+    counted in ``failed_days`` instead of aborting the range.
+    """
+    total_days = (end_date - start_date).days + 1
+    if total_days < 1:
+        return {"days": [], "failed_days": 0}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        token = await _yazio_login(client, email, password)
+        if not token:
+            return None
+        semaphore = asyncio.Semaphore(max(1, min(concurrency, 5)))
+
+        async def load_day(day: date) -> tuple[date, Optional[dict]]:
+            async with semaphore:
+                return day, await _fetch_daily_summary(client, token, day.isoformat())
+
+        rows = await asyncio.gather(*(
+            load_day(start_date + timedelta(days=offset)) for offset in range(total_days)
+        ))
+
+    days: list[dict] = []
+    failed = 0
+    for day, raw in rows:
+        if not isinstance(raw, dict):
+            failed += 1
+            continue
+        parsed = _parse_summary(raw)
+        totals = parsed["totals"]
+        goals = parsed["goals"]
+        days.append({
+            "date": day.isoformat(),
+            "logged": totals["calories"] > 0,
+            "calories": totals["calories"],
+            "protein": totals["protein"],
+            "carbs": totals["carbs"],
+            "fat": totals["fat"],
+            "fiber": totals["fiber"],
+            "sugar": totals["sugar"],
+            "goals": {
+                "calories": goals["calories"],
+                "protein": goals["protein"],
+                "carbs": goals["carbs"],
+                "fat": goals["fat"],
+            },
+            "steps": parsed["steps"],
+            "activity_kcal": parsed["activity_kcal"],
+            "water_ml": parsed["water_ml"],
+        })
+    days.sort(key=lambda item: item["date"])
+    return {"days": days, "failed_days": failed}

@@ -1,24 +1,44 @@
 """Provider-neutral projections of completed native Forge sessions."""
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import ForgeSessionExercise, ForgeTrainingPlan, ForgeWorkoutSession
+
+# Forge assumes a single training timezone (see scheduler and weekly program logic).
+LOCAL_TZ = ZoneInfo("Europe/Berlin")
+
+
+def local_day_bounds(start: date, end: date) -> tuple[datetime, datetime]:
+    """Half-open [start 00:00, end+1 00:00) interval in the training timezone."""
+    return (
+        datetime.combine(start, time.min, tzinfo=LOCAL_TZ),
+        datetime.combine(end + timedelta(days=1), time.min, tzinfo=LOCAL_TZ),
+    )
 
 
 def completed_forge_workouts(
     db: Session,
     user_id: UUID,
     limit: Optional[int] = None,
+    *,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    offset: int = 0,
+    newest_first: bool = True,
 ) -> list[dict]:
     """Return completed Forge sessions in the workout shape used by AI and analytics.
 
     Only completed sets are included. Target values are deliberately never mapped to
     actual values: a completed session with unlogged sets represents attendance, not
     fabricated performance.
+
+    ``since`` / ``until`` are inclusive local dates (Europe/Berlin) on the session start.
     """
     query = (
         db.query(ForgeWorkoutSession)
@@ -27,11 +47,17 @@ def completed_forge_workouts(
             ForgeWorkoutSession.user_id == user_id,
             ForgeWorkoutSession.status == "completed",
         )
-        .order_by(
-            ForgeWorkoutSession.completed_at.desc(),
-            ForgeWorkoutSession.started_at.desc(),
-        )
     )
+    if since is not None:
+        query = query.filter(ForgeWorkoutSession.started_at >= local_day_bounds(since, since)[0])
+    if until is not None:
+        query = query.filter(ForgeWorkoutSession.started_at < local_day_bounds(until, until)[1])
+    if newest_first:
+        query = query.order_by(ForgeWorkoutSession.completed_at.desc(), ForgeWorkoutSession.started_at.desc())
+    else:
+        query = query.order_by(ForgeWorkoutSession.started_at.asc())
+    if offset:
+        query = query.offset(offset)
     if limit is not None:
         query = query.limit(limit)
 
@@ -160,11 +186,16 @@ def _serialize_completed_session(
         "title": session.name,
         "start_time": session.started_at.isoformat() if session.started_at else "",
         "end_time": completed_at.isoformat() if completed_at else "",
+        # Calendar day and hour in the training timezone (start_time itself may be UTC).
+        "local_date": session.started_at.astimezone(LOCAL_TZ).date().isoformat() if session.started_at else "",
+        "local_hour": session.started_at.astimezone(LOCAL_TZ).hour if session.started_at else None,
         "duration_min": duration_min,
         "exercises": [
             {
                 "title": exercise.name,
+                "exercise_id": str(exercise.source_exercise_id) if exercise.source_exercise_id else None,
                 "muscle_group": exercise.primary_muscle_group or "other",
+                "secondary_muscle_groups": list(exercise.secondary_muscle_groups or []),
                 "notes": exercise.notes or "",
                 # Written by the user during the workout (pain, form, machine occupied, ...).
                 "session_note": exercise.session_note or "",

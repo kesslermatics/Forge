@@ -226,13 +226,19 @@ Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-
 
 ## Personal API keys and MCP
 
-The FastAPI backend serves the same ten read-only context tools used by the built-in Coach directly over **Streamable HTTP** at:
+The FastAPI backend serves the Coach context tools and a set of plan-editing tools directly over **Streamable HTTP** at:
 
 ```text
 https://forge.kesslermatics.com/mcp
 ```
 
-Available tools cover profile/current Yazio goal, training plans, workouts, exercise history, nutrition, steps/activity, weight history, and saved coaching memory. MCP runs in the same backend process and calls the account-scoped Coach dispatcher directly—there is no second MCP service, subprocess, database credential, or HTTP loopback adapter.
+**Read tools** cover profile/current Yazio goal, training plans, workouts, exercise history, nutrition, steps/activity, sleep, weight history, and saved coaching memory. `get_workouts`, `get_exercise_history` and `get_nutrition_range` accept `start_date`/`end_date` or `days` (up to 730 days for training, 180 for nutrition). To keep responses small, long ranges are aggregated (`granularity` for nutrition, `detail: summary` for workouts), paged (`offset`/`next_offset`) and trimmed to a size budget; a `truncation` or `notes` field says when that happened.
+
+**Plan tools** let an agent manage the training setup: `list_plans`, `create_plan`, `update_plan` (exercises, order, warm-up and working sets), `delete_plan` (needs `confirm=true`), `get_training_program` / `update_training_program` (rotation or weekly split), and `list_exercises` / `create_exercise` / `update_exercise`. Workout tracking itself stays in the Forge app; MCP cannot start, edit or complete sessions.
+
+**Analytics tools** (also available to the built-in Coach) return compact, estimate-labelled results: `get_volume_and_frequency_analysis` (weekly effective sets per muscle vs. MEV/MAV/MRV), `get_strength_progression_analytics` (e1RM, tonnage, plateaus), `get_metabolic_trend_analysis` (TDEE from intake and weight trend), `get_macro_adherence_score`, `get_sleep_and_performance_correlation`, `get_performance_correlations` (training time, previous-day steps) and `project_goal_timeline` (target-weight corridor and what-if scenarios). Nutrition-based tools query Yazio per day, so long windows take a few seconds.
+
+MCP runs in the same backend process and calls account-scoped services directly—there is no second MCP service, subprocess, database credential, or HTTP loopback adapter. The built-in Coach uses the same read tools but has no write tools.
 
 ### Create and revoke a key
 
@@ -241,7 +247,7 @@ Available tools cover profile/current Yazio goal, training plans, workouts, exer
 3. Create the key and copy the complete `forge_live_...` value from the one-time dialog.
 4. Store it in the secret configuration of the agent application that connects to Forge MCP.
 
-Only a SHA-256 hash and public prefix are stored by Forge. Keys do not expire automatically, but can be revoked immediately from Settings. They authorize only the read-only Coach tools and cannot create keys or mutate profile, workout, or integration data.
+Only a SHA-256 hash and public prefix are stored by Forge. Keys do not expire automatically, but can be revoked immediately from Settings. Every key can read Coach data and edit training plans, the training split and the exercise library. Keys cannot create keys, change the profile or integrations, or modify recorded workouts.
 
 MCP clients send the personal key using the standard bearer header:
 
@@ -371,7 +377,7 @@ This is a public repository. Treat all real credentials and user data as private
 - Never commit `.env` files, database URLs containing passwords, API keys, JWT secrets, Fernet keys, Yazio credentials, screenshots, or user exports.
 - The repository ignores `.env` files; verify this before every commit with `git status`.
 - Passwords are hashed with bcrypt. Browser API access uses seven-day JWT bearer tokens.
-- Personal MCP/API keys are generated with high entropy, stored only as SHA-256 hashes, never expire automatically, and remain individually revocable. They authorize only read-only Coach tools.
+- Personal MCP/API keys are generated with high entropy, stored only as SHA-256 hashes, never expire automatically, and remain individually revocable. They can read Coach data and edit plans, the training split and exercises; they cannot change the profile, integrations or recorded workouts.
 - Third-party credentials are encrypted at rest with Fernet and are only decrypted server-side when needed for an integration request.
 - Forge routes are account-scoped: data access and mutations are filtered by the authenticated user.
 - Progress photos are validated, stripped of metadata, converted to WebP, stored outside public web roots, and served only after owner authorization.
