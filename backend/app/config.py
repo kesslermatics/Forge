@@ -59,6 +59,13 @@ class Settings(BaseSettings):
         "https://forge.kesslermatics.com,http://localhost:*,http://127.0.0.1:*",
     )
 
+    # Separate, rebuildable food catalog (BLS + Open Food Facts) with pgvector. Optional:
+    # without it the tracking endpoints answer 503 instead of failing the whole app.
+    food_catalog_database_url: str = os.getenv("FOOD_CATALOG_DATABASE_URL", "")
+    # Must match the model/dimensions used by tools/food_catalog_import.py.
+    food_embedding_model: str = os.getenv("FOOD_EMBEDDING_MODEL", "google/gemini-embedding-2")
+    food_embedding_dimensions: int = int(os.getenv("FOOD_EMBEDDING_DIMENSIONS", "768"))
+
     # Private object storage (S3-compatible, e.g. Cloudflare R2) for progress photos and plan images.
     # Empty by default so uploads never silently fall back to ephemeral container storage.
     s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "")

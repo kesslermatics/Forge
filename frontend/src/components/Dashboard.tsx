@@ -6,14 +6,14 @@ import {
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getWeightHistory,
-    getTodayNutrition, getConsistency, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
+    getTodayNutrition, getTrackDay, getConsistency, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
 } from '../api/api';
 import type {
     UserInfo,
-    WeightHistoryEntry, TodayNutrition, ConsistencyData, ForgeSession, ForgeToday,
+    WeightHistoryEntry, TodayNutrition, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
-    Loader2, Flame,
+    Loader2, Flame, Plus, ChevronRight,
     Dumbbell, Scale, Pencil,
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
@@ -147,6 +147,7 @@ export default function Dashboard() {
 
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
+    const [trackDay, setTrackDay] = useState<TrackDay | null>(null);
     const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
     const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
     const [alternativePickerOpen, setAlternativePickerOpen] = useState(false);
@@ -181,6 +182,8 @@ export default function Dashboard() {
 
     useEffect(() => {
         getTodayNutrition().then(setTodayNutrition).catch(() => { });
+        getTrackDay(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()))
+            .then(setTrackDay).catch(() => { });
         getConsistency().then(setConsistency).catch(() => { });
         refreshForgeDashboard();
 
@@ -304,6 +307,20 @@ export default function Dashboard() {
 
 
             <>
+                {/* ── Food tracking entry point ── */}
+                <button type="button" onClick={() => navigate('/nutrition/track')} className="card-forge tap forge-anim forge-d1 flex w-full items-center gap-3 p-3.5 text-left" style={{ borderColor: `${SAND}33` }}>
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ color: '#16130f', background: SAND }}><Plus size={20} /></span>
+                    <span className="min-w-0 flex-1">
+                        <span className="block text-[15px] font-semibold" style={{ color: '#f2ece0' }}>Essen tracken</span>
+                        <span className="mt-0.5 block truncate text-[12px] tabular-nums" style={{ color: TEXT_DIM }}>
+                            {trackDay && trackDay.entry_count > 0
+                                ? `Heute ${Math.round(trackDay.totals.kcal).toLocaleString('de-DE')} kcal · ${Math.round(trackDay.totals.protein)} g Protein`
+                                : 'Suche, Barcode oder zuletzt getrackt'}
+                        </span>
+                    </span>
+                    <ChevronRight size={17} className="shrink-0" style={{ color: SAND }} />
+                </button>
+
                 {/* ── Kalorien-Hero + Makros ── */}
                 {nt && (
                     <section className="card-forge p-5 forge-anim forge-d1">

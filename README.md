@@ -24,6 +24,7 @@ Forge is a private, full-stack training coach for planning workouts, logging ses
 
 ### Progress and optional nutrition
 
+- Native food tracking with user-defined meal slots (e.g. Frühstück, Pre-Workout), hybrid search (trigram + embeddings), barcode scanning and a product page with full nutrient breakdown.
 - Optional Yazio connection for nutrition, protein, calorie, and weight context.
 - Private progress photos with server-side image normalization and metadata stripping. Photo files require authenticated owner access and are not exposed through public URLs.
 
@@ -197,6 +198,23 @@ Existing installations need more care: this repository currently uses manual one
 Do not assume that starting the server automatically migrates an older production schema.
 
 The manual check-in action in Settings is account-scoped and idempotent. It creates at most one check-in per account, month, and day.
+
+## Food catalog
+
+Food tracking reads products from a separate PostgreSQL database with `pgvector` (`pgvector/pgvector:pg17` in Dokploy). It holds no personal data and can always be rebuilt; diary entries live in the main database and keep their own nutrient snapshot.
+
+- Sources: [BLS 4.0](https://blsdb.de/) by the Max Rubner-Institut (CC BY 4.0, DOI 10.25826/Data20251217-134202-0) for generic foods, and the official [Open Food Facts](https://world.openfoodfacts.org/data) Parquet export (ODbL) filtered to products sold in Germany or with a German GS1 prefix.
+- Embeddings: `google/gemini-embedding-2` via OpenRouter, 768 dimensions, stored as `halfvec` with an HNSW index. Only rows with complete macros are embedded.
+- Barcodes missing locally are looked up once via the live Open Food Facts API and cached in the catalog.
+
+Build or refresh the catalog from `backend/` (idempotent; unchanged rows keep their embeddings, a full run also removes OFF products that disappeared upstream):
+
+```bash
+pip install -r tools/requirements-food-import.txt
+FOOD_CATALOG_DATABASE_URL=postgresql://... OPENROUTER_API_KEY=... python tools/food_catalog_import.py
+```
+
+The tool downloads BLS and the ~8 GB OFF Parquet file when `--bls-xlsx` / `--off-parquet` are not given.
 
 ## API overview
 

@@ -1,0 +1,10 @@
+# Dependencies for tools/food_catalog_import.py only (not needed by the API runtime).
+duckdb==1.1.3
+pandas==2.2.3
+openpyxl==3.1.5
+psycopg[binary]==3.2.3
+pgvector==0.3.6
+numpy==2.1.3
+openai==2.49.0
+python-dotenv==1.0.1
+httpx==0.28.1

@@ -17,6 +17,9 @@ import ForgeSessionPage from './components/ForgeSessionPage';
 import ForgeExerciseHistoryPage from './components/ForgeExerciseHistoryPage';
 import ForgeProgressPhotosPage from './components/ForgeProgressPhotosPage';
 import PreviewShowcase from './preview/PreviewShowcase';
+import TrackDayPage from './components/track/TrackDayPage';
+import TrackSlotPage from './components/track/TrackSlotPage';
+import FoodDetailPage from './components/track/FoodDetailPage';
 
 function App() {
   return <BrowserRouter><Routes>
@@ -27,6 +30,9 @@ function App() {
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/chat" element={<ChatPage />} />
       <Route path="/nutrition" element={<NutritionPage />} />
+      <Route path="/nutrition/track" element={<TrackDayPage />} />
+      <Route path="/nutrition/track/:slotId" element={<TrackSlotPage />} />
+      <Route path="/nutrition/food/:source/:sourceId" element={<FoodDetailPage />} />
       <Route path="/achievements" element={<Navigate to="/dashboard" replace />} />
       <Route path="/forge" element={<ForgePlanPage />} />
       <Route path="/forge/days/new" element={<ForgeTrainingDayPage />} />

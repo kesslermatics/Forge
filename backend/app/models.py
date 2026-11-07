@@ -47,6 +47,8 @@ class User(Base):
 
     # Relationships
     weight_entries = relationship("WeightEntry", back_populates="user", cascade="all, delete-orphan")
+    nutrition_meal_slots = relationship("NutritionMealSlot", back_populates="user", cascade="all, delete-orphan")
+    nutrition_entries = relationship("NutritionEntry", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
     forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
     forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
@@ -154,6 +156,64 @@ class WeightEntry(Base):
 
     def __repr__(self):
         return f"<WeightEntry(user_id={self.user_id}, date={self.date}, weight={self.weight_kg})>"
+
+
+class NutritionMealSlot(Base):
+    """A user-defined tracking slot such as "Frühstück" or "Pre-Workout"."""
+
+    __tablename__ = "nutrition_meal_slots"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_nutrition_slot_user_name"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(60), nullable=False)
+    position = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="nutrition_meal_slots")
+
+
+class NutritionEntry(Base):
+    """One tracked food with an immutable nutrient snapshot.
+
+    The catalog lives in a separate, rebuildable database, so entries keep everything they
+    need (name, per-100 values, totals) and reference the catalog only loosely.
+    """
+
+    __tablename__ = "nutrition_entries"
+    __table_args__ = (
+        Index("ix_nutrition_entries_user_date", "user_id", "date"),
+        Index("ix_nutrition_entries_user_food", "user_id", "source", "source_id"),
+        CheckConstraint("amount > 0 AND amount <= 10000", name="ck_nutrition_entry_amount"),
+        CheckConstraint("unit IN ('g', 'ml')", name="ck_nutrition_entry_unit"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    slot_id = Column(UUID(as_uuid=True), ForeignKey("nutrition_meal_slots.id", ondelete="SET NULL"), nullable=True, index=True)
+    date = Column(Date, nullable=False)
+    source = Column(String(16), nullable=False)          # bls | off
+    source_id = Column(String(64), nullable=False)       # BLS code or barcode
+    name = Column(String(300), nullable=False)
+    brand = Column(String(120), nullable=True)
+    unit = Column(String(2), nullable=False, server_default="g")
+    amount = Column(Float, nullable=False)               # grams or millilitres
+    kcal = Column(Float, nullable=False, server_default="0")
+    protein = Column(Float, nullable=False, server_default="0")
+    carbs = Column(Float, nullable=False, server_default="0")
+    fat = Column(Float, nullable=False, server_default="0")
+    sugar = Column(Float, nullable=True)
+    fiber = Column(Float, nullable=True)
+    saturated = Column(Float, nullable=True)
+    salt = Column(Float, nullable=True)
+    per_100 = Column(JSON, nullable=False)               # core values per 100 g/ml at tracking time
+    nutrients_per_100 = Column(JSON, nullable=True)      # extra nutrient list snapshot
+    logged_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="nutrition_entries")
+    slot = relationship("NutritionMealSlot")
 
 
 class ForgeExercise(Base):

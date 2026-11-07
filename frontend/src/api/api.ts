@@ -678,6 +678,104 @@ export const getFoodStatistics = (startDate: string | null = null, days = 30) =>
   return apiRequest<FoodStatisticsData>(`/api/briefing/food-statistics?${params}`);
 };
 
+/* ── Native food tracking ───────────────────────────── */
+
+export type FoodSource = 'bls' | 'off';
+export type FoodUnit = 'g' | 'ml';
+
+export interface TrackMacros {
+  kcal: number; protein: number; carbs: number; fat: number;
+  sugar: number; fiber: number; saturated: number; salt: number;
+}
+
+export interface MealSlot { id: string; name: string; position: number }
+
+export interface MealSlotDay extends MealSlot { totals: TrackMacros; entry_count: number }
+
+export interface TrackDay {
+  date: string;
+  totals: TrackMacros;
+  entry_count: number;
+  slots: MealSlotDay[];
+  unassigned: { totals: TrackMacros; entry_count: number };
+}
+
+export interface FoodSummary {
+  source: FoodSource;
+  source_id: string;
+  name: string;
+  brand: string | null;
+  unit: FoodUnit;
+  kcal: number | null; protein: number | null; carbs: number | null; fat: number | null;
+  serving_g: number | null;
+  serving_label: string | null;
+  tracked_count: number;
+  default_amount: number;
+}
+
+export interface FoodNutrient { k: string; l: string; u: string; v: number; g: string }
+
+export interface FoodServing { label: string; detail: string | null; amount: number }
+
+export interface FoodDetail extends FoodSummary {
+  name_alt: string | null;
+  sugar: number | null; fiber: number | null; saturated: number | null; salt: number | null;
+  nutrients: FoodNutrient[];
+  package_g: number | null;
+  quantity_label: string | null;
+  ingredients: string | null;
+  allergens: string[];
+  quality: 'ok' | 'incomplete' | 'suspect';
+  servings: FoodServing[];
+  attribution: string;
+  trackable: boolean;
+}
+
+export interface TrackEntry extends Omit<TrackMacros, 'sugar' | 'fiber' | 'saturated' | 'salt'> {
+  id: string;
+  date: string;
+  slot_id: string | null;
+  source: FoodSource;
+  source_id: string;
+  name: string;
+  brand: string | null;
+  unit: FoodUnit;
+  amount: number;
+  sugar: number | null; fiber: number | null; saturated: number | null; salt: number | null;
+  per_100: Record<keyof TrackMacros, number | null>;
+  logged_at: string;
+}
+
+export const getMealSlots = () => apiRequest<{ items: MealSlot[] }>('/api/nutrition/slots');
+export const createMealSlot = (name: string) =>
+  apiRequest<MealSlot>('/api/nutrition/slots', { method: 'POST', body: JSON.stringify({ name }) });
+export const renameMealSlot = (id: string, name: string) =>
+  apiRequest<MealSlot>(`/api/nutrition/slots/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+export const reorderMealSlots = (slotIds: string[]) =>
+  apiRequest<{ items: MealSlot[] }>('/api/nutrition/slots/order', { method: 'PUT', body: JSON.stringify({ slot_ids: slotIds }) });
+export const deleteMealSlot = (id: string) =>
+  apiRequest<void>(`/api/nutrition/slots/${id}`, { method: 'DELETE' });
+
+export const getTrackDay = (date: string) =>
+  apiRequest<TrackDay>(`/api/nutrition/day?date=${encodeURIComponent(date)}`);
+export const getTrackEntries = (date: string, slotId: string | null) =>
+  apiRequest<{ items: TrackEntry[]; totals: TrackMacros }>(
+    `/api/nutrition/entries?date=${encodeURIComponent(date)}${slotId ? `&slot_id=${slotId}` : '&unassigned=true'}`);
+export const createTrackEntry = (data: { date: string; slot_id: string | null; source: FoodSource; source_id: string; amount: number }) =>
+  apiRequest<TrackEntry>('/api/nutrition/entries', { method: 'POST', body: JSON.stringify(data) });
+export const updateTrackEntry = (id: string, amount: number) =>
+  apiRequest<TrackEntry>(`/api/nutrition/entries/${id}`, { method: 'PATCH', body: JSON.stringify({ amount }) });
+export const deleteTrackEntry = (id: string) =>
+  apiRequest<void>(`/api/nutrition/entries/${id}`, { method: 'DELETE' });
+
+export const getRecentFoods = () => apiRequest<{ items: FoodSummary[] }>('/api/nutrition/recent');
+export const searchFoods = (query: string, signal?: AbortSignal) =>
+  apiRequest<{ query: string; items: FoodSummary[] }>(`/api/nutrition/search?q=${encodeURIComponent(query)}`, { signal });
+export const lookupBarcode = (code: string) =>
+  apiRequest<FoodDetail>(`/api/nutrition/barcode/${encodeURIComponent(code)}`);
+export const getFoodDetail = (source: FoodSource, sourceId: string) =>
+  apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}`);
+
 /* ── Nutrition Analysis (AI) ────────────────────────── */
 
 export interface NutritionAnalysis {
