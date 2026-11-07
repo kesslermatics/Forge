@@ -7,7 +7,7 @@ import {
 import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction, completeForgeSession,
   deleteForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, dismissForgeSessionAction,
-  generateForgeSessionCompletionReview, generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
+  generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
   getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, reorderForgeSessionExercises,
   replaceForgeSessionExercise, sendForgeSessionChat, streamForgeSessionStartCoaching, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
@@ -73,8 +73,6 @@ export default function ForgeSessionPage() {
   const [coachingErrors, setCoachingErrors] = useState<Record<string, string>>({});
   const [chatSending, setChatSending] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
-  const [reviewing, setReviewing] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
 
   const sessionRef = useRef<ForgeSession | null>(null);
@@ -568,14 +566,6 @@ export default function ForgeSessionPage() {
   };
 
   // ── completion ─────────────────────────────────────────────────
-  const requestReview = useCallback((id: string) => {
-    setReviewing(true); setReviewError(null);
-    generateForgeSessionCompletionReview(id)
-      .then((server) => updateLocal((local) => ({ ...local, completion_review: server.completion_review })))
-      .catch((caught: unknown) => setReviewError(errorMessage(caught, 'Das Fazit konnte gerade nicht erstellt werden.')))
-      .finally(() => setReviewing(false));
-  }, [updateLocal]);
-
   const startCompletion = async () => {
     if (!session || checkingCompletion) return;
     setCheckingCompletion(true);
@@ -602,7 +592,6 @@ export default function ForgeSessionPage() {
       setCompletionChanges(null);
       haptic([20, 60, 20, 60, 40]);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      requestReview(server.id);
     } catch { /* toast already shown */ } finally {
       setCompleting(false);
     }
@@ -673,7 +662,7 @@ export default function ForgeSessionPage() {
       </div>}
     </header>
 
-    {!active && <CompletionSummary session={session} reviewing={reviewing} reviewError={reviewError} onRetry={() => requestReview(session.id)} onDone={() => navigate('/dashboard')} />}
+    {!active && <CompletionSummary session={session} onDone={() => navigate('/dashboard')} />}
 
     {active && startCoachingError && !session.start_coaching && <div className="forge-msg-in flex items-center gap-3 rounded-2xl px-4 py-3" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)' }}>
       <p className="flex-1 text-[12px]" style={{ color: '#fca5a5' }}>{startCoachingError}</p>

@@ -13,7 +13,6 @@ from app.routes import auth, user
 from app.routes import coach_tools as coach_tools_router
 from app.routes import briefing as briefing_router
 from app.routes import forge as forge_router
-from app.routes import monthly_challenges as monthly_challenges_router
 from app.mcp_server import mcp, mcp_http_app
 from app.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
@@ -162,7 +161,6 @@ app.include_router(user.router)
 app.include_router(coach_tools_router.router)
 app.include_router(briefing_router.router)
 app.include_router(forge_router.router)
-app.include_router(monthly_challenges_router.router)
 
 
 @app.get("/", tags=["Health"])

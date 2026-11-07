@@ -1112,13 +1112,6 @@ export interface ForgeSessionMessage {
   created_at: string;
 }
 
-export interface ForgeSessionCompletionReview {
-  headline: string;
-  verdict: 'strong' | 'solid' | 'mixed' | 'tough';
-  review: string;
-  generated_at: string;
-}
-
 export interface ForgeSession {
   id: string;
   program_id: string | null;
@@ -1128,7 +1121,6 @@ export interface ForgeSession {
   started_at: string;
   completed_at: string | null;
   start_coaching: ForgeSessionStartCoaching | null;
-  completion_review: ForgeSessionCompletionReview | null;
   /** Free-text wish behind an AI-composed session. */
   user_request?: string | null;
   /** Routine description, or the AI's description for composed sessions. */
@@ -1264,8 +1256,6 @@ export const replaceForgeSessionExercise = (sessionId: string, sessionExerciseId
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}/replace`, { method: 'POST', body: JSON.stringify({ exercise_id }) });
 export const reorderForgeSessionExercises = (sessionId: string, session_exercise_ids: string[]) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercise-order`, { method: 'PUT', body: JSON.stringify({ session_exercise_ids }) });
-export const generateForgeSessionCompletionReview = (sessionId: string, force = false) =>
-  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/completion-review${force ? '?force=true' : ''}`, { method: 'POST' });
 
 export const refreshForgePlanCoachTargets = (planId: string) =>
   apiRequest<ForgePlan>(`/api/forge/plans/${planId}/coach-targets`, { method: 'POST' });
@@ -1308,51 +1298,3 @@ export const deleteForgeProgressPhoto = (id: string) =>
   apiRequest<void>(`/api/forge/progress-photos/${id}`, { method: 'DELETE' });
 export const fetchForgeProgressPhotoImage = (id: string) =>
   apiBlob(`/api/forge/progress-photos/${id}/image`);
-
-
-/* ── Monthly Forge challenges ──────────────────────────── */
-
-export type MonthlyChallengeCategory = 'consistency' | 'strength' | 'weight' | 'nutrition' | 'quality';
-
-export interface MonthlyChallenge {
-  id: string;
-  slot: number;
-  category: MonthlyChallengeCategory;
-  metric: string;
-  title: string;
-  description: string;
-  icon: string;
-  unit: string;
-  baseline_value: number;
-  current_value: number;
-  target_value: number;
-  progress_percent: number;
-  status: 'active' | 'completed';
-  completed_at: string | null;
-  completion_stats: Record<string, unknown> | null;
-}
-
-export interface MonthlyChallengeCheckin {
-  headline: string;
-  message: string;
-  next_step: string;
-}
-
-export interface MonthlyChallengeCycle {
-  id: string;
-  month_start: string;
-  total_challenges: number;
-  completed_challenges: number;
-  completion_percent: number;
-  challenges: MonthlyChallenge[];
-  today_checkin: MonthlyChallengeCheckin | null;
-  today_checkin_date: string | null;
-  latest_checkin: MonthlyChallengeCheckin | null;
-  latest_checkin_date: string | null;
-}
-
-export const getCurrentMonthlyChallenges = () =>
-  apiRequest<MonthlyChallengeCycle>('/api/challenges/monthly/current');
-
-export const createMonthlyChallengeCheckin = () =>
-  apiRequest<{ date: string; checkin: MonthlyChallengeCheckin }>('/api/challenges/monthly/check-in', { method: 'POST' });

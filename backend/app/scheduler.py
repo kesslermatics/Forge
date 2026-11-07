@@ -181,9 +181,7 @@ async def workout_review_job():
 def start_scheduler():
     """Start the daily Forge-native briefing and hourly workout reviews.
 
-    The former 03:00 monthly-challenge check-in job is gone: its AI text is no longer shown,
-    nutrition days are backfilled from Yazio when the challenges are loaded, and the daily
-    weight entry comes from the briefing job below.
+    The weight entry for each day comes from the briefing job below.
     """
     scheduler.add_job(
         daily_briefing_job,

@@ -85,7 +85,6 @@ from app.services.ai_service import (
     generate_forge_plan_draft,
     generate_forge_plan_edit,
     generate_forge_session_composition,
-    generate_forge_session_review,
     generate_forge_session_start_coaching,
 )
 from app.services.forge_session_agent import run_session_agent
@@ -1178,7 +1177,6 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
         "started_at": session.started_at,
         "completed_at": session.completed_at,
         "start_coaching": session.start_coaching,
-        "completion_review": session.completion_review,
         "user_request": session.user_request,
         "description": session.description,
         "exercises": [
@@ -3073,112 +3071,6 @@ async def complete_session(
         session,
         clear_applied_plan_id=applied_plan_id,
     )
-    return _serialize_session(session)
-
-
-def _completion_review_context(db: Session, user: User, session: ForgeWorkoutSession) -> dict:
-    """Facts for the post-workout review: today's sets against targets and prior exposures."""
-    finished_at = session.completed_at or datetime.now(timezone.utc)
-    earlier_sessions = db.query(ForgeWorkoutSession).filter(
-        ForgeWorkoutSession.user_id == user.id,
-        ForgeWorkoutSession.status == "completed",
-        ForgeWorkoutSession.id != session.id,
-        ForgeWorkoutSession.completed_at < finished_at,
-        ForgeWorkoutSession.completed_at >= finished_at - timedelta(days=180),
-    ).order_by(ForgeWorkoutSession.completed_at.desc()).all()
-
-    def working_rows(exercise: ForgeSessionExercise) -> list[dict]:
-        return [
-            {"actual_weight_kg": item.actual_weight_kg, "actual_reps": item.actual_reps}
-            for item in exercise.sets
-            if item.set_type == "working" and item.completed and isinstance(item.actual_reps, int) and item.actual_reps > 0
-        ]
-
-    exercises = []
-    total_volume = 0.0
-    for exercise in session.exercises:
-        key = _native_progression_key(exercise.source_exercise_id, exercise.source_machine_profile_id)
-        today_rows = working_rows(exercise)
-        total_volume += sum((row["actual_weight_kg"] or 0) * row["actual_reps"] for row in today_rows)
-        previous = None
-        prior_best_e1rm = None
-        prior_best_weight = None
-        for earlier in earlier_sessions:
-            match = next((item for item in earlier.exercises if key and _native_progression_key(item.source_exercise_id, item.source_machine_profile_id) == key), None)
-            if match is None:
-                continue
-            rows = working_rows(match)
-            if not rows:
-                continue
-            e1rm = _best_e1rm(rows)
-            top = max((row["actual_weight_kg"] or 0 for row in rows), default=0)
-            if previous is None:
-                previous = {
-                    "days_ago": (finished_at.date() - (earlier.completed_at or earlier.started_at).date()).days,
-                    "sets": rows,
-                    "best_e1rm_kg": e1rm,
-                    "session_note": match.session_note,
-                }
-            if e1rm is not None:
-                prior_best_e1rm = max(prior_best_e1rm or 0, e1rm)
-            prior_best_weight = max(prior_best_weight or 0, top)
-        today_e1rm = _best_e1rm(today_rows)
-        today_top = max((row["actual_weight_kg"] or 0 for row in today_rows), default=None)
-        exercises.append({
-            "name": exercise.name,
-            "machine_profile": exercise.machine_profile_name,
-            "session_note": exercise.session_note,
-            "sets": [
-                {
-                    "type": item.set_type,
-                    "target_weight_kg": item.target_weight_kg,
-                    "target_reps": item.target_reps,
-                    "actual_weight_kg": item.actual_weight_kg,
-                    "actual_reps": item.actual_reps,
-                    "completed": item.completed,
-                }
-                for item in exercise.sets
-            ],
-            "today_best_e1rm_kg": today_e1rm,
-            "previous_exposure": previous,
-            "e1rm_record": bool(today_e1rm and prior_best_e1rm and today_e1rm > prior_best_e1rm),
-            "weight_record": bool(today_top and prior_best_weight and today_top > prior_best_weight),
-        })
-    all_sets = [item for exercise in session.exercises for item in exercise.sets]
-    duration = (finished_at - session.started_at).total_seconds() / 60 if session.started_at else None
-    return {
-        "session": {
-            "name": session.name,
-            "duration_minutes": round(duration) if duration is not None else None,
-            "completed_sets": sum(1 for item in all_sets if item.completed),
-            "total_sets": len(all_sets),
-            "working_volume_kg": round(total_volume),
-            "coach_headline": (session.start_coaching or {}).get("headline") if isinstance(session.start_coaching, dict) else None,
-        },
-        "exercises": exercises,
-    }
-
-
-@router.post("/sessions/{session_id}/completion-review", response_model=ForgeSessionResponse)
-async def generate_session_completion_review(
-    session_id: UUID,
-    force: bool = False,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Write (once) the AI review of a completed workout."""
-    session = _owned_session(db, current_user.id, session_id)
-    if session.status != "completed":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Das Training ist noch nicht abgeschlossen.")
-    if session.completion_review is None or force:
-        context = _completion_review_context(db, current_user, session)
-        try:
-            review = await generate_forge_session_review(context, current_user.language or "de")
-        except ForgeCoachingGenerationError as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-        session.completion_review = review
-        db.commit()
-        db.refresh(session)
     return _serialize_session(session)
 
 

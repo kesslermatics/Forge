@@ -19,14 +19,11 @@ Forge is a private, full-stack training coach for planning workouts, logging ses
 ### AI-assisted coaching
 
 - Gemini-assisted exercise and routine drafts that must be explicitly saved by the user.
-- Daily briefings, workout tips, session reviews, training/nutrition analysis, reports, trends, and achievements.
+- Daily briefings, workout tips, training/nutrition analysis, reports, trends, and achievements.
 - In-session coaching chat that may propose a set adjustment or exercise addition. Proposed actions are validated against the current session and the user's own library, then require an explicit apply or dismiss action.
-- Daily monthly-challenge check-ins. AI writes the coaching message, while challenge targets and numerical progress are calculated server-side.
 
 ### Progress and optional nutrition
 
-- Five persistent monthly challenge categories: consistency, strength, weight, nutrition, and quality.
-- Forge-only workout, strength, and training-quality challenge metrics.
 - Optional Yazio connection for nutrition, protein, calorie, and weight context.
 - Private progress photos with server-side image normalization and metadata stripping. Photo files require authenticated owner access and are not exposed through public URLs.
 
@@ -203,7 +200,6 @@ Do not assume that starting the server automatically migrates an older productio
 
 The FastAPI lifespan starts an APScheduler instance for:
 
-- Monthly-challenge daily check-ins at **03:00 Europe/Berlin**.
 - Daily briefings at **04:00 Europe/Berlin**.
 - Periodic Forge workout-tip generation for newly completed sessions.
 
@@ -221,7 +217,6 @@ Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-
 | Remote MCP | `/mcp` | Bearer-key-authenticated Streamable HTTP tools for external agents |
 | Forge | `/api/forge/*` | Exercise library, plans, programs, sessions, AI drafts/chat, and progress photos |
 | Coaching | `/api/briefing/*` | Briefings, workout reviews/tips, reports, analysis, and trends |
-| Monthly challenges | `/api/challenges/monthly/current`, `/api/challenges/monthly/check-in` | Current cycle, live Forge progress, and daily check-in |
 | Health | `/`, `/health` | Service availability |
 
 ## Personal API keys and MCP

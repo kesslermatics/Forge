@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { getCurrentMonthlyChallenges, createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
+import { createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
 import type { GoogleHealthStatus, PersonalApiKey, UserInfo } from '../api/api';
-import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Sparkles, Dumbbell, KeyRound, Plus, Trash2, Unplug } from 'lucide-react';
+import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Dumbbell, KeyRound, Plus, Trash2, Unplug } from 'lucide-react';
 import ApiKeyCreatedDialog from './ApiKeyCreatedDialog';
 import ConfirmDialog from './ConfirmDialog';
 import { useLanguage } from '../i18n';
@@ -23,8 +23,6 @@ export default function SettingsPage() {
     const [heightCm, setHeightCm] = useState('');
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileMsg, setProfileMsg] = useState<Feedback>(null);
-    const [creatingCheckin, setCreatingCheckin] = useState(false);
-    const [checkinMsg, setCheckinMsg] = useState<Feedback>(null);
     const [yazioEmail, setYazioEmail] = useState('');
     const [yazioPassword, setYazioPassword] = useState('');
     const [showYazioPw, setShowYazioPw] = useState(false);
@@ -99,17 +97,6 @@ export default function SettingsPage() {
         } catch (caught: unknown) {
             setProfileMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Profil konnte nicht gespeichert werden.' });
         } finally { setSavingProfile(false); }
-    };
-
-    const handleCreateCheckin = async () => {
-        setCheckinMsg(null); setCreatingCheckin(true);
-        try {
-            // Loading the current cycle creates it if needed and syncs Yazio days; no AI call.
-            await getCurrentMonthlyChallenges();
-            setCheckinMsg({ type: 'success', text: 'Monats-Challenges sind aktuell.' });
-        } catch (caught: unknown) {
-            setCheckinMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Monats-Challenges konnten nicht aktualisiert werden.' });
-        } finally { setCreatingCheckin(false); }
     };
 
     const handleSaveYazio = async (event: React.FormEvent) => {
@@ -192,12 +179,6 @@ export default function SettingsPage() {
                 <FeedMsg msg={profileMsg} />
                 <button type="submit" disabled={savingProfile} className="btn-forge w-full text-[14px]">{savingProfile ? <><Loader2 size={15} className="animate-spin" />Speichert…</> : <><UserRound size={15} />Profil speichern</>}</button>
             </form>
-        </Card>
-
-        <Card icon={<Sparkles size={15} style={{ color: SAND }} />} title="Monats-Challenges">
-            <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Erstellt deine fünf Ziele für den aktuellen Monat, falls sie noch fehlen, und aktualisiert den Fortschritt. Der Button betrifft nur deinen Account und ist beliebig wiederholbar.</p>
-            <FeedMsg msg={checkinMsg} />
-            <button type="button" onClick={() => void handleCreateCheckin()} disabled={creatingCheckin} className="btn-forge w-full text-[14px]">{creatingCheckin ? <><Loader2 size={15} className="animate-spin" />Erstellt…</> : <><Sparkles size={15} />Monat jetzt auswerten</>}</button>
         </Card>
 
         <Card icon={<Shield size={15} style={{ color: SAND }} />} title={t('settings.account')}><div className="grid grid-cols-2 gap-4 text-[13px]"><div><p style={{ color: TEXT_DIM }}>{t('settings.username')}</p><p className="mt-0.5 font-medium" style={{ color: '#f2ece0' }}>{user?.username}</p></div><div><p style={{ color: TEXT_DIM }}>Account</p><p className="mt-0.5 font-mono text-[11px] truncate" style={{ color: '#f2ece0' }}>{user?.id}</p></div></div></Card>
