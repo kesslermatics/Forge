@@ -467,3 +467,11 @@ button:focus { outline: none; }
 @media (prefers-reduced-motion: reduce) {
   .track-add-pop, .track-row-flash, .track-count-bump, .track-scan-line, .track-number { animation: none; }
 }
+
+/* ── App feel (installed PWA) ───────────────────────── */
+html { -webkit-tap-highlight-color: transparent; }
+/* No rubber-band / pull-to-refresh: the app scrolls like a native screen. */
+body { overscroll-behavior-y: none; }
+/* No double-tap zoom delay and no accidental text selection on controls. */
+button, a, label, [role="button"] { touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+input, textarea, select { -webkit-user-select: auto; user-select: auto; }

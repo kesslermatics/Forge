@@ -761,6 +761,9 @@ export const getTrackDay = (date: string) =>
 export const getTrackEntries = (date: string, slotId: string | null) =>
   apiRequest<{ items: TrackEntry[]; totals: TrackMacros }>(
     `/api/nutrition/entries?date=${encodeURIComponent(date)}${slotId ? `&slot_id=${slotId}` : '&unassigned=true'}`);
+/** Every entry of the day, across all meals. */
+export const getTrackDayEntries = (date: string) =>
+  apiRequest<{ items: TrackEntry[]; totals: TrackMacros }>(`/api/nutrition/entries?date=${encodeURIComponent(date)}`);
 export const createTrackEntry = (data: { date: string; slot_id: string | null; source: FoodSource; source_id: string; amount: number }) =>
   apiRequest<TrackEntry>('/api/nutrition/entries', { method: 'POST', body: JSON.stringify(data) });
 export const updateTrackEntry = (id: string, amount: number) =>

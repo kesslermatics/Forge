@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AlertTriangle, Loader2, X } from 'lucide-react';
+import { BackDismiss } from './navigation';
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -42,6 +43,7 @@ export default function ConfirmDialog({ open, title, description, confirmLabel, 
 
   if (!open) return null;
   return <div className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center" role="presentation">
+    <BackDismiss onClose={() => { if (!busy) onCancel(); }} />
     <button type="button" tabIndex={-1} aria-label="Dialog schließen" disabled={busy} onClick={onCancel} className="absolute inset-0 cursor-default bg-black/70 backdrop-blur-sm" />
     <div ref={dialogRef} role="alertdialog" aria-modal="true" aria-labelledby="forge-confirm-title" aria-describedby="forge-confirm-description" className="forge-confirm-dialog card-forge relative z-10 w-full max-w-sm p-5 shadow-2xl" style={{ borderColor: destructive ? 'rgba(248,113,113,0.35)' : 'rgba(232,197,138,0.34)', background: '#211c14' }}>
       <div className="flex items-start gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ color: destructive ? '#fecaca' : '#16130f', background: destructive ? 'rgba(248,113,113,0.18)' : '#e8c58a' }}><AlertTriangle size={18} /></div><div className="min-w-0 flex-1"><h2 id="forge-confirm-title" className="text-[17px] font-semibold" style={{ color: '#f2ece0' }}>{title}</h2><p id="forge-confirm-description" className="mt-2 text-[12px] leading-relaxed" style={{ color: 'rgba(242,236,226,0.62)' }}>{description}</p></div><button type="button" onClick={onCancel} disabled={busy} className="tap -mr-1 -mt-1 p-1 disabled:opacity-40" aria-label="Abbrechen" style={{ color: 'rgba(242,236,226,0.48)' }}><X size={17} /></button></div>

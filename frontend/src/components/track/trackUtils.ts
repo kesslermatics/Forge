@@ -1,4 +1,4 @@
-import type { FoodSummary, UserInfo } from '../../api/api';
+import type { FoodSummary, TrackEntry, UserInfo } from '../../api/api';
 
 export const SAND = '#e8c58a';
 export const TEXT = '#f2ece0';
@@ -59,5 +59,25 @@ export const parseAmount = (value: string): number | null => {
 export const SLOT_SUGGESTIONS = ['Frühstück', 'Mittagessen', 'Abendessen', 'Snacks', 'Pre-Workout', 'Post-Workout'];
 
 export const foodKey = (item: Pick<FoodSummary, 'source' | 'source_id'>) => `${item.source}:${item.source_id}`;
+
+/** Product page → meal page hand-over for the "added" toast after navigating back. */
+let flash: { entry: TrackEntry; at: number } | null = null;
+export function setTrackFlash(entry: TrackEntry) { flash = { entry, at: Date.now() }; }
+/** Read without consuming (safe in state initialisers); call clearTrackFlash() in an effect. */
+export function peekTrackFlash(): TrackEntry | null { return flash && Date.now() - flash.at < 8000 ? flash.entry : null; }
+export function clearTrackFlash() { flash = null; }
+
+/** Recent search results, so going back to a meal page shows the list instantly. */
+const searchCache = new Map<string, FoodSummary[]>();
+export function cachedSearch(query: string): FoodSummary[] | undefined { return searchCache.get(query.toLowerCase()); }
+export function cacheSearch(query: string, items: FoodSummary[]) {
+  searchCache.set(query.toLowerCase(), items);
+  if (searchCache.size > 40) searchCache.delete(searchCache.keys().next().value!);
+}
+
+export function timeLabel(iso: string | null): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
+}
 
 export const ATTRIBUTION = 'Produktdaten: Open Food Facts (ODbL) · Grundnahrungsmittel: Max Rubner-Institut, BLS 4.0 (CC BY 4.0)';

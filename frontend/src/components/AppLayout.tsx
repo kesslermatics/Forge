@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { Outlet, useLocation, useNavigate, NavLink } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate, useNavigationType, NavLink } from 'react-router-dom';
 import { getMe, logoutUser, isAuthenticated } from '../api/api';
 import type { UserInfo } from '../api/api';
 import { Loader2, Home, UtensilsCrossed, Camera, Dumbbell, MessageSquare, UserRound } from 'lucide-react';
@@ -10,14 +10,68 @@ import { hasLeaveGuard, requestLeave } from './forge/leaveGuard';
 
 const SAND = '#e8c58a';
 
-function ScrollToTop() {
-    const { pathname } = useLocation();
+const NAV_HEIGHT = 64;
+const scrollPositions = new Map<string, number>();
+
+/** New screens start at the top; going back restores where you were, like a native app. */
+function ScrollManager() {
+    const { key } = useLocation();
+    const navigationType = useNavigationType();
+
+    useEffect(() => {
+        if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
+    }, []);
+
+    // Layout effect: the listener is gone before the next screen's clamped scroll event fires.
+    useLayoutEffect(() => {
+        const save = () => scrollPositions.set(key, window.scrollY);
+        window.addEventListener('scroll', save, { passive: true });
+        return () => window.removeEventListener('scroll', save);
+    }, [key]);
 
     useLayoutEffect(() => {
-        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    }, [pathname]);
+        if (navigationType === 'REPLACE') return; // query/date changes on the same screen keep their position
+        const target = navigationType === 'POP' ? scrollPositions.get(key) ?? 0 : 0;
+        if (target <= 0) { window.scrollTo(0, 0); return; }
+        // Content may still be loading: retry for a moment until the page is tall enough.
+        const started = performance.now();
+        let frame = 0;
+        const attempt = () => {
+            window.scrollTo(0, target);
+            if (Math.abs(window.scrollY - target) > 2 && performance.now() - started < 900) frame = requestAnimationFrame(attempt);
+        };
+        attempt();
+        return () => cancelAnimationFrame(frame);
+    }, [key, navigationType]);
 
     return null;
+}
+
+/**
+ * Tracks the on-screen keyboard via the visual viewport. While it is open the tab bar hides and
+ * `--forge-nav-h` becomes the keyboard height, so bottom bars (amount bar, toasts) ride above it.
+ */
+function useKeyboardInset() {
+    const [keyboardOpen, setKeyboardOpen] = useState(false);
+    useEffect(() => {
+        const viewport = window.visualViewport;
+        const root = document.documentElement;
+        const update = () => {
+            const inset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+            const open = inset > 120;
+            setKeyboardOpen(open);
+            root.style.setProperty('--forge-nav-h', `${open ? Math.round(inset) : NAV_HEIGHT}px`);
+        };
+        root.style.setProperty('--forge-nav-h', `${NAV_HEIGHT}px`);
+        viewport?.addEventListener('resize', update);
+        viewport?.addEventListener('scroll', update);
+        return () => {
+            viewport?.removeEventListener('resize', update);
+            viewport?.removeEventListener('scroll', update);
+            root.style.removeProperty('--forge-nav-h');
+        };
+    }, []);
+    return keyboardOpen;
 }
 
 export default function AppLayout() {
@@ -25,6 +79,7 @@ export default function AppLayout() {
     const [user, setUser] = useState<UserInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const [lang, setLang] = useState<Lang>('de');
+    const keyboardOpen = useKeyboardInset();
 
     const refreshUser = async () => {
         const u = await getMe();
@@ -44,13 +99,13 @@ export default function AppLayout() {
     if (loading) return <div className="min-h-dvh flex items-center justify-center" style={{ background: '#16130f' }}><Loader2 className="w-7 h-7 animate-spin" style={{ color: SAND }} /></div>;
 
     return <LanguageContext.Provider value={lang}>
-        <ScrollToTop />
+        <ScrollManager />
         <div className="min-h-dvh flex flex-col" style={{ background: '#16130f' }}>
             <header className="sticky top-0 z-40 border-b" style={{ background: 'rgba(22,19,15,0.85)', backdropFilter: 'blur(20px)', borderColor: 'rgba(232,197,138,0.1)' }}>
                 <div className="max-w-2xl mx-auto flex items-center justify-between px-5 h-14"><div className="flex items-center gap-2.5"><ForgeIcon size="sm" /><span className="text-[17px] font-bold tracking-tight" style={{ color: SAND }}>Forge</span></div><button onClick={() => requestLeave(() => navigate('/settings'))} className="tap w-9 h-9 rounded-full flex items-center justify-center cursor-pointer" style={{ color: SAND, background: 'rgba(232,197,138,0.10)', border: '1px solid rgba(232,197,138,0.18)' }} aria-label="Profil und Einstellungen öffnen"><UserRound size={18} /></button></div>
             </header>
             <main className="flex-1 w-full max-w-2xl mx-auto px-4 pt-6 pb-28"><Outlet context={{ user, refreshUser }} /></main>
-            <nav className="fixed bottom-0 left-0 right-0 z-40" style={{ background: 'rgba(22,19,15,0.92)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(232,197,138,0.1)' }}>
+            <nav className="fixed bottom-0 left-0 right-0 z-40" aria-hidden={keyboardOpen || undefined} style={{ background: 'rgba(22,19,15,0.92)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(232,197,138,0.1)', transform: keyboardOpen ? 'translateY(110%)' : 'none', transition: 'transform 0.2s ease' }}>
                 <div className="max-w-2xl mx-auto grid grid-cols-5 h-16"><Tab to="/dashboard" icon={<Home size={21} />} label="Home" /><Tab to="/forge" icon={<Dumbbell size={21} />} label="Plan" /><Tab to="/chat" icon={<MessageSquare size={21} />} label="Coach" /><Tab to="/nutrition" icon={<UtensilsCrossed size={21} />} label="Ernährung" /><Tab to="/forge/progress" icon={<Camera size={21} />} label="Progress" /></div>
             </nav>
         </div>

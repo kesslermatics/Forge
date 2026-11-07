@@ -1,7 +1,7 @@
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Camera, ChevronLeft, ImagePlus, Loader2, LockKeyhole, Pencil, Save, SlidersHorizontal, Trash2, Upload, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useGoBack } from './navigation';
 import {
   createForgeProgressPhoto, deleteForgeProgressPhoto, fetchForgeProgressPhotoImage,
   listForgeProgressPhotos, updateForgeProgressPhoto,
@@ -49,7 +49,7 @@ async function compressImage(file: File): Promise<File> {
 }
 
 export default function ForgeProgressPhotosPage() {
-  const navigate = useNavigate();
+  const goBack = useGoBack('/forge');
   const inputRef = useRef<HTMLInputElement>(null);
   const [photos, setPhotos] = useState<ForgeProgressPhoto[]>([]);
   const [total, setTotal] = useState(0);
@@ -179,7 +179,7 @@ export default function ForgeProgressPhotosPage() {
 
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start gap-3">
-      <button onClick={() => navigate('/forge')} className="tap mt-1 p-1 cursor-pointer" aria-label="Zurück zu Forge" style={{ color: SAND }}><ArrowLeft size={19} /></button>
+      <button onClick={goBack} className="tap mt-1 p-1 cursor-pointer" aria-label="Zurück" style={{ color: SAND }}><ArrowLeft size={19} /></button>
       <div><p className="text-[12px] uppercase tracking-[0.18em]" style={{ color: SAND }}>Forge journal</p><h1 className="text-[27px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>Progress</h1><p className="text-[13px] mt-1" style={{ color: DIM }}>Private Snapshots, nur für deinen Account.</p></div>
     </header>
 

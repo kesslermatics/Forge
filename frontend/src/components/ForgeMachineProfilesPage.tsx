@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, Loader2, Plus, Settings2 } from 'lucide-react';
 import { getForgeExercises, getForgeMachineProfiles } from '../api/api';
+import { useGoBack } from './navigation';
 import type { ForgeExercise, ForgeMachineProfile } from '../api/api';
 import MachineProfileFormSheet from './forge/MachineProfileFormSheet';
 import { formatKg, loadBasisLabel, loadingLabel } from './forge/labels';
@@ -15,9 +16,9 @@ const weightSummary = (weights: number[]) => {
 };
 
 export default function ForgeMachineProfilesPage() {
-  const navigate = useNavigate();
   const [params] = useSearchParams();
   const returnTo = params.get('returnTo') || '/forge/exercises';
+  const goBack = useGoBack(returnTo);
   const [profiles, setProfiles] = useState<ForgeMachineProfile[]>([]);
   const [exercises, setExercises] = useState<ForgeExercise[]>([]);
   const [editing, setEditing] = useState<ForgeMachineProfile | 'new' | null>(null);
@@ -44,7 +45,7 @@ export default function ForgeMachineProfilesPage() {
 
   return <div className="space-y-4 forge-anim">
     <header className="flex items-center gap-3">
-      <button type="button" onClick={() => navigate(returnTo)} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" aria-label="Zurück" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
+      <button type="button" onClick={goBack} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" aria-label="Zurück" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
       <div className="min-w-0 flex-1"><h1 className="text-[24px] font-semibold tracking-tight" style={{ color: TEXT }}>Geräteprofile</h1><p className="text-[12px]" style={{ color: DIM }}>Damit der Coach die echten Stufen deiner Geräte kennt</p></div>
       <button type="button" onClick={() => setEditing('new')} className="tap flex h-11 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold" style={{ color: '#16130f', background: SAND }}><Plus size={16} />Neu</button>
     </header>

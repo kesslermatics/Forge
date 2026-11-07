@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, Loader2, Plus, Search, Settings2, X } from 'lucide-react';
 import { getForgeExercises, getForgePlans } from '../api/api';
+import { useGoBack } from './navigation';
 import type { ForgeExercise, ForgePlan } from '../api/api';
 import EquipmentIcon from './forge/EquipmentIcon';
 import ExerciseFormSheet from './forge/ExerciseFormSheet';
@@ -11,6 +12,7 @@ const SAND = '#e8c58a'; const TEXT = '#f2ece0'; const DIM = 'rgba(242,236,226,0.
 
 export default function ForgeExerciseLibraryPage() {
   const navigate = useNavigate();
+  const goBack = useGoBack('/forge');
   const [exercises, setExercises] = useState<ForgeExercise[]>([]);
   const [plans, setPlans] = useState<ForgePlan[]>([]);
   const [query, setQuery] = useState('');
@@ -52,7 +54,7 @@ export default function ForgeExerciseLibraryPage() {
 
   return <div className="space-y-4 forge-anim">
     <header className="flex items-center gap-3">
-      <button type="button" onClick={() => navigate('/forge')} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" aria-label="Zurück zum Plan" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
+      <button type="button" onClick={goBack} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" aria-label="Zurück" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
       <div className="min-w-0 flex-1"><h1 className="text-[24px] font-semibold tracking-tight" style={{ color: TEXT }}>Übungen</h1><p className="text-[12px]" style={{ color: DIM }}>{exercises.length} in deiner Bibliothek</p></div>
       <button type="button" onClick={() => setCreating(true)} className="tap flex h-11 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold" style={{ color: '#16130f', background: SAND }}><Plus size={16} />Neu</button>
     </header>

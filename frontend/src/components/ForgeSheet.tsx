@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef } from 'react';
+import { useBackDismiss } from './navigation';
 
 interface Props {
   label: string;
@@ -17,6 +18,8 @@ export default function ForgeSheet({ label, onClose, children, closeOnBackdrop =
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  // The phone's back button closes the sheet instead of leaving the page.
+  useBackDismiss(onClose);
 
   useEffect(() => {
     const id = Symbol(label);

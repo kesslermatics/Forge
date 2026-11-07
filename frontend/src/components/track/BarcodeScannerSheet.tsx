@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CameraOff, Flashlight, Keyboard, Loader2, ScanBarcode, Search, X } from 'lucide-react';
 import { lookupBarcode, type FoodDetail } from '../../api/api';
+import { haptic, useBackDismiss } from '../navigation';
 import { DIM, SAND, TEXT } from './trackUtils';
 
 interface Props {
@@ -33,6 +34,7 @@ export default function BarcodeScannerSheet({ onFound, onOpenSearch, onClose }: 
   const onFoundRef = useRef(onFound);
   const onCloseRef = useRef(onClose);
   useEffect(() => { onFoundRef.current = onFound; onCloseRef.current = onClose; }, [onFound, onClose]);
+  useBackDismiss(onClose);
 
   const stopCamera = useCallback(() => {
     stopRef.current();
@@ -46,7 +48,7 @@ export default function BarcodeScannerSheet({ onFound, onOpenSearch, onClose }: 
     if (busyRef.current || code.length < 6) return;
     busyRef.current = true;
     setLastCode(code); setPhase('looking'); setMessage(null);
-    navigator.vibrate?.(35);
+    haptic('success');
     try {
       const food = await lookupBarcode(code);
       stopCamera();

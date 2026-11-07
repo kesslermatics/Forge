@@ -15,6 +15,7 @@ import SortableList from './forge/SortableList';
 import Stepper from './forge/Stepper';
 import SwipeToDelete from './forge/SwipeToDelete';
 import { requestLeave, setLeaveGuard } from './forge/leaveGuard';
+import { useGoBack } from './navigation';
 import { estimateMinutes, machineCapable, muscleLabel } from './forge/labels';
 
 const SAND = '#e8c58a'; const TEXT = '#f2ece0'; const DIM = 'rgba(242,236,226,0.5)'; const BORDER = 'rgba(232,197,138,0.12)';
@@ -69,6 +70,7 @@ export default function ForgeTrainingDayPage() {
   const { planId: rawPlanId } = useParams<{ planId: string }>();
   const planId = rawPlanId && rawPlanId !== 'new' ? rawPlanId : null;
   const navigate = useNavigate();
+  const goBack = useGoBack('/forge');
   const storageKey = `${STORAGE_PREFIX}${planId ?? 'new'}`;
 
   const [plan, setPlan] = useState<ForgePlan | null>(null);
@@ -268,7 +270,7 @@ export default function ForgeTrainingDayPage() {
 
   return <div className="space-y-5 pb-28 forge-anim">
     <header className="flex items-center gap-3">
-      <button type="button" onClick={() => requestLeave(() => navigate('/forge'))} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }} aria-label="Zurück zum Plan"><ArrowLeft size={19} /></button>
+      <button type="button" onClick={() => requestLeave(goBack)} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }} aria-label="Zurück"><ArrowLeft size={19} /></button>
       <p className="min-w-0 flex-1 text-[10px] uppercase tracking-[0.18em]" style={{ color: SAND }}>{plan ? 'Trainingstag' : 'Neuer Trainingstag'}</p>
       {plan && <button type="button" onClick={() => setMenuOpen(true)} className="tap flex h-11 w-11 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }} aria-label="Weitere Aktionen"><MoreHorizontal size={20} /></button>}
     </header>

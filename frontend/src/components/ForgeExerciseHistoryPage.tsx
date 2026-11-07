@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Dumbbell, Loader2, Pencil, Trash2, TrendingUp } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useGoBack } from './navigation';
 import { deleteForgeExercise, getForgeExerciseHistory, getForgeExercises } from '../api/api';
 import type { ForgeExercise, ForgeExerciseHistory, ForgeExerciseHistorySet } from '../api/api';
 import ConfirmDialog from './ConfirmDialog';
@@ -30,6 +31,7 @@ const fullDate = (value: string) => new Intl.DateTimeFormat('de-DE', { day: '2-d
 export default function ForgeExerciseHistoryPage() {
   const { exerciseId } = useParams<{ exerciseId: string }>();
   const navigate = useNavigate();
+  const goBack = useGoBack('/forge/exercises');
   const [history, setHistory] = useState<ForgeExerciseHistory | null>(null);
   const [machineProfileId, setMachineProfileId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export default function ForgeExerciseHistoryPage() {
 
   return <div className="space-y-4 forge-anim">
     <header className="flex items-start gap-3">
-      <button type="button" onClick={() => navigate('/forge/exercises')} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }} aria-label="Zurück zur Übungsbibliothek"><ArrowLeft size={19} /></button>
+      <button type="button" onClick={goBack} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }} aria-label="Zurück"><ArrowLeft size={19} /></button>
       <div className="min-w-0 flex-1">
         <h1 className="text-[23px] font-semibold leading-tight tracking-tight" style={{ color: TEXT }}>{exercise.name}</h1>
         <p className="mt-1 text-[12px]" style={{ color: DIM }}>{muscleLabel(exercise.primary_muscle_group)}{exercise.secondary_muscle_groups.length ? ` + ${exercise.secondary_muscle_groups.map(muscleLabel).join(', ')}` : ''} · {equipmentLabel(exercise.equipment)}</p>
