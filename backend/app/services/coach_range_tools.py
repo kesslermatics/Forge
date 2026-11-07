@@ -12,9 +12,9 @@ from typing import Any, Callable
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.encryption import decrypt_value
 from app.models import ForgeWorkoutSession, User
 from app.services.forge_session_adapter import completed_forge_workouts, local_day_bounds
+from app.services.nutrition_native import nutrition_range
 from app.services.range_tools import (
     bucket_bounds,
     bucket_key,
@@ -24,7 +24,6 @@ from app.services.range_tools import (
     range_info,
     resolve_range,
 )
-from app.services.yazio_service import fetch_nutrition_range
 
 WORKOUT_MAX_DAYS = 730
 NUTRITION_MAX_DAYS = 180
@@ -183,25 +182,17 @@ def exercise_history_in_range(db: Session, user: User, args: dict) -> dict[str, 
     return enforce_budget(payload, ["sessions"])
 
 
-async def nutrition_in_range(user: User, args: dict) -> dict[str, Any]:
-    if not user.yazio_email or not user.yazio_password:
-        return {"available": False, "reason": "Yazio ist nicht verbunden."}
-    try:
-        email, password = decrypt_value(user.yazio_email), decrypt_value(user.yazio_password)
-    except Exception:
-        return {"available": False, "reason": "Yazio ist nicht verbunden."}
-
+def nutrition_in_range(db: Session, user: User, args: dict) -> dict[str, Any]:
     window = resolve_range(args, default_days=7, max_days=NUTRITION_MAX_DAYS)
     granularity, granularity_note = choose_granularity(args.get("granularity"), window["days"])
     notes = list(window["notes"])
     if granularity_note:
         notes.append(granularity_note)
 
-    fetched = await fetch_nutrition_range(email, password, window["start"], window["end"])
-    if fetched is None:
-        return {"available": False, "reason": "Yazio-Daten konnten nicht geladen werden."}
-
+    fetched = nutrition_range(db, user, window["start"], window["end"])
     days = fetched["days"]
+    if not any(item["goals"]["calories"] > 0 for item in days):
+        notes.append("Es sind keine Tagesziele hinterlegt, daher gibt es keine Zielerreichung (Dashboard, Kachel Ernährung heute).")
     logged = [item for item in days if item["logged"]]
 
     def averages(rows: list[dict]) -> dict[str, Any]:
@@ -226,13 +217,11 @@ async def nutrition_in_range(user: User, args: dict) -> dict[str, Any]:
 
     payload: dict[str, Any] = {
         "available": True,
+        "source": "forge",
         "range": range_info(window),
         "granularity": granularity,
         "summary": {"days_in_range": window["days"], **averages(logged)},
     }
-    if fetched["failed_days"]:
-        payload["failed_days"] = fetched["failed_days"]
-        notes.append(f"{fetched['failed_days']} day(s) could not be loaded from Yazio and are missing.")
 
     if granularity == "day":
         payload["days"] = [

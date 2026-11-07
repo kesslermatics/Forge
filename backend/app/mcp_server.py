@@ -98,7 +98,7 @@ async def _call(name: str, arguments: dict[str, Any] | None = None) -> dict[str,
 
 @mcp.tool()
 async def get_user_profile() -> dict[str, Any]:
-    """Read the user's profile, integration status, and current authoritative Yazio goal."""
+    """Read the user's profile, daily calorie/macro targets (nutrition_targets), integration status, and the current Yazio goal."""
     return await _call("get_user_profile")
 
 
@@ -187,7 +187,8 @@ async def get_nutrition_day(
     date: str | None = None,
     include_food_items: bool = False,
 ) -> dict[str, Any]:
-    """Read Yazio nutrition totals and goals for YYYY-MM-DD; omit date for today."""
+    """Read what was tracked in Forge on YYYY-MM-DD (omit for today): calorie/macro totals, daily targets,
+    the split by the user's own meals (e.g. Frühstück, Pre-Workout) and, with include_food_items, every food with amount and time."""
     arguments: dict[str, Any] = {"include_food_items": include_food_items}
     if date is not None:
         arguments["date"] = date
@@ -203,8 +204,8 @@ async def get_nutrition_range(
 ) -> dict[str, Any]:
     """Read nutrition for a date range (up to 180 days).
 
-    Always returns a summary with averages and goal attainment over logged days, plus either
-    daily rows or weekly/monthly periods. Long ranges are slower because Yazio is queried per day.
+    Always returns a summary with averages and target attainment over logged days, plus either
+    daily rows or weekly/monthly periods. Data comes from Forge's own food tracking.
     """
     return await _call("get_nutrition_range", _range_args(
         start_date=start_date, end_date=end_date, days=days, granularity=granularity,
@@ -280,10 +281,7 @@ async def get_strength_progression_analytics(
 async def get_metabolic_trend_analysis(
     windows: Annotated[list[Annotated[int, Field(ge=7, le=120)]] | None, Field(max_length=4, description="Window lengths in days; default [30, 60, 90]")] = None,
 ) -> dict[str, Any]:
-    """Estimate real TDEE from logged intake and weight trend, with confidence and a metabolic-adaptation check.
-
-    Slow for long windows because Yazio is queried per day.
-    """
+    """Estimate real TDEE from logged intake (Forge food tracking) and the weight trend, with confidence and a metabolic-adaptation check."""
     return await _call("get_metabolic_trend_analysis", _range_args(windows=windows))
 
 

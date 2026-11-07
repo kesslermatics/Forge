@@ -702,9 +702,13 @@ export interface MealSlot { id: string; name: string; position: number }
 
 export interface MealSlotDay extends MealSlot { totals: TrackMacros; entry_count: number }
 
+/** Daily targets; null until the user has set them. */
+export interface NutritionGoals { kcal: number; protein: number; carbs: number; fat: number }
+
 export interface TrackDay {
   date: string;
   totals: TrackMacros;
+  goals: NutritionGoals | null;
   entry_count: number;
   slots: MealSlotDay[];
   unassigned: { totals: TrackMacros; entry_count: number };
@@ -765,6 +769,10 @@ export const reorderMealSlots = (slotIds: string[]) =>
   apiRequest<{ items: MealSlot[] }>('/api/nutrition/slots/order', { method: 'PUT', body: JSON.stringify({ slot_ids: slotIds }) });
 export const deleteMealSlot = (id: string) =>
   apiRequest<void>(`/api/nutrition/slots/${id}`, { method: 'DELETE' });
+
+/** Targets apply from today on; earlier days keep the targets they had. */
+export const saveNutritionGoals = (goals: NutritionGoals) =>
+  apiRequest<{ current: NutritionGoals; valid_from: string }>('/api/nutrition/goals', { method: 'PUT', body: JSON.stringify(goals) });
 
 export const getTrackDay = (date: string) =>
   apiRequest<TrackDay>(`/api/nutrition/day?date=${encodeURIComponent(date)}`);

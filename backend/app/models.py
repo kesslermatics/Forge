@@ -49,6 +49,7 @@ class User(Base):
     weight_entries = relationship("WeightEntry", back_populates="user", cascade="all, delete-orphan")
     nutrition_meal_slots = relationship("NutritionMealSlot", back_populates="user", cascade="all, delete-orphan")
     nutrition_entries = relationship("NutritionEntry", back_populates="user", cascade="all, delete-orphan")
+    nutrition_goals = relationship("NutritionGoal", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
     forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
     forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
@@ -214,6 +215,31 @@ class NutritionEntry(Base):
 
     user = relationship("User", back_populates="nutrition_entries")
     slot = relationship("NutritionMealSlot")
+
+
+class NutritionGoal(Base):
+    """Daily calorie and macro targets, valid from a date until the next entry.
+
+    Changing the targets adds (or overwrites today's) row, so past days keep being measured
+    against the targets that applied back then. The oldest row also covers earlier days.
+    """
+
+    __tablename__ = "nutrition_goals"
+    __table_args__ = (
+        UniqueConstraint("user_id", "valid_from", name="uq_nutrition_goal_user_from"),
+        CheckConstraint("kcal > 0", name="ck_nutrition_goal_kcal"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    valid_from = Column(Date, nullable=False)
+    kcal = Column(Float, nullable=False)
+    protein = Column(Float, nullable=False)
+    carbs = Column(Float, nullable=False)
+    fat = Column(Float, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="nutrition_goals")
 
 
 class ForgeExercise(Base):

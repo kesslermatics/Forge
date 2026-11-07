@@ -25,7 +25,8 @@ Forge is a private, full-stack training coach for planning workouts, logging ses
 ### Progress and optional nutrition
 
 - Native food tracking with user-defined meal slots (e.g. Frühstück, Pre-Workout), hybrid search (trigram + embeddings), barcode scanning and a product page with full nutrient breakdown.
-- Optional Yazio connection for nutrition, protein, calorie, and weight context.
+- Daily calorie and macro targets (valid from a date, history kept), a dashboard tile with today's intake and a manual body-weight entry (autosave). The Coach and MCP tools read this data directly.
+- Optional Yazio connection; it remains only for the old nutrition pages and the diet-phase goal text.
 - Private progress photos with server-side image normalization and metadata stripping. Photo files require authenticated owner access and are not exposed through public URLs.
 
 ## Architecture
@@ -244,7 +245,7 @@ https://forge.kesslermatics.com/mcp
 
 **Plan tools** let an agent manage the training setup: `list_plans`, `create_plan`, `update_plan` (exercises, order, warm-up and working sets), `delete_plan` (needs `confirm=true`), `get_training_program` / `update_training_program` (rotation or weekly split), and `list_exercises` / `create_exercise` / `update_exercise`. Workout tracking itself stays in the Forge app; MCP cannot start, edit or complete sessions.
 
-**Analytics tools** (also available to the built-in Coach) return compact, estimate-labelled results: `get_volume_and_frequency_analysis` (weekly effective sets per muscle vs. MEV/MAV/MRV), `get_strength_progression_analytics` (e1RM, tonnage, plateaus), `get_metabolic_trend_analysis` (TDEE from intake and weight trend), `get_macro_adherence_score`, `get_sleep_and_performance_correlation`, `get_performance_correlations` (training time, previous-day steps) and `project_goal_timeline` (target-weight corridor and what-if scenarios). Nutrition-based tools query Yazio per day, so long windows take a few seconds.
+**Analytics tools** (also available to the built-in Coach) return compact, estimate-labelled results: `get_volume_and_frequency_analysis` (weekly effective sets per muscle vs. MEV/MAV/MRV), `get_strength_progression_analytics` (e1RM, tonnage, plateaus), `get_metabolic_trend_analysis` (TDEE from intake and weight trend), `get_macro_adherence_score`, `get_sleep_and_performance_correlation`, `get_performance_correlations` (training time, previous-day steps) and `project_goal_timeline` (target-weight corridor and what-if scenarios). Nutrition-based tools read Forge's own food tracking (`NutritionEntry`, `NutritionGoal`); steps come from Google Health.
 
 MCP runs in the same backend process and calls account-scoped services directly—there is no second MCP service, subprocess, database credential, or HTTP loopback adapter. The built-in Coach uses the same read tools but has no write tools.
 

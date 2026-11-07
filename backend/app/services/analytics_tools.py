@@ -4,8 +4,8 @@ Every tool takes ``(db, user, args)`` and returns a compact, JSON-serialisable d
 read data; results are estimates and each response names its assumptions and data coverage so a
 caller never mistakes a thin data set for a firm conclusion.
 
-Data sources: completed Forge sessions (local DB), ``WeightEntry`` (local DB), Yazio daily
-summaries (live) and Google Health sleep (live).
+Data sources: completed Forge sessions, ``WeightEntry``, ``NutritionEntry`` / ``NutritionGoal``
+(all local DB), Google Health sleep and steps (live).
 """
 from __future__ import annotations
 
@@ -18,17 +18,18 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.encryption import decrypt_value
 from app.models import GoogleHealthConnection, User, WeightEntry
 from app.services.ai_service import _canonical_forge_muscle
 from app.services.forge_session_adapter import completed_forge_workouts
 from app.services.google_health_service import (
+    GOOGLE_HEALTH_READ_ACTIVITY_SCOPE,
     GOOGLE_HEALTH_READ_SLEEP_SCOPE,
     connection_has_scope,
     fetch_sleep,
+    fetch_steps,
 )
+from app.services.nutrition_native import nutrition_range
 from app.services.range_tools import enforce_budget, mean, parse_iso_date, range_info, resolve_range
-from app.services.yazio_service import fetch_nutrition_range
 
 KCAL_PER_KG = 7700.0
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -135,20 +136,43 @@ def _resolve_end(args: dict) -> date:
 
 # ── Data hooks (patched in tests) ────────────────────────────────────────────────
 
-def _yazio_credentials(user: User) -> tuple[str, str] | None:
-    if not user.yazio_email or not user.yazio_password:
-        return None
-    try:
-        return decrypt_value(user.yazio_email), decrypt_value(user.yazio_password)
-    except Exception:
-        return None
+def _load_nutrition(db: Session, user: User, start: date, end: date) -> dict:
+    """Per-day intake and targets from Forge's own food tracking."""
+    return nutrition_range(db, user, start, end)
 
 
-async def _load_nutrition(user: User, start: date, end: date) -> dict | None:
-    credentials = _yazio_credentials(user)
-    if credentials is None:
-        return None
-    return await fetch_nutrition_range(*credentials, start, end)
+async def _load_steps(db: Session, user: User, days: list[date]) -> dict[str, Any]:
+    """Daily steps from Google Health. Returns {"available", "steps": {date: count}, "reason"}."""
+    connection = db.query(GoogleHealthConnection).filter(
+        GoogleHealthConnection.user_id == user.id,
+        GoogleHealthConnection.status == "connected",
+    ).first()
+    if connection is None:
+        return {"available": False, "reason": "Google Health ist nicht verbunden."}
+    if not connection_has_scope(connection, GOOGLE_HEALTH_READ_ACTIVITY_SCOPE):
+        return {"available": False, "reason": "Das Google-Konto muss neu verbunden werden, um Schritte zu lesen."}
+
+    steps: dict[str, int] = {}
+    ordered = sorted(set(days))
+    if not ordered:
+        return {"available": True, "steps": steps}
+
+    def store(day: date, result: dict) -> None:
+        if isinstance(result, dict) and result.get("available") and result.get("steps"):
+            steps[day.isoformat()] = int(result["steps"])
+
+    # The first call may refresh the OAuth token; do it alone, then fetch the rest in small batches.
+    first = await fetch_steps(connection, db, ordered[0])
+    if not first.get("available") and (first.get("needs_reauth") or connection.status != "connected"):
+        return {"available": False, "reason": first.get("reason")}
+    store(ordered[0], first)
+    for index in range(1, len(ordered), 4):
+        batch = ordered[index:index + 4]
+        results = await asyncio.gather(*(fetch_steps(connection, db, day) for day in batch), return_exceptions=True)
+        for day, result in zip(batch, results):
+            if isinstance(result, dict):
+                store(day, result)
+    return {"available": True, "steps": steps}
 
 
 async def _load_sleep(db: Session, user: User, days: list[date]) -> dict[str, Any]:
@@ -189,12 +213,6 @@ async def _load_sleep(db: Session, user: User, days: list[date]) -> dict[str, An
             if isinstance(result, dict):
                 store(day, result)
     return {"available": True, "nights": nights}
-
-
-def _nutrition_unavailable(user: User) -> dict | None:
-    if _yazio_credentials(user) is None:
-        return {"available": False, "reason": "Yazio ist nicht verbunden."}
-    return None
 
 
 # ── Shared: trend-adjusted performance index ─────────────────────────────────────
@@ -493,15 +511,10 @@ async def metabolic_trend(db: Session, user: User, args: dict) -> dict[str, Any]
     windows = sorted({_bounded(w, 0, 7, 120) for w in raw if isinstance(w, (int, float)) and not isinstance(w, bool)}) if isinstance(raw, list) else []
     windows = [w for w in windows if w] or [30, 60, 90]
     longest = windows[-1]
-    unavailable = _nutrition_unavailable(user)
-    if unavailable:
-        return unavailable
 
     end = date.today()
     start = end - timedelta(days=longest - 1)
-    fetched = await _load_nutrition(user, start, end)
-    if fetched is None:
-        return {"available": False, "reason": "Yazio-Daten konnten nicht geladen werden."}
+    fetched = _load_nutrition(db, user, start, end)
     days = fetched["days"]
 
     def estimate(window_start: date, window_end: date) -> dict[str, Any]:
@@ -573,17 +586,14 @@ async def metabolic_trend(db: Session, user: User, args: dict) -> dict[str, Any]
 # ── 4. Macro adherence ───────────────────────────────────────────────────────────
 
 async def macro_adherence(db: Session, user: User, args: dict) -> dict[str, Any]:
-    unavailable = _nutrition_unavailable(user)
-    if unavailable:
-        return unavailable
     window = resolve_range(args, default_days=30, max_days=120)
     tolerance = float(_bounded(args.get("tolerance_pct"), 5, 1, 30))
-    fetched = await _load_nutrition(user, window["start"], window["end"])
-    if fetched is None:
-        return {"available": False, "reason": "Yazio-Daten konnten nicht geladen werden."}
+    fetched = _load_nutrition(db, user, window["start"], window["end"])
     logged = [d for d in fetched["days"] if d["logged"]]
     if not logged:
         return {"available": True, "range": range_info(window), "logging": {"logged_days": 0}, "notes": ["No logged nutrition in this range."]}
+    if not any(d["goals"]["calories"] > 0 for d in logged):
+        return {"available": False, "reason": "Es sind noch keine Kalorien- und Makroziele hinterlegt (Dashboard, Kachel Ernährung heute)."}
 
     cal_days = [d for d in logged if d["goals"]["calories"] > 0]
     prot_days = [d for d in logged if d["goals"]["protein"] > 0]
@@ -750,28 +760,24 @@ async def performance_correlations(db: Session, user: User, args: dict) -> dict[
     payload["training_time"] = bucket_stats(timing)
 
     steps_note = None
-    unavailable = _nutrition_unavailable(user)
-    if unavailable:
-        steps_note = unavailable["reason"] + " Step analysis skipped."
+    loaded = await _load_steps(db, user, [window["start"] - timedelta(days=1) + timedelta(days=i) for i in range(window["days"] + 1)])
+    if not loaded["available"]:
+        steps_note = f"{loaded.get('reason') or 'Schritte nicht verfügbar.'} Step analysis skipped."
     else:
-        fetched = await _load_nutrition(user, window["start"] - timedelta(days=1), window["end"])
-        if fetched is None:
-            steps_note = "Yazio-Daten konnten nicht geladen werden. Step analysis skipped."
+        steps = loaded["steps"]
+        pairs = [(steps[(item["date"] - timedelta(days=1)).isoformat()], item["index"])
+                 for item in indices if (item["date"] - timedelta(days=1)).isoformat() in steps]
+        if len(pairs) < 6:
+            steps_note = "Fewer than 6 workouts have step data for the previous day (Google Health steps)."
         else:
-            steps = {d["date"]: d["steps"] for d in fetched["days"] if d["steps"] and d["steps"] > 0}
-            pairs = [(steps[(item["date"] - timedelta(days=1)).isoformat()], item["index"])
-                     for item in indices if (item["date"] - timedelta(days=1)).isoformat() in steps]
-            if len(pairs) < 6:
-                steps_note = "Fewer than 6 workouts have step data for the previous day (Yazio steps)."
-            else:
-                groups: dict[str, list[float]] = {"under 8,000 steps": [], "8,000-15,000 steps": [], "over 15,000 steps": []}
-                for count, index in pairs:
-                    groups["under 8,000 steps" if count < 8000 else "8,000-15,000 steps" if count <= 15000 else "over 15,000 steps"].append(index)
-                payload["previous_day_steps"] = {
-                    "source": "yazio",
-                    "groups": bucket_stats(groups),
-                    "correlation": _pearson([float(p[0]) for p in pairs], [p[1] for p in pairs]),
-                }
+            groups: dict[str, list[float]] = {"under 8,000 steps": [], "8,000-15,000 steps": [], "over 15,000 steps": []}
+            for count, index in pairs:
+                groups["under 8,000 steps" if count < 8000 else "8,000-15,000 steps" if count <= 15000 else "over 15,000 steps"].append(index)
+            payload["previous_day_steps"] = {
+                "source": "google_health",
+                "groups": bucket_stats(groups),
+                "correlation": _pearson([float(p[0]) for p in pairs], [p[1] for p in pairs]),
+            }
     if steps_note:
         payload["notes"] = [steps_note]
     payload["interpretation"] = "Associations only. Small groups (fewer than ~5 workouts) are unreliable."
@@ -866,21 +872,15 @@ async def goal_projection(db: Session, user: User, args: dict) -> dict[str, Any]
         results.append(entry)
     payload["scenarios"] = results
 
-    unavailable = _nutrition_unavailable(user)
-    if not unavailable:
-        try:
-            fetched = await _load_nutrition(user, today - timedelta(days=27), today)
-        except Exception:
-            fetched = None
-        if fetched:
-            logged = [d for d in fetched["days"] if d["logged"]]
-            intake = mean(d["calories"] for d in logged)
-            if intake is not None and len(logged) >= 14:
-                payload["energy_context"] = {
-                    "avg_intake_kcal_28d": round(intake),
-                    "estimated_tdee_kcal": round(intake - trend["slope_per_day"] * KCAL_PER_KG),
-                    "logged_days": len(logged),
-                }
+    fetched = _load_nutrition(db, user, today - timedelta(days=27), today)
+    logged = [d for d in fetched["days"] if d["logged"]]
+    intake = mean(d["calories"] for d in logged)
+    if intake is not None and len(logged) >= 14:
+        payload["energy_context"] = {
+            "avg_intake_kcal_28d": round(intake),
+            "estimated_tdee_kcal": round(intake - trend["slope_per_day"] * KCAL_PER_KG),
+            "logged_days": len(logged),
+        }
     payload["assumptions"] = (
         f"Linear projection from the weight-trend slope; {int(KCAL_PER_KG)} kcal per kg; steps burn about {kcal_per_step:.3f} kcal each at your weight. "
         "Real progress usually slows over time (water, metabolic adaptation), so treat the later date as more realistic."
@@ -931,7 +931,7 @@ ANALYTICS_DECLARATIONS = [
     ),
     _declaration(
         "get_metabolic_trend_analysis",
-        "Estimates real TDEE from logged intake and the weight trend over 30/60/90 day windows (custom `windows` possible, 7-120 days), with confidence and a metabolic-adaptation check. Slow for long windows because Yazio is queried per day.",
+        "Estimates real TDEE from logged intake and the weight trend over 30/60/90 day windows (custom `windows` possible, 7-120 days), with confidence and a metabolic-adaptation check. Intake comes from Forge's own food tracking.",
         {"windows": {"type": "array", "items": {"type": "integer", "minimum": 7, "maximum": 120}, "maxItems": 4}},
     ),
     _declaration(

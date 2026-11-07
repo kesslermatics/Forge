@@ -27,6 +27,7 @@ from app.models import ChatConversation, ChatMessage, User, WeightEntry, GoogleH
 from app.services.analytics_tools import ANALYTICS_DECLARATIONS, ANALYTICS_STATUS_TEXT, ANALYTICS_TOOLS
 from app.services.coach_range_tools import exercise_history_in_range, nutrition_in_range, workouts_in_range
 from app.services.forge_session_adapter import completed_forge_workouts, forge_training_plan_context
+from app.services.nutrition_native import berlin_today, day_summary, goal_for_day, goals_native, load_goals
 from app.services.yazio_service import fetch_yazio_summary, resolve_yazio_goal_context
 from app.services.google_health_service import (
     fetch_steps as google_fetch_steps,
@@ -64,7 +65,7 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_user_profile",
-            "description": "Read the user's basic profile, Yazio connection status, and the current Yazio goal.",
+            "description": "Read the user's basic profile, the daily calorie and macro targets set in Forge (nutrition_targets, kcal/protein/carbs/fat or null), Yazio connection status, and the current Yazio goal.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -130,7 +131,10 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_nutrition_day",
-            "description": "Read Yazio nutrition totals, goals and optionally food items for one date in YYYY-MM-DD format.",
+            "description": (
+                "Read what the user tracked in Forge on one date (YYYY-MM-DD): calorie and macro totals, the daily targets "
+                "(goals, null when none are set), the split by the user's own meals and optionally every tracked food with amount and time."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -146,10 +150,9 @@ TOOL_DECLARATIONS = [
         "function": {
             "name": "get_nutrition_range",
             "description": (
-                "Read nutrition for a date range (start_date/end_date or the last `days`, max 180 days). "
-                "Always includes a summary with averages and goal attainment over logged days. "
-                "granularity 'day' lists each day (max 31 days), 'week' or 'month' returns averaged periods; 'auto' chooses by range length. "
-                "Long ranges take longer because Yazio is queried per day."
+                "Read tracked nutrition for a date range (start_date/end_date or the last `days`, max 180 days). "
+                "Always includes a summary with averages and target attainment over logged days. "
+                "granularity 'day' lists each day (max 31 days), 'week' or 'month' returns averaged periods; 'auto' chooses by range length."
             ),
             "parameters": {
                 "type": "object",
@@ -287,6 +290,7 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
             "has_yazio": bool(user.yazio_email and user.yazio_password),
             "has_training_plan": bool(user.training_plan),
         }
+        result["nutrition_targets"] = goals_native(goal_for_day(load_goals(db, user.id), berlin_today()))
         credentials = _require_yazio(user)
         if credentials is None:
             result["yazio_goal"] = {"available": False, "source": "unavailable", "goal": None, "profile": {}}
@@ -347,29 +351,11 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
         return await google_fetch_sleep(google_connection, db, target)
 
     if name == "get_nutrition_day":
-        if credentials is None:
-            return {"available": False, "reason": "Yazio ist nicht verbunden."}
-        target = _parse_date(args.get("date"), date.today())
-        data = await fetch_yazio_summary(*credentials, target_date=target)
-        if not data:
-            return {"available": False, "date": target.isoformat(), "reason": "Yazio-Daten konnten nicht geladen werden."}
-        result = {
-            "available": True,
-            "date": data.get("date", target.isoformat()),
-            "totals": data.get("totals", {}),
-            "goals": data.get("goals", {}),
-            "meals": data.get("meals", {}),
-            "steps": data.get("steps", 0),
-            "activity_kcal": data.get("activity_kcal", 0),
-        }
-        if args.get("include_food_items") is True:
-            result["food_items"] = {
-                key: items[:12] for key, items in (data.get("food_items") or {}).items()
-            }
-        return result
+        target = _parse_date(args.get("date"), berlin_today())
+        return day_summary(db, user, target, include_items=args.get("include_food_items") is True)
 
     if name == "get_nutrition_range":
-        return await nutrition_in_range(user, args)
+        return nutrition_in_range(db, user, args)
 
     if name == "get_weight_history":
         days = _bounded_int(args.get("days"), 90, 7, 365)

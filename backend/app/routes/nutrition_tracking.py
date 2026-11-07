@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import NutritionEntry, NutritionMealSlot, User
-from app.services import food_catalog
+from app.services import food_catalog, nutrition_native
 from app.services.food_catalog import CatalogUnavailable
 
 router = APIRouter(prefix="/api/nutrition", tags=["Nutrition tracking"])
@@ -46,6 +46,13 @@ class SlotUpdate(SlotCreate):
 
 class SlotOrder(BaseModel):
     slot_ids: list[UUID] = Field(min_length=1, max_length=MAX_SLOTS)
+
+
+class GoalsUpdate(BaseModel):
+    kcal: float = Field(ge=800, le=10000)
+    protein: float = Field(ge=0, le=600)
+    carbs: float = Field(ge=0, le=1500)
+    fat: float = Field(ge=0, le=600)
 
 
 class EntryCreate(BaseModel):
@@ -215,6 +222,22 @@ def delete_slot(slot_id: UUID, current_user: User = Depends(get_current_user), d
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ── daily targets ────────────────────────────────────────────────────────────────
+
+@router.get("/goals")
+def get_goals(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The targets that apply today (null until the user sets them)."""
+    goal = nutrition_native.goal_for_day(nutrition_native.load_goals(db, current_user.id), nutrition_native.berlin_today())
+    return {"current": nutrition_native.goals_native(goal), "valid_from": goal.valid_from.isoformat() if goal else None}
+
+
+@router.put("/goals")
+def put_goals(data: GoalsUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Set calorie and macro targets from today on; earlier days keep their old targets."""
+    goal = nutrition_native.save_goals(db, current_user, round(data.kcal), round(data.protein), round(data.carbs), round(data.fat))
+    return {"current": nutrition_native.goals_native(goal), "valid_from": goal.valid_from.isoformat()}
+
+
 # ── day and entries ──────────────────────────────────────────────────────────────
 
 @router.get("/day")
@@ -230,6 +253,7 @@ def get_day(date: date_type = Query(...), current_user: User = Depends(get_curre
     return {
         "date": date.isoformat(),
         "totals": _totals(entries),
+        "goals": nutrition_native.goals_native(nutrition_native.goal_for_day(nutrition_native.load_goals(db, current_user.id), date)),
         "entry_count": len(entries),
         "slots": [{**_serialize_slot(slot), "totals": _totals(by_slot.get(slot.id, [])), "entry_count": len(by_slot.get(slot.id, []))}
                   for slot in slots],

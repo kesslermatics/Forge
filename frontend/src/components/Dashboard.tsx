@@ -6,11 +6,11 @@ import {
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getWeightHistory,
-    getTodayNutrition, getTrackDay, getConsistency, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
+    getTrackDay, getConsistency, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
 } from '../api/api';
 import type {
     UserInfo,
-    WeightHistoryEntry, TodayNutrition, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
+    WeightHistoryEntry, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
     Loader2, Flame, Plus, ChevronRight,
@@ -20,6 +20,8 @@ import ConfirmDialog from './ConfirmDialog';
 import ForgeAlternativeStartSheet from './ForgeAlternativeStartSheet';
 import ForgePlanImagePreview from './ForgePlanImagePreview';
 import WeightEntryCard from './WeightEntryCard';
+import GoalsSheet from './track/GoalsSheet';
+import { MacroPills } from './track/shared';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -148,8 +150,9 @@ export default function Dashboard() {
 
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [weightLatest, setWeightLatest] = useState<WeightHistoryEntry | null>(null);
-    const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
     const [trackDay, setTrackDay] = useState<TrackDay | null>(null);
+    const [goalsOpen, setGoalsOpen] = useState(false);
+    const [trackFailed, setTrackFailed] = useState(false);
     const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
     const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
     const [alternativePickerOpen, setAlternativePickerOpen] = useState(false);
@@ -192,9 +195,8 @@ export default function Dashboard() {
     }, [weightStartDate]);
 
     useEffect(() => {
-        getTodayNutrition().then(setTodayNutrition).catch(() => { });
         getTrackDay(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()))
-            .then(setTrackDay).catch(() => { });
+            .then(setTrackDay).catch(() => setTrackFailed(true));
         getConsistency().then(setConsistency).catch(() => { });
         refreshForgeDashboard();
 
@@ -223,8 +225,9 @@ export default function Dashboard() {
     const hour = new Date().getHours();
     const greeting = hour < 11 ? 'Guten Morgen' : hour < 17 ? 'Servus' : 'Guten Abend';
 
-    const nt = todayNutrition && !todayNutrition.error ? todayNutrition : null;
-    const calPct = nt ? nt.totals.calories / (nt.goals.calories || 1) : 0;
+    const goals = trackDay?.goals ?? null;
+    const calPct = trackDay && goals ? trackDay.totals.kcal / (goals.kcal || 1) : 0;
+    const kcalLeft = trackDay && goals ? Math.round(goals.kcal - trackDay.totals.kcal) : 0;
     const weightValues = weightHistory.map(w => w.weight_kg);
     const weightCurrent = weightValues[weightValues.length - 1];
     const weightDelta = weightValues.length >= 2 ? weightCurrent - weightValues[0] : null;
@@ -335,47 +338,52 @@ export default function Dashboard() {
                     <ChevronRight size={17} className="shrink-0" style={{ color: SAND }} />
                 </button>
 
-                {/* ── Kalorien-Hero + Makros ── */}
-                {nt && (
-                    <section className="card-forge p-5 forge-anim forge-d1">
-                        {/* Header row */}
+                {/* ── Ernährung heute (eigenes Tracking) ── */}
+                {trackDay ? (
+                    <section className="card-forge p-5 forge-anim forge-d1" aria-label="Ernährung heute">
                         <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-2 text-[12px]" style={{ color: TEXT_DIM }}>
+                            <button type="button" onClick={() => navigate('/nutrition/track')} className="tap flex items-center gap-2 text-[12px]" style={{ color: TEXT_DIM }}>
                                 <Flame size={13} style={{ color: SAND }} />
                                 Ernährung heute
-                            </div>
-                            <span className="text-[12px]" style={{ color: TEXT_DIM }}>
-                                {Math.max(0, Math.round(nt.goals.calories - nt.totals.calories))} kcal übrig
-                            </span>
+                                <ChevronRight size={12} />
+                            </button>
+                            <button type="button" onClick={() => setGoalsOpen(true)} className="tap flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
+                                {goals ? <><Pencil size={10} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : 'Ziele festlegen'}
+                            </button>
                         </div>
 
-                        {/* Big calorie number */}
                         <div className="flex items-baseline gap-2 mb-2">
                             <span className="text-[42px] font-light leading-none tabular-nums" style={{ color: '#f2ece0' }}>
-                                {Math.round(nt.totals.calories)}
+                                {Math.round(trackDay.totals.kcal).toLocaleString('de-DE')}
                             </span>
                             <span className="text-[15px]" style={{ color: TEXT_DIM }}>
-                                / {nt.goals.calories} kcal
+                                {goals ? `/ ${goals.kcal.toLocaleString('de-DE')} kcal` : 'kcal'}
                             </span>
                         </div>
 
-                        {/* Wide progress bar */}
-                        <div className="h-1.5 rounded-full overflow-hidden mb-5" style={{ background: 'rgba(255,247,235,0.08)' }}>
-                            <div className="h-full rounded-full" style={{
-                                width: `${Math.min(calPct, 1) * 100}%`,
-                                background: SAND,
-                                transition: 'width 1s cubic-bezier(0.22,1,0.36,1)',
-                            }} />
-                        </div>
-
-                        {/* Macro rows */}
-                        <div className="space-y-3">
-                            <MacroBar label="Protein" current={nt.totals.protein} goal={nt.goals.protein} color="#f87171" />
-                            <MacroBar label="Carbs" current={nt.totals.carbs} goal={nt.goals.carbs} color="#fbbf24" />
-                            <MacroBar label="Fett" current={nt.totals.fat} goal={nt.goals.fat} color="#34d399" />
-                        </div>
+                        {goals ? <>
+                            <div className="h-1.5 rounded-full overflow-hidden mb-5" style={{ background: 'rgba(255,247,235,0.08)' }}>
+                                <div className="h-full rounded-full" style={{
+                                    width: `${Math.min(calPct, 1) * 100}%`,
+                                    background: calPct > 1.05 ? '#fbbf24' : SAND,
+                                    transition: 'width 1s cubic-bezier(0.22,1,0.36,1)',
+                                }} />
+                            </div>
+                            <div className="space-y-3">
+                                <MacroBar label="Protein" current={trackDay.totals.protein} goal={goals.protein} color="#f87171" />
+                                <MacroBar label="Carbs" current={trackDay.totals.carbs} goal={goals.carbs} color="#fbbf24" />
+                                <MacroBar label="Fett" current={trackDay.totals.fat} goal={goals.fat} color="#34d399" />
+                            </div>
+                        </> : <div className="mt-4"><MacroPills totals={trackDay.totals} /></div>}
                     </section>
+                ) : !trackFailed && (
+                    <div className="forge-skeleton h-[212px] rounded-3xl" aria-hidden="true" />
                 )}
+                {goalsOpen && <GoalsSheet
+                    current={goals}
+                    onSaved={(saved) => setTrackDay(day => day ? { ...day, goals: saved } : day)}
+                    onClose={() => setGoalsOpen(false)}
+                />}
 
                 {/* ── Gewicht eintragen ── */}
                 <WeightEntryCard latest={weightLatest} onSaved={handleWeightSaved} />
