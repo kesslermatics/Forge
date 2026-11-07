@@ -14,6 +14,8 @@ A run is idempotent:
   3. embed every searchable row whose embedding text changed since the last run
   4. build indexes and ANALYZE
 
+Daily changes between full runs are applied by the backend job app/services/food_catalog_sync.py.
+
 Usage (from backend/):
   pip install -r tools/requirements-food-import.txt
   FOOD_CATALOG_DATABASE_URL=postgresql://... OPENROUTER_API_KEY=... \
@@ -23,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
-import hashlib
 import io
 import json
 import logging
@@ -46,10 +47,15 @@ from openai import OpenAI
 from pgvector.psycopg import register_vector
 from pgvector.utils import HalfVector
 
+# Row mapping is shared with the backend (daily delta sync, live barcode lookup).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.services.food_catalog_rows import (  # noqa: E402
+    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, OFF_EXTRA, ROW_COLUMNS as STAGE_COLUMNS, build_off_row, clean_text,
+    embed_text_for, off_extras, text_hash,
+)
+
 log = logging.getLogger("food_catalog_import")
 
-EMBEDDING_MODEL = os.getenv("FOOD_EMBEDDING_MODEL", "google/gemini-embedding-2")
-EMBEDDING_DIMENSIONS = int(os.getenv("FOOD_EMBEDDING_DIMENSIONS", "768"))
 OFF_PARQUET_URL = "https://huggingface.co/datasets/openfoodfacts/product-database/resolve/main/food.parquet?download=true"
 BLS_DOWNLOAD_PAGE = "https://blsdb.de/download"
 USER_AGENT = "ForgeFoodCatalog/1.0 (private, non-commercial; contact via forge.kesslermatics.com)"
@@ -59,46 +65,6 @@ BLS_CORE = {"ENERCC": "kcal", "PROT625": "protein", "CHO": "carbs", "FAT": "fat"
             "FIBT": "fiber", "FASAT": "saturated", "NACL": "salt"}
 # Energy in kJ and nitrogen duplicate information that the UI never needs.
 BLS_SKIP = {"ENERCJ", "NT"}
-
-# Open Food Facts nutriments worth showing. OFF normalises every "100g" value to grams,
-# so the factor converts grams into the display unit.
-OFF_EXTRA = {
-    "monounsaturated-fat": ("Einfach ungesättigte Fettsäuren", "g", 1, "Fette"),
-    "polyunsaturated-fat": ("Mehrfach ungesättigte Fettsäuren", "g", 1, "Fette"),
-    "trans-fat": ("Transfettsäuren", "g", 1, "Fette"),
-    "omega-3-fat": ("Omega-3-Fettsäuren", "g", 1, "Fette"),
-    "cholesterol": ("Cholesterin", "mg", 1e3, "Fette"),
-    "starch": ("Stärke", "g", 1, "Kohlenhydrate"),
-    "lactose": ("Laktose", "g", 1, "Kohlenhydrate"),
-    "polyols": ("Mehrwertige Alkohole", "g", 1, "Kohlenhydrate"),
-    "added-sugars": ("Zugesetzter Zucker", "g", 1, "Kohlenhydrate"),
-    "alcohol": ("Alkohol", "g", 1, "Sonstiges"),
-    "caffeine": ("Koffein", "mg", 1e3, "Sonstiges"),
-    "sodium": ("Natrium", "mg", 1e3, "Mineralstoffe"),
-    "potassium": ("Kalium", "mg", 1e3, "Mineralstoffe"),
-    "calcium": ("Calcium", "mg", 1e3, "Mineralstoffe"),
-    "magnesium": ("Magnesium", "mg", 1e3, "Mineralstoffe"),
-    "phosphorus": ("Phosphor", "mg", 1e3, "Mineralstoffe"),
-    "iron": ("Eisen", "mg", 1e3, "Mineralstoffe"),
-    "zinc": ("Zink", "mg", 1e3, "Mineralstoffe"),
-    "iodine": ("Iod", "µg", 1e6, "Mineralstoffe"),
-    "selenium": ("Selen", "µg", 1e6, "Mineralstoffe"),
-    "copper": ("Kupfer", "mg", 1e3, "Mineralstoffe"),
-    "manganese": ("Mangan", "mg", 1e3, "Mineralstoffe"),
-    "vitamin-a": ("Vitamin A", "µg", 1e6, "Vitamine"),
-    "vitamin-d": ("Vitamin D", "µg", 1e6, "Vitamine"),
-    "vitamin-e": ("Vitamin E", "mg", 1e3, "Vitamine"),
-    "vitamin-k": ("Vitamin K", "µg", 1e6, "Vitamine"),
-    "vitamin-c": ("Vitamin C", "mg", 1e3, "Vitamine"),
-    "vitamin-b1": ("Vitamin B1", "mg", 1e3, "Vitamine"),
-    "vitamin-b2": ("Vitamin B2", "mg", 1e3, "Vitamine"),
-    "vitamin-pp": ("Niacin", "mg", 1e3, "Vitamine"),
-    "vitamin-b6": ("Vitamin B6", "mg", 1e3, "Vitamine"),
-    "vitamin-b9": ("Folat", "µg", 1e6, "Vitamine"),
-    "vitamin-b12": ("Vitamin B12", "µg", 1e6, "Vitamine"),
-    "biotin": ("Biotin", "µg", 1e6, "Vitamine"),
-    "pantothenic-acid": ("Pantothensäure", "mg", 1e3, "Vitamine"),
-}
 
 SCHEMA_SQL = [
     "CREATE EXTENSION IF NOT EXISTS vector",
@@ -166,68 +132,6 @@ INDEX_SQL = [
     # Approximate nearest neighbour search over cosine distance; vectors are L2-normalised.
     "CREATE INDEX IF NOT EXISTS foods_embedding_hnsw ON foods USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64)",
 ]
-
-STAGE_COLUMNS = [
-    "source", "source_id", "name", "name_alt", "brand", "category", "unit", "kcal", "protein", "carbs", "fat",
-    "sugar", "fiber", "saturated", "salt", "nutrients", "serving_g", "serving_label", "package_g", "quantity_label",
-    "ingredients", "allergens", "scans", "completeness", "quality", "countries", "embed_text", "embed_hash",
-]
-
-
-# ── helpers ──────────────────────────────────────────────────────────────────────
-
-def clean_text(value, limit: int | None = None) -> str | None:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return None
-    text = re.sub(r"\s+", " ", str(value)).strip()
-    if not text:
-        return None
-    return text[:limit] if limit else text
-
-
-def clean_brand(value) -> str | None:
-    """'Nutella, Ferrero, FERRERO' -> 'Nutella, Ferrero' (dedupe case-insensitively, keep two)."""
-    text = clean_text(value)
-    if not text:
-        return None
-    seen, parts = set(), []
-    for part in text.split(","):
-        part = part.strip()
-        if part and part.lower() not in seen:
-            seen.add(part.lower())
-            parts.append(part)
-    return ", ".join(parts[:2])[:120] or None
-
-
-def embed_text_for(name: str, brand: str | None, name_alt: str | None) -> str:
-    parts = [name]
-    if brand:
-        parts.append(brand)
-    if name_alt and name_alt.lower() != name.lower():
-        parts.append(name_alt)
-    return " | ".join(parts)
-
-
-def text_hash(value: str) -> str:
-    return hashlib.sha1(f"{EMBEDDING_MODEL}|{EMBEDDING_DIMENSIONS}|{value}".encode("utf-8")).hexdigest()
-
-
-def finite(value) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def quality_for(kcal, protein, carbs, fat) -> str:
-    if None in (kcal, protein, carbs, fat):
-        return "incomplete"
-    if min(kcal, protein, carbs, fat) < 0 or protein + carbs + fat > 100.5 or kcal > 900:
-        return "suspect"
-    if kcal > 20 and abs(kcal - (4 * protein + 4 * carbs + 9 * fat)) > 0.25 * kcal:
-        return "suspect"
-    return "ok"
 
 
 # ── BLS ──────────────────────────────────────────────────────────────────────────
@@ -376,48 +280,21 @@ def off_rows(csv_path: Path):
     """Yield normalised catalog rows from the flattened OFF CSV."""
     for chunk in pd.read_csv(csv_path, dtype={"code": str}, chunksize=50_000, keep_default_na=False, na_values=[""]):
         for record in chunk.to_dict("records"):
-            code = clean_text(record.get("code"))
-            name_de = clean_text(record.get("name_de"), 300)
-            name_main = clean_text(record.get("name_main"), 300)
-            name = name_de or name_main
-            if not code or not name:
-                continue
-            brand = clean_brand(record.get("brands"))
-            core = {field: finite(record.get(field)) for field in ("kcal", "protein", "carbs", "fat", "sugar", "fiber", "saturated", "salt")}
-            extras = []
             try:
-                for item in json.loads(record.get("extras") or "[]") or []:
-                    meta = OFF_EXTRA.get(item.get("n"))
-                    value = finite(item.get("v"))
-                    if meta and value is not None and value >= 0:
-                        label, unit, factor, group = meta
-                        extras.append({"k": item["n"], "l": label, "u": unit, "v": round(value * factor, 4), "g": group})
-            except (TypeError, ValueError):
+                extras = off_extras((item.get("n"), item.get("v")) for item in json.loads(record.get("extras") or "[]") or [])
+            except (TypeError, ValueError, AttributeError):
                 extras = []
-            quantity = clean_text(record.get("quantity"), 60)
-            unit_raw = (clean_text(record.get("quantity_unit")) or "").lower()
-            serving_label = clean_text(record.get("serving_size"), 60)
-            is_liquid = unit_raw in {"ml", "cl", "l"} or bool(re.search(r"\d\s*(ml|cl|l)\b", f"{quantity or ''} {serving_label or ''}", re.I))
-            serving_g = finite(record.get("serving_g"))
-            package_g = finite(record.get("package_g"))
-            name_alt = name_main if name_de and name_main and name_main.lower() != name_de.lower() else None
-            text = embed_text_for(name, brand, name_alt)
-            yield {
-                "source": "off", "source_id": code, "name": name, "name_alt": name_alt, "brand": brand,
-                "category": clean_text(record.get("category"), 120), "unit": "ml" if is_liquid else "g", **core,
-                "nutrients": json.dumps(extras, ensure_ascii=False),
-                "serving_g": serving_g if serving_g and 0 < serving_g <= 2000 else None,
-                "serving_label": serving_label,
-                "package_g": package_g if package_g and 0 < package_g <= 10000 else None,
-                "quantity_label": quantity,
-                "ingredients": clean_text(record.get("ingredients"), 3000),
-                "allergens": clean_text(record.get("allergens"), 500),
-                "scans": int(finite(record.get("scans")) or 0),
-                "completeness": finite(record.get("completeness")),
-                "quality": quality_for(core["kcal"], core["protein"], core["carbs"], core["fat"]),
-                "countries": clean_text(record.get("countries"), 300),
-                "embed_text": text, "embed_hash": text_hash(text),
-            }
+            row = build_off_row(
+                code=record.get("code"), name_de=record.get("name_de"), name_main=record.get("name_main"),
+                brands=record.get("brands"), category=record.get("category"), quantity_unit=record.get("quantity_unit"),
+                quantity=record.get("quantity"), package_g=record.get("package_g"), serving_g=record.get("serving_g"),
+                serving_size=record.get("serving_size"),
+                core={field: record.get(field) for field in ("kcal", "protein", "carbs", "fat", "sugar", "fiber", "saturated", "salt")},
+                extras=extras, ingredients=record.get("ingredients"), allergens=record.get("allergens"),
+                scans=record.get("scans"), completeness=record.get("completeness"), countries=record.get("countries"),
+            )
+            if row:
+                yield row
 
 
 # ── database writes ──────────────────────────────────────────────────────────────

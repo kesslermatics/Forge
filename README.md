@@ -216,6 +216,8 @@ FOOD_CATALOG_DATABASE_URL=postgresql://... OPENROUTER_API_KEY=... python tools/f
 
 The tool downloads BLS and the ~8 GB OFF Parquet file when `--bls-xlsx` / `--off-parquet` are not given.
 
+Daily refresh: a Dokploy schedule on the backend app runs `python -m app.services.food_catalog_sync` at 04:30 (Europe/Berlin). It applies the official [OFF delta exports](https://static.openfoodfacts.org/data/delta/) (one small JSONL file per day, kept about two weeks) newer than the watermark in `catalog_meta.off_delta_until`, upserts German products, removes obsolete ones and embeds new or renamed rows. Runs are logged in `import_runs` (`details.kind = off_delta`). If the job is down for more than two weeks, rerun the full import. BLS updates (about yearly) stay a manual full import.
+
 ## API overview
 
 Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-tool route also accepts `X-API-Key: <personal-key>` for MCP adapters. Personal keys can be created and revoked only through a JWT-authenticated profile session. The generated documentation at `/docs` is the authoritative reference for request and response schemas.

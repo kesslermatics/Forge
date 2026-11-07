@@ -8,6 +8,7 @@ own tracking history can be taken into account.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import json
 import logging
 import math
 import re
@@ -23,6 +24,7 @@ from sqlalchemy.engine import Engine
 
 from app.config import settings
 from app.database import _normalise_db_url
+from app.services.food_catalog_rows import ROW_COLUMNS, off_row_from_product
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +296,11 @@ def lookup_barcode(code: str) -> dict[str, Any] | None:
 
 
 def _fetch_off_live(code: str) -> dict[str, Any] | None:
-    fields = "code,product_name,product_name_de,brands,nutriments,serving_quantity,serving_size,product_quantity,product_quantity_unit,quantity,ingredients_text_de,ingredients_text,allergens_tags,countries_tags,unique_scans_n"
+    fields = ",".join([
+        "code", "product_name", "product_name_de", "brands", "categories_tags", "nutriments", "nutrition", "serving_quantity", "serving_size",
+        "product_quantity", "product_quantity_unit", "quantity", "ingredients_text_de", "ingredients_text", "allergens_tags",
+        "countries_tags", "unique_scans_n", "completeness",
+    ])
     try:
         response = httpx.get(OFF_PRODUCT_URL.format(code=code), params={"fields": fields},
                              headers={"User-Agent": OFF_USER_AGENT}, timeout=6.0)
@@ -307,44 +313,23 @@ def _fetch_off_live(code: str) -> dict[str, Any] | None:
     product = payload.get("product") if payload.get("status") in (1, "success_with_warnings", "success") else None
     if not product:
         return None
-    nutriments = product.get("nutriments") or {}
-
-    def nutrient(key: str) -> float | None:
-        return _round(nutriments.get(f"{key}_100g"), 3)
-
-    name = (product.get("product_name_de") or product.get("product_name") or "").strip()
-    if not name:
+    row = off_row_from_product({**product, "code": product.get("code") or code})
+    if row is None:
         return None
-    kcal, protein, carbs, fat = nutrient("energy-kcal"), nutrient("proteins"), nutrient("carbohydrates"), nutrient("fat")
-    quality = "incomplete" if None in (kcal, protein, carbs, fat) else "ok"
-    quantity = (product.get("quantity") or "")[:60] or None
-    unit = "ml" if (product.get("product_quantity_unit") or "").lower() in {"ml", "cl", "l"} or re.search(r"\d\s*(ml|cl|l)\b", quantity or "", re.I) else "g"
-    brand = ", ".join(dict.fromkeys(part.strip() for part in (product.get("brands") or "").split(",") if part.strip())) or None
-    row = {
-        "source": "off", "source_id": str(product.get("code") or code), "name": name[:300], "brand": (brand or "")[:120] or None,
-        "unit": unit, "kcal": kcal, "protein": protein, "carbs": carbs, "fat": fat,
-        "sugar": nutrient("sugars"), "fiber": nutrient("fiber"), "saturated": nutrient("saturated-fat"), "salt": nutrient("salt"),
-        "serving_g": _round(product.get("serving_quantity")), "serving_label": (product.get("serving_size") or "")[:60] or None,
-        "package_g": _round(product.get("product_quantity")), "quantity_label": quantity,
-        "ingredients": (product.get("ingredients_text_de") or product.get("ingredients_text") or "")[:3000] or None,
-        "allergens": ",".join(product.get("allergens_tags") or [])[:500] or None,
-        "scans": int(product.get("unique_scans_n") or 0), "quality": quality,
-        "countries": ",".join((product.get("countries_tags") or [])[:6]) or None,
-    }
+    # Cached for good; the daily delta sync embeds it so it also shows up in search.
     try:
+        columns = ", ".join(ROW_COLUMNS)
+        values = ", ".join(f"CAST(:{column} AS jsonb)" if column == "nutrients" else f":{column}" for column in ROW_COLUMNS)
         with _engine().begin() as conn:
-            stored = conn.execute(text("""
-                INSERT INTO foods (source, source_id, name, brand, unit, kcal, protein, carbs, fat, sugar, fiber, saturated, salt,
-                                   serving_g, serving_label, package_g, quantity_label, ingredients, allergens, scans, quality, countries)
-                VALUES (:source, :source_id, :name, :brand, :unit, :kcal, :protein, :carbs, :fat, :sugar, :fiber, :saturated, :salt,
-                        :serving_g, :serving_label, :package_g, :quantity_label, :ingredients, :allergens, :scans, :quality, :countries)
+            stored = conn.execute(text(f"""
+                INSERT INTO foods ({columns}) VALUES ({values})
                 ON CONFLICT (source, source_id) DO NOTHING
                 RETURNING id
             """), row).fetchone()
         logger.info("Stored live OFF product %s (%s)", row["source_id"], "new" if stored else "exists")
     except Exception:
         logger.warning("Could not cache live OFF product %s", code, exc_info=True)
-    return get_food("off", row["source_id"]) or {**row, "id": None, "name_alt": None, "category": None, "nutrients": []}
+    return get_food("off", row["source_id"]) or {**row, "id": None, "nutrients": json.loads(row["nutrients"])}
 
 
 def servings(food: dict[str, Any]) -> list[dict[str, Any]]:
