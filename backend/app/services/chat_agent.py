@@ -23,7 +23,7 @@ def _openai_client() -> AsyncOpenAI:
 from sqlalchemy.orm import Session
 
 from app.encryption import decrypt_value
-from app.models import ChatConversation, ChatMessage, MorningBriefing, User, WeightEntry, WorkoutReview, GoogleHealthConnection
+from app.models import ChatConversation, ChatMessage, MorningBriefing, User, WeightEntry, GoogleHealthConnection
 from app.services.analytics_tools import ANALYTICS_DECLARATIONS, ANALYTICS_STATUS_TEXT, ANALYTICS_TOOLS
 from app.services.coach_range_tools import exercise_history_in_range, nutrition_in_range, workouts_in_range
 from app.services.forge_session_adapter import completed_forge_workouts, forge_training_plan_context
@@ -210,7 +210,7 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_coaching_memory",
-            "description": "Read recent saved morning briefings, workout reviews and workout tips.",
+            "description": "Read recent saved morning briefings.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -404,17 +404,8 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
         briefings = db.query(MorningBriefing).filter(
             MorningBriefing.user_id == user.id,
         ).order_by(MorningBriefing.date.desc()).limit(limit).all()
-        reviews = db.query(WorkoutReview).filter(
-            WorkoutReview.user_id == user.id,
-        ).order_by(WorkoutReview.workout_date.desc()).limit(limit).all()
         return {
             "briefings": [{"date": item.date.isoformat(), "data": item.briefing_data} for item in briefings],
-            "workout_reviews": [{
-                "workout_name": item.workout_name,
-                "date": item.workout_date.isoformat() if item.workout_date else None,
-                "review": item.review_data,
-                "tips": item.tips_data,
-            } for item in reviews],
         }
 
     return {"error": f"Unbekanntes Tool: {name}"}

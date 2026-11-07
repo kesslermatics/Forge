@@ -16,15 +16,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, User, MorningBriefing, WorkoutReview, WeightEntry
+from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, User, MorningBriefing, WeightEntry
 from app.schemas import BriefingResponse
 from app.services.aggregator import gather_user_context
-from app.services.ai_service import generate_daily_briefing, generate_session_review, generate_workout_tips
+from app.services.ai_service import generate_daily_briefing
 from app.services.chat_agent import refresh_chat_summary, run_chat_agent
 from app.services.weather_service import fetch_weather
 from app.services.forge_session_adapter import (
     completed_forge_workout_dates,
-    forge_plan_template,
 )
 from app.services.yazio_service import fetch_nutrition_dates, fetch_yazio_summary
 from app.services.analytics_service import (
@@ -216,177 +215,6 @@ async def get_weather(
     return data
 
 
-@router.post("/session-review")
-async def get_session_review(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Session review — always generated live via Gemini so the user gets fresh analysis.
-    The result is saved to the DB for coaching memory in future reviews.
-    """
-    context = await gather_user_context(current_user, db)
-
-    # Resolve the review row for the newest Forge session, not merely the newest
-    # legacy cache entry with the same routine name.
-    workouts = context.get("workouts") or []
-    latest_workout = workouts[0] if workouts else None
-    latest_review_row = None
-    if latest_workout:
-        latest_review_row = (
-            db.query(WorkoutReview)
-            .filter(
-                WorkoutReview.user_id == current_user.id,
-                WorkoutReview.hevy_workout_id == latest_workout["id"],
-            )
-            .first()
-        )
-
-    # Coaching memory: previous reviews and tips from this Forge routine.
-    previous_review_list = []
-    previous_tips_list = []
-    latest_workout_name = latest_workout.get("title", "") if latest_workout else ""
-
-    if latest_workout_name:
-        prev_reviews = (
-            db.query(WorkoutReview)
-            .filter(
-                WorkoutReview.user_id == current_user.id,
-                WorkoutReview.workout_name == latest_workout_name,
-            )
-            .order_by(WorkoutReview.workout_date.desc())
-            .limit(3)
-            .all()
-        )
-        previous_review_list = [r.review_data for r in prev_reviews if r.review_data]
-        previous_tips_list = [r.tips_data for r in prev_reviews if r.tips_data]
-
-    result = await generate_session_review(
-        yazio_data=context["yazio"],
-        workout_data=context["workouts"],
-        language=current_user.language or "de",
-        previous_reviews=previous_review_list,
-        previous_tips=previous_tips_list,
-    )
-
-    # Save the review against this exact native session for later coaching memory.
-    if latest_review_row:
-        latest_review_row.review_data = result
-        latest_review_row.is_read = True
-        db.commit()
-    elif latest_workout:
-        try:
-            workout_date = datetime.fromisoformat(latest_workout["start_time"].replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            workout_date = datetime.utcnow()
-        db.add(WorkoutReview(
-            user_id=current_user.id,
-            hevy_workout_id=latest_workout["id"],
-            workout_name=latest_workout_name or "Workout",
-            workout_date=workout_date,
-            review_data=result,
-            tips_data=None,
-            is_read=True,
-        ))
-        db.commit()
-
-    return result
-
-
-@router.get("/workout-reviews")
-async def get_workout_reviews(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    limit: int = Query(20, ge=1, le=50),
-):
-    """
-    Return the user's pre-generated workout reviews from the DB.
-    Each item includes the review + tips data, sorted newest first.
-    """
-    reviews = (
-        db.query(WorkoutReview)
-        .filter(WorkoutReview.user_id == current_user.id)
-        .order_by(WorkoutReview.workout_date.desc())
-        .limit(limit)
-        .all()
-    )
-
-    result = []
-    for r in reviews:
-        result.append({
-            "id": str(r.id),
-            "hevy_workout_id": r.hevy_workout_id,
-            "workout_name": r.workout_name,
-            "workout_date": r.workout_date.isoformat() if r.workout_date else "",
-            "is_read": r.is_read,
-            "has_review": r.review_data is not None,
-            "has_tips": r.tips_data is not None,
-            "review_data": r.review_data,
-            "tips_data": r.tips_data,
-            "created_at": r.created_at.isoformat() if r.created_at else "",
-        })
-
-    return result
-
-
-@router.post("/workout-reviews/{review_id}/read")
-async def mark_review_read(
-    review_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Mark a specific workout review as read."""
-    review = (
-        db.query(WorkoutReview)
-        .filter(WorkoutReview.id == review_id, WorkoutReview.user_id == current_user.id)
-        .first()
-    )
-    if not review:
-        raise HTTPException(status_code=404, detail="Review not found")
-
-    review.is_read = True
-    db.commit()
-    return {"message": "Marked as read"}
-
-
-@router.get("/unread-count")
-async def get_unread_count(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Return the count of unread workout reviews for badge display."""
-    count = (
-        db.query(WorkoutReview)
-        .filter(
-            WorkoutReview.user_id == current_user.id,
-            WorkoutReview.is_read == False,
-        )
-        .count()
-    )
-    return {"unread_count": count}
-
-
-@router.post("/trigger-review")
-async def trigger_review_check(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Manual trigger — immediately checks for new workouts and generates
-    reviews for up to 5 that don't have one yet.
-    Already-reviewed workouts are ALWAYS skipped (zero token waste).
-    """
-    from app.scheduler import _generate_workout_review_for_user
-
-    generated = await _generate_workout_review_for_user(
-        current_user, db, max_new_reviews=5
-    )
-    return {
-        "message": f"{generated} new review(s) generated" if generated else "All workouts already reviewed — no tokens used",
-        "new_reviews": generated,
-    }
-
-
 @router.get("/workouts")
 async def get_workout_list(
     current_user: User = Depends(get_current_user),
@@ -409,88 +237,6 @@ async def get_workout_list(
             "duration_min": w.get("duration_min"),
             "exercise_names": exercise_names,
         })
-
-    return result
-
-
-class WorkoutTipsRequest(BaseModel):
-    workout_name: str
-    force_regenerate: bool = False
-
-
-@router.post("/workout-tips")
-async def get_workout_tips(
-    body: WorkoutTipsRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Workout tips — forward-looking per-set targets for a workout type.
-    Returns pre-generated tips from scheduler if available, otherwise generates live.
-    When force_regenerate=True, always generates fresh tips (ignoring cache).
-    """
-    workout_name = body.workout_name.strip()
-    if not workout_name:
-        raise HTTPException(status_code=400, detail="Workout name is required")
-
-    # Check if we have pre-generated tips from the scheduler (skip if force regenerate)
-    if not body.force_regenerate:
-        existing = (
-            db.query(WorkoutReview)
-            .filter(
-                WorkoutReview.user_id == current_user.id,
-                WorkoutReview.workout_name == workout_name,
-            )
-            .order_by(WorkoutReview.workout_date.desc())
-            .first()
-        )
-        # Only use cached tips if they have ACTUAL exercise targets (not empty fallback)
-        if (existing and existing.tips_data
-                and existing.tips_data.get("exercise_targets")
-                and len(existing.tips_data["exercise_targets"]) > 0):
-            if not existing.is_read:
-                existing.is_read = True
-                db.commit()
-            return existing.tips_data
-
-    # No cached tips — generate live
-    context = await gather_user_context(current_user, db)
-    workouts = context.get("workouts") or []
-
-    # Prefer the plan that produced the latest matching native session. A name-only
-    # fallback is deliberately rejected when multiple Forge plans share that name.
-    matching_session = next(
-        (workout for workout in workouts if workout.get("title", "").strip().lower() == workout_name.lower()),
-        None,
-    )
-    routine_exercises = forge_plan_template(
-        db,
-        current_user.id,
-        workout_name,
-        matching_session.get("source_plan_id") if matching_session else None,
-    )
-
-    # No pre-generated tips (or old schema) — generate live with coaching memory (last 3)
-    previous_reviews = (
-        db.query(WorkoutReview)
-        .filter(
-            WorkoutReview.user_id == current_user.id,
-            WorkoutReview.workout_name == workout_name,
-        )
-        .order_by(WorkoutReview.workout_date.desc())
-        .limit(3)
-        .all()
-    )
-    previous_tips_list = [r.tips_data for r in previous_reviews if r.tips_data]
-
-    result = await generate_workout_tips(
-        yazio_data=context["yazio"],
-        workout_data=workouts,
-        workout_name=workout_name,
-        language=current_user.language or "de",
-        previous_tips_list=previous_tips_list,
-        routine_exercises=routine_exercises,
-    )
 
     return result
 

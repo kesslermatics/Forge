@@ -47,7 +47,6 @@ class User(Base):
 
     # Relationships
     briefings = relationship("MorningBriefing", back_populates="user", cascade="all, delete-orphan")
-    workout_reviews = relationship("WorkoutReview", back_populates="user", cascade="all, delete-orphan")
     weight_entries = relationship("WeightEntry", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
     forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
@@ -154,34 +153,6 @@ class MorningBriefing(Base):
 
     def __repr__(self):
         return f"<MorningBriefing(user_id={self.user_id}, date={self.date})>"
-
-
-class WorkoutReview(Base):
-    """
-    Stores AI-generated session reviews & workout tips per Hevy workout.
-    Generated automatically by the background scheduler.
-    """
-
-    __tablename__ = "workout_reviews"
-    __table_args__ = (
-        UniqueConstraint("user_id", "hevy_workout_id", name="uq_user_workout"),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    hevy_workout_id = Column(String(64), nullable=False, index=True)   # Unique workout ID from Hevy
-    workout_name = Column(String(255), nullable=False, index=True)     # e.g. "Push Tag", "Leg Day"
-    workout_date = Column(DateTime(timezone=True), nullable=False)     # When the workout took place
-    review_data = Column(JSON, nullable=False)                         # Full AI session review JSON
-    tips_data = Column(JSON, nullable=True)                            # Full AI workout tips JSON
-    is_read = Column(Boolean, nullable=False, server_default="false")  # Unread badge support
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    user = relationship("User", back_populates="workout_reviews")
-
-    def __repr__(self):
-        return f"<WorkoutReview(user_id={self.user_id}, workout={self.workout_name}, date={self.workout_date})>"
 
 
 class WeightEntry(Base):

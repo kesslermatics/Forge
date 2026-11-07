@@ -245,7 +245,7 @@ async def get_weight_history(
 async def get_coaching_memory(
     limit: Annotated[int, Field(ge=1, le=10)] = 5,
 ) -> dict[str, Any]:
-    """Read recent saved briefings, workout reviews, and coaching tips."""
+    """Read recent saved morning briefings."""
     return await _call("get_coaching_memory", {"limit": limit})
 
 
