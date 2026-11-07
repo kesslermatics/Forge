@@ -157,34 +157,6 @@ class TrainingPlanResponse(BaseModel):
     training_plan: list[str]
 
 
-# ============ Briefing Schemas ============
-
-class NutritionReview(BaseModel):
-    """Per-macro nutrition breakdown from the AI."""
-    calories: str
-    protein: str
-    carbs: str
-    fat: str
-
-
-class BriefingData(BaseModel):
-    """The AI-generated briefing payload."""
-    nutrition_review: NutritionReview
-    workout_suggestion: str
-    daily_mission: str
-
-
-class BriefingResponse(BaseModel):
-    """Schema returned to frontend for today's briefing."""
-    id: UUID
-    date: date
-    briefing_data: Any     # raw JSON from the AI
-    created_at: Any
-
-    class Config:
-        from_attributes = True
-
-
 # ============ Native Forge Training Planning ============
 
 ForgeEquipment = Literal["none", "barbell", "dumbbell", "kettlebell", "cable", "machine", "other"]

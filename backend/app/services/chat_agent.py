@@ -23,7 +23,7 @@ def _openai_client() -> AsyncOpenAI:
 from sqlalchemy.orm import Session
 
 from app.encryption import decrypt_value
-from app.models import ChatConversation, ChatMessage, MorningBriefing, User, WeightEntry, GoogleHealthConnection
+from app.models import ChatConversation, ChatMessage, User, WeightEntry, GoogleHealthConnection
 from app.services.analytics_tools import ANALYTICS_DECLARATIONS, ANALYTICS_STATUS_TEXT, ANALYTICS_TOOLS
 from app.services.coach_range_tools import exercise_history_in_range, nutrition_in_range, workouts_in_range
 from app.services.forge_session_adapter import completed_forge_workouts, forge_training_plan_context
@@ -56,7 +56,6 @@ TOOL_STATUS_TEXT = {
     "get_steps": "Ich prüfe deine Schritte und Aktivität.",
     "get_sleep": "Ich schaue mir deine Schlafdaten an.",
     "get_weight_history": "Ich schaue mir deinen Gewichtsverlauf an.",
-    "get_coaching_memory": "Ich rufe frühere Coach-Empfehlungen ab.",
 }
 
 # OpenAI tool declarations (JSON Schema format)
@@ -201,20 +200,6 @@ TOOL_DECLARATIONS = [
                 "type": "object",
                 "properties": {
                     "days": {"type": "integer", "minimum": 7, "maximum": 365},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_coaching_memory",
-            "description": "Read recent saved morning briefings.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": [],
             },
@@ -397,15 +382,6 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
             "entries": [{"date": entry.date.isoformat(), "weight_kg": round(entry.weight_kg, 2)} for entry in entries],
             "start_weight_kg": entries[0].weight_kg if entries else None,
             "current_weight_kg": entries[-1].weight_kg if entries else None,
-        }
-
-    if name == "get_coaching_memory":
-        limit = _bounded_int(args.get("limit"), 5, 1, 10)
-        briefings = db.query(MorningBriefing).filter(
-            MorningBriefing.user_id == user.id,
-        ).order_by(MorningBriefing.date.desc()).limit(limit).all()
-        return {
-            "briefings": [{"date": item.date.isoformat(), "data": item.briefing_data} for item in briefings],
         }
 
     return {"error": f"Unbekanntes Tool: {name}"}

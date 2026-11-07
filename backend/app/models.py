@@ -46,7 +46,6 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    briefings = relationship("MorningBriefing", back_populates="user", cascade="all, delete-orphan")
     weight_entries = relationship("WeightEntry", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
     forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
@@ -132,27 +131,6 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     conversation = relationship("ChatConversation", back_populates="messages")
-
-
-class MorningBriefing(Base):
-    """Stores the AI-generated daily morning briefing per user."""
-
-    __tablename__ = "morning_briefings"
-    __table_args__ = (
-        UniqueConstraint("user_id", "date", name="uq_user_date"),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    date = Column(Date, nullable=False, index=True)
-    briefing_data = Column(JSON, nullable=False)             # Full AI JSON response
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    user = relationship("User", back_populates="briefings")
-
-    def __repr__(self):
-        return f"<MorningBriefing(user_id={self.user_id}, date={self.date})>"
 
 
 class WeightEntry(Base):

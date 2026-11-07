@@ -34,8 +34,5 @@ boto3==1.43.0
 # AI / OpenAI
 openai>=1.50.0
 
-# Background Scheduler
-apscheduler>=3.10.4
-
 # Development (optional)
 httpx>=0.26.0  # For testing

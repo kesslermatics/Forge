@@ -241,14 +241,6 @@ async def get_weight_history(
     return await _call("get_weight_history", {"days": days})
 
 
-@mcp.tool()
-async def get_coaching_memory(
-    limit: Annotated[int, Field(ge=1, le=10)] = 5,
-) -> dict[str, Any]:
-    """Read recent saved morning briefings."""
-    return await _call("get_coaching_memory", {"limit": limit})
-
-
 # ── Analytics ────────────────────────────────────────────────────────────────────
 
 class GoalScenario(BaseModel):

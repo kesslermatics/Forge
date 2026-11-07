@@ -149,14 +149,7 @@ export const startGoogleHealthConnection = () =>
 export const disconnectGoogleHealth = () =>
   apiRequest<GoogleHealthStatus>('/user/google-health', { method: 'DELETE' });
 
-/* ── Briefing endpoints ─────────────────────────────────── */
-
-export interface NutritionReview {
-  calories: string;
-  protein: string;
-  carbs: string;
-  fat: string;
-}
+/* ── Coaching endpoints ─────────────────────────────────── */
 
 export interface ExerciseHistory {
   date: string;
@@ -199,53 +192,10 @@ export interface NextSession {
   suggested_exercises: string[];
 }
 
-export interface BriefingData {
-  nutrition_review: NutritionReview;
-  workout_suggestion: string;
-  weight_trend: string;
-  daily_mission?: string;
-  weather_note: string;
-  muscle_recovery: Record<string, number>;
-}
-
 export interface SessionReviewData {
   last_session: LastSession | null;
   next_session: NextSession | null;
 }
-
-export interface Briefing {
-  id: string;
-  date: string;
-  briefing_data: BriefingData;
-  created_at: string;
-}
-
-export const getTodayBriefing = (lat?: number, lon?: number) => {
-  const params = lat != null && lon != null ? `?lat=${lat}&lon=${lon}` : '';
-  return apiRequest<Briefing>(`/api/briefing/today${params}`);
-};
-
-export const regenerateBriefing = (lat?: number, lon?: number) => {
-  const params = lat != null && lon != null ? `?lat=${lat}&lon=${lon}` : '';
-  return apiRequest<Briefing>(`/api/briefing/regenerate${params}`, { method: 'POST' });
-};
-
-
-/* ── Weather ────────────────────────────────────────────── */
-
-export interface WeatherData {
-  temperature_c: number | null;
-  temp_min_c: number | null;
-  temp_max_c: number | null;
-  windspeed_kmh: number | null;
-  condition: string;
-  daily_condition: string;
-  emoji: string;
-  is_day: boolean;
-}
-
-export const getWeather = (lat: number, lon: number) =>
-  apiRequest<WeatherData>(`/api/briefing/weather?lat=${lat}&lon=${lon}`);
 
 /* ── Workout picker + tips ──────────────────────────────── */
 

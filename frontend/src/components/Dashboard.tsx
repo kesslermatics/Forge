@@ -5,18 +5,17 @@ import {
 } from 'recharts';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
-    getTodayBriefing, regenerateBriefing, getWeather, getWeightHistory,
+    getWeightHistory,
     getTodayNutrition, getConsistency, getActiveForgeSession, getForgeToday, startForgeSession, completeForgeCourse, deleteForgeSession,
 } from '../api/api';
 import type {
-    UserInfo, Briefing, WeatherData,
+    UserInfo,
     WeightHistoryEntry, TodayNutrition, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
-    RefreshCw, Loader2, Flame,
+    Loader2, Flame,
     Dumbbell, Scale, Pencil,
 } from 'lucide-react';
-import { useLanguage } from '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 import ForgeAlternativeStartSheet from './ForgeAlternativeStartSheet';
 import ForgePlanImagePreview from './ForgePlanImagePreview';
@@ -145,14 +144,6 @@ function MacroBar({ label, current, goal, color }: { label: string; current: num
 export default function Dashboard() {
     const { user } = useOutletContext<LayoutContext>();
     const navigate = useNavigate();
-    const { lang } = useLanguage();
-
-    const [briefing, setBriefing] = useState<Briefing | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [regenerating, setRegenerating] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [weather, setWeather] = useState<WeatherData | null>(null);
-    const [location, setLocation] = useState<{ lat: number; lon: number } | null>(null);
 
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
@@ -178,31 +169,6 @@ export default function Dashboard() {
         setWeightStartDate(val);
         localStorage.setItem('weightStartDate', val);
     };
-
-    /* load briefing + secondary data */
-    useEffect(() => {
-        let resolved = false;
-        const load = (loc: typeof location) => {
-            if (resolved) return;
-            resolved = true;
-            if (loc) {
-                setLocation(loc);
-                getWeather(loc.lat, loc.lon).then(setWeather).catch(() => { });
-            }
-            getTodayBriefing(loc?.lat, loc?.lon)
-                .then(setBriefing)
-                .catch((e: any) => setError(e.message || 'Fehler beim Laden'))
-                .finally(() => setLoading(false));
-        };
-        if ('geolocation' in navigator) {
-            navigator.geolocation.getCurrentPosition(
-                p => load({ lat: p.coords.latitude, lon: p.coords.longitude }),
-                () => load(null),
-                { timeout: 5000, enableHighAccuracy: false },
-            );
-            setTimeout(() => load(null), 6000);
-        } else { load(null); }
-    }, []); // eslint-disable-line
 
     const refreshForgeDashboard = useCallback(() => {
         getForgeToday().then(setForgeToday).catch(() => { });
@@ -240,16 +206,6 @@ export default function Dashboard() {
         };
     }, [refreshForgeDashboard]);
 
-    const handleRegenerate = async () => {
-        setRegenerating(true); setError(null);
-        try { setBriefing(await regenerateBriefing(location?.lat, location?.lon)); }
-        catch (e: any) { setError(e.message); }
-        finally { setRegenerating(false); }
-    };
-
-    const dateStr = new Date().toLocaleDateString(lang === 'de' ? 'de-DE' : 'en-US', {
-        weekday: 'long', day: 'numeric', month: 'long',
-    });
     const hour = new Date().getHours();
     const greeting = hour < 11 ? 'Guten Morgen' : hour < 17 ? 'Servus' : 'Guten Abend';
 
@@ -311,24 +267,10 @@ export default function Dashboard() {
         <div className="space-y-4">
             {/* ── Greeting ── */}
             <header className="forge-anim">
-                <div className="flex items-start justify-between">
-                    <div>
-                        <p className="text-[13px]" style={{ color: TEXT_DIM }}>{greeting},</p>
-                        <h1 className="text-[28px] font-semibold tracking-tight leading-none mt-1" style={{ color: '#f2ece0' }}>
-                            {user?.first_name || user?.username}
-                        </h1>
-                        <p className="text-[12px] mt-2" style={{ color: TEXT_DIM }}>
-                            {dateStr}{weather?.temperature_c != null && ` · ${weather.emoji} ${Math.round(weather.temperature_c)}°`}
-                        </p>
-                    </div>
-                    {briefing && (
-                        <button onClick={handleRegenerate} disabled={regenerating}
-                            className="tap mt-1 text-[11px] flex items-center gap-1.5 cursor-pointer"
-                            style={{ color: TEXT_DIM }}>
-                            <RefreshCw size={13} className={regenerating ? 'animate-spin' : ''} />
-                        </button>
-                    )}
-                </div>
+                <p className="text-[13px]" style={{ color: TEXT_DIM }}>{greeting},</p>
+                <h1 className="text-[28px] font-semibold tracking-tight leading-none mt-1" style={{ color: '#f2ece0' }}>
+                    {user?.first_name || user?.username}
+                </h1>
             </header>
 
             {activeForgeSession ? (() => {
@@ -361,149 +303,120 @@ export default function Dashboard() {
             <ConfirmDialog open={discardDialogOpen} busy={startingSession} destructive title="Aktive Session verwerfen?" description="Bereits eingetragene Sätze gehen verloren und können nicht wiederhergestellt werden." confirmLabel="Session verwerfen" onCancel={() => setDiscardDialogOpen(false)} onConfirm={() => { setDiscardDialogOpen(false); void handleDiscardForgeSession(); }} />
 
 
-            {/* ── Loading ── */}
-            {loading && (
-                <div className="card-forge p-12 text-center space-y-3 forge-anim">
-                    <Loader2 className="w-7 h-7 animate-spin mx-auto" style={{ color: SAND }} />
-                    <p className="text-[13px]" style={{ color: TEXT_DIM }}>Daten werden analysiert…</p>
-                </div>
-            )}
-
-            {/* ── Error ── */}
-            {error && !loading && (
-                <div className="card-forge p-6 text-center space-y-3">
-                    <p className="text-[13px] text-red-400">{error}</p>
-                    <button onClick={() => { setLoading(true); setError(null); getTodayBriefing(location?.lat, location?.lon).then(setBriefing).catch((e: any) => setError(e.message)).finally(() => setLoading(false)); }}
-                        className="btn-forge text-sm px-5 py-2 mx-auto">Nochmal</button>
-                </div>
-            )}
-
-            {!loading && !error && (
-                <>
-                    {/* ── Kalorien-Hero + Makros ── */}
-                    {nt && (
-                        <section className="card-forge p-5 forge-anim forge-d1">
-                            {/* Header row */}
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center gap-2 text-[12px]" style={{ color: TEXT_DIM }}>
-                                    <Flame size={13} style={{ color: SAND }} />
-                                    Ernährung heute
-                                </div>
-                                <span className="text-[12px]" style={{ color: TEXT_DIM }}>
-                                    {Math.max(0, Math.round(nt.goals.calories - nt.totals.calories))} kcal übrig
-                                </span>
+            <>
+                {/* ── Kalorien-Hero + Makros ── */}
+                {nt && (
+                    <section className="card-forge p-5 forge-anim forge-d1">
+                        {/* Header row */}
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-2 text-[12px]" style={{ color: TEXT_DIM }}>
+                                <Flame size={13} style={{ color: SAND }} />
+                                Ernährung heute
                             </div>
-
-                            {/* Big calorie number */}
-                            <div className="flex items-baseline gap-2 mb-2">
-                                <span className="text-[42px] font-light leading-none tabular-nums" style={{ color: '#f2ece0' }}>
-                                    {Math.round(nt.totals.calories)}
-                                </span>
-                                <span className="text-[15px]" style={{ color: TEXT_DIM }}>
-                                    / {nt.goals.calories} kcal
-                                </span>
-                            </div>
-
-                            {/* Wide progress bar */}
-                            <div className="h-1.5 rounded-full overflow-hidden mb-5" style={{ background: 'rgba(255,247,235,0.08)' }}>
-                                <div className="h-full rounded-full" style={{
-                                    width: `${Math.min(calPct, 1) * 100}%`,
-                                    background: SAND,
-                                    transition: 'width 1s cubic-bezier(0.22,1,0.36,1)',
-                                }} />
-                            </div>
-
-                            {/* Macro rows */}
-                            <div className="space-y-3">
-                                <MacroBar label="Protein" current={nt.totals.protein} goal={nt.goals.protein} color="#f87171" />
-                                <MacroBar label="Carbs" current={nt.totals.carbs} goal={nt.goals.carbs} color="#fbbf24" />
-                                <MacroBar label="Fett" current={nt.totals.fat} goal={nt.goals.fat} color="#34d399" />
-                            </div>
-                        </section>
-                    )}
-
-                    {/* ── Konsistenz ── */}
-                    {consistency && (
-                        <section className="forge-anim forge-d2">
-                            <ConsistencyTimeline data={consistency} />
-                        </section>
-                    )}
-
-                    {/* ── Gewicht ── */}
-                    {weightValues.length > 0 && (
-                        <section className="forge-anim forge-d2">
-                            <div className="card-forge p-3">
-
-                                {/* ── Header row: icon + label | date input | delta ── */}
-                                <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
-                                    <div className="flex items-center gap-1.5">
-                                        <Scale size={12} />
-                                        <span>Gewicht</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        {/* Date picker — always visible */}
-                                        <label className="flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer"
-                                            style={{ background: 'rgba(232,197,138,0.08)' }}>
-                                            <Pencil size={9} style={{ color: TEXT_DIM }} />
-                                            <span className="tabular-nums" style={{ color: TEXT_DIM }}>
-                                                {new Date(`${weightStartDate}T12:00:00`).toLocaleDateString('de-DE', {
-                                                    day: 'numeric', month: 'short', year: '2-digit',
-                                                })}
-                                            </span>
-                                            <input
-                                                ref={weightInputRef}
-                                                type="date"
-                                                max={new Date().toISOString().slice(0, 10)}
-                                                value={weightStartDate}
-                                                onChange={e => { if (e.target.value) updateWeightStartDate(e.target.value); }}
-                                                className="sr-only"
-                                                style={{ colorScheme: 'dark' }}
-                                            />
-                                        </label>
-
-                                        {/* Total delta */}
-                                        {weightDelta !== null && (
-                                            <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
-                                                {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)} kg
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* ── Current weight ── */}
-                                <div className="text-[20px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: '#f2ece0' }}>
-                                    {weightCurrent?.toFixed(1)}
-                                    <span className="text-[11px] font-normal ml-0.5" style={{ color: TEXT_DIM }}>kg</span>
-                                </div>
-
-                                {/* ── Chart ── */}
-                                {weightHistory.length >= 4 && (
-                                    <div className="mt-2">
-                                        <WeightChart entries={weightHistory} />
-                                    </div>
-                                )}
-
-                                {/* ── Weekly avg change ── */}
-                                {weightWeeklyAvg !== null && (
-                                    <div className="mt-2 text-[10px] tabular-nums" style={{ color: '#4ade80' }}>
-                                        Ø {weightWeeklyAvg > 0 ? '+' : ''}{(weightWeeklyAvg * 1000).toFixed(0)} g / Woche
-                                    </div>
-                                )}
-                            </div>
-                        </section>
-                    )}
-
-                    {/* ── Weather note from briefing ── */}
-                    {briefing?.briefing_data?.weather_note && (
-                        <div className="card-forge px-4 py-3 flex items-center gap-3 forge-anim forge-d4">
-                            <span className="text-xl shrink-0">{weather?.emoji || '🌤️'}</span>
-                            <p className="text-[13px] leading-relaxed" style={{ color: TEXT_MID }}>
-                                {briefing.briefing_data.weather_note}
-                            </p>
+                            <span className="text-[12px]" style={{ color: TEXT_DIM }}>
+                                {Math.max(0, Math.round(nt.goals.calories - nt.totals.calories))} kcal übrig
+                            </span>
                         </div>
-                    )}
-                </>
-            )}
+
+                        {/* Big calorie number */}
+                        <div className="flex items-baseline gap-2 mb-2">
+                            <span className="text-[42px] font-light leading-none tabular-nums" style={{ color: '#f2ece0' }}>
+                                {Math.round(nt.totals.calories)}
+                            </span>
+                            <span className="text-[15px]" style={{ color: TEXT_DIM }}>
+                                / {nt.goals.calories} kcal
+                            </span>
+                        </div>
+
+                        {/* Wide progress bar */}
+                        <div className="h-1.5 rounded-full overflow-hidden mb-5" style={{ background: 'rgba(255,247,235,0.08)' }}>
+                            <div className="h-full rounded-full" style={{
+                                width: `${Math.min(calPct, 1) * 100}%`,
+                                background: SAND,
+                                transition: 'width 1s cubic-bezier(0.22,1,0.36,1)',
+                            }} />
+                        </div>
+
+                        {/* Macro rows */}
+                        <div className="space-y-3">
+                            <MacroBar label="Protein" current={nt.totals.protein} goal={nt.goals.protein} color="#f87171" />
+                            <MacroBar label="Carbs" current={nt.totals.carbs} goal={nt.goals.carbs} color="#fbbf24" />
+                            <MacroBar label="Fett" current={nt.totals.fat} goal={nt.goals.fat} color="#34d399" />
+                        </div>
+                    </section>
+                )}
+
+                {/* ── Konsistenz ── */}
+                {consistency && (
+                    <section className="forge-anim forge-d2">
+                        <ConsistencyTimeline data={consistency} />
+                    </section>
+                )}
+
+                {/* ── Gewicht ── */}
+                {weightValues.length > 0 && (
+                    <section className="forge-anim forge-d2">
+                        <div className="card-forge p-3">
+
+                            {/* ── Header row: icon + label | date input | delta ── */}
+                            <div className="flex items-center justify-between text-[11px]" style={{ color: TEXT_DIM }}>
+                                <div className="flex items-center gap-1.5">
+                                    <Scale size={12} />
+                                    <span>Gewicht</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    {/* Date picker — always visible */}
+                                    <label className="flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer"
+                                        style={{ background: 'rgba(232,197,138,0.08)' }}>
+                                        <Pencil size={9} style={{ color: TEXT_DIM }} />
+                                        <span className="tabular-nums" style={{ color: TEXT_DIM }}>
+                                            {new Date(`${weightStartDate}T12:00:00`).toLocaleDateString('de-DE', {
+                                                day: 'numeric', month: 'short', year: '2-digit',
+                                            })}
+                                        </span>
+                                        <input
+                                            ref={weightInputRef}
+                                            type="date"
+                                            max={new Date().toISOString().slice(0, 10)}
+                                            value={weightStartDate}
+                                            onChange={e => { if (e.target.value) updateWeightStartDate(e.target.value); }}
+                                            className="sr-only"
+                                            style={{ colorScheme: 'dark' }}
+                                        />
+                                    </label>
+
+                                    {/* Total delta */}
+                                    {weightDelta !== null && (
+                                        <span style={{ color: weightDelta < 0 ? '#34d399' : SAND }}>
+                                            {weightDelta > 0 ? '+' : ''}{weightDelta.toFixed(1)} kg
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* ── Current weight ── */}
+                            <div className="text-[20px] font-semibold tabular-nums leading-none mt-1.5" style={{ color: '#f2ece0' }}>
+                                {weightCurrent?.toFixed(1)}
+                                <span className="text-[11px] font-normal ml-0.5" style={{ color: TEXT_DIM }}>kg</span>
+                            </div>
+
+                            {/* ── Chart ── */}
+                            {weightHistory.length >= 4 && (
+                                <div className="mt-2">
+                                    <WeightChart entries={weightHistory} />
+                                </div>
+                            )}
+
+                            {/* ── Weekly avg change ── */}
+                            {weightWeeklyAvg !== null && (
+                                <div className="mt-2 text-[10px] tabular-nums" style={{ color: '#4ade80' }}>
+                                    Ø {weightWeeklyAvg > 0 ? '+' : ''}{(weightWeeklyAvg * 1000).toFixed(0)} g / Woche
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                )}
+            </>
         </div>
     );
 }

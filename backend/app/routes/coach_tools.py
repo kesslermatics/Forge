@@ -21,7 +21,6 @@ CoachToolName = Literal[
     "get_steps",
     "get_sleep",
     "get_weight_history",
-    "get_coaching_memory",
     "get_volume_and_frequency_analysis",
     "get_strength_progression_analytics",
     "get_metabolic_trend_analysis",

@@ -14,7 +14,6 @@ from app.routes import coach_tools as coach_tools_router
 from app.routes import briefing as briefing_router
 from app.routes import forge as forge_router
 from app.mcp_server import mcp, mcp_http_app
-from app.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 
 # Configure logging
@@ -88,13 +87,9 @@ with engine.connect() as _conn:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage the shared MCP transport and the background scheduler."""
+    """Manage the shared MCP transport."""
     async with mcp.session_manager.run():
-        start_scheduler()
-        try:
-            yield
-        finally:
-            stop_scheduler()
+        yield
 
 
 # Initialize FastAPI app

@@ -19,7 +19,7 @@ Forge is a private, full-stack training coach for planning workouts, logging ses
 ### AI-assisted coaching
 
 - Gemini-assisted exercise and routine drafts that must be explicitly saved by the user.
-- Daily briefings, training/nutrition analysis, reports, trends, and achievements.
+- Training/nutrition analysis, reports, trends, and achievements.
 - In-session coaching chat that may propose a set adjustment or exercise addition. Proposed actions are validated against the current session and the user's own library, then require an explicit apply or dismiss action.
 
 ### Progress and optional nutrition
@@ -196,13 +196,6 @@ Existing installations need more care: this repository currently uses manual one
 
 Do not assume that starting the server automatically migrates an older production schema.
 
-## Background jobs
-
-The FastAPI lifespan starts an APScheduler instance for:
-
-- Daily briefings at **04:00 Europe/Berlin**.
-- Periodic Forge workout-tip generation for newly completed sessions.
-
 The manual check-in action in Settings is account-scoped and idempotent. It creates at most one check-in per account, month, and day.
 
 ## API overview
@@ -216,7 +209,7 @@ Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-
 | Coach tool API | `POST /api/coach/tools/{tool_name}` | API-key- or JWT-authenticated read-only Coach context |
 | Remote MCP | `/mcp` | Bearer-key-authenticated Streamable HTTP tools for external agents |
 | Forge | `/api/forge/*` | Exercise library, plans, programs, sessions, AI drafts/chat, and progress photos |
-| Coaching | `/api/briefing/*` | Briefings, reports, analysis, and trends |
+| Coaching | `/api/briefing/*` | Reports, analysis, trends, and the coach chat |
 | Health | `/`, `/health` | Service availability |
 
 ## Personal API keys and MCP
