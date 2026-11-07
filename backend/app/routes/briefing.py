@@ -7,6 +7,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -38,31 +39,46 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/briefing", tags=["Briefing"])
 
 
-def _log_weight_entry(user_id, yazio_data: Optional[dict], db: Session):
-    """Log today's weight from Yazio data into weight_entries (idempotent)."""
-    if not yazio_data or not yazio_data.get("profile"):
-        return
-    weight = yazio_data["profile"].get("current_weight_kg")
-    if not weight or weight <= 0:
-        return
-    today = date.today()
-    existing = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == user_id, WeightEntry.date == today)
-        .first()
-    )
-    if existing:
-        # Update if weight changed
-        if abs(existing.weight_kg - weight) > 0.01:
-            existing.weight_kg = weight
-            db.commit()
-        return
-    entry = WeightEntry(user_id=user_id, date=today, weight_kg=round(weight, 2))
-    db.add(entry)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
+BERLIN = ZoneInfo("Europe/Berlin")
+DateType = date  # alias: a pydantic field named "date" would shadow the type inside its own class
+
+
+def _berlin_today() -> date:
+    """Forge counts days in Europe/Berlin; the server clock is UTC."""
+    return datetime.now(BERLIN).date()
+
+
+class WeightUpsert(BaseModel):
+    weight_kg: float = Field(ge=20, le=400)
+    date: DateType | None = None  # defaults to today (Berlin)
+
+    @field_validator("weight_kg")
+    @classmethod
+    def one_decimal(cls, value: float) -> float:
+        return round(value, 1)
+
+
+@router.put("/weight")
+def save_weight(
+    data: WeightUpsert,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Save the body weight of one day (one entry per day; saving again overwrites)."""
+    today = _berlin_today()
+    day = data.date or today
+    if day > today:
+        raise HTTPException(status_code=422, detail="Das Datum liegt in der Zukunft.")
+    if day < today - timedelta(days=3650):
+        raise HTTPException(status_code=422, detail="Das Datum liegt zu weit zurück.")
+    entry = db.query(WeightEntry).filter(WeightEntry.user_id == current_user.id, WeightEntry.date == day).first()
+    if entry is None:
+        entry = WeightEntry(user_id=current_user.id, date=day, weight_kg=data.weight_kg)
+        db.add(entry)
+    else:
+        entry.weight_kg = data.weight_kg
+    db.commit()
+    return {"date": day.isoformat(), "weight_kg": round(entry.weight_kg, 2)}
 
 
 @router.get("/workouts")
@@ -133,17 +149,15 @@ async def get_weight_history(
     Either supply ``start_date`` (ISO date, e.g. 2024-01-01) or ``days``
     (integer, default 90).  When both are present, ``start_date`` wins.
 
-    Each dashboard load fetches today's Yazio summary first so the displayed
-    current weight reflects a same-day entry instead of only the morning sync.
+    Weights are entered manually in the app (PUT /weight); ``latest`` is the newest
+    entry regardless of the requested window.
     """
-    from datetime import timedelta
-    today_date = date.today()
+    today_date = _berlin_today()
 
     if start_date:
         try:
             cutoff = date.fromisoformat(start_date)
         except ValueError:
-            from fastapi import HTTPException
             raise HTTPException(status_code=422, detail="start_date must be a valid ISO date (YYYY-MM-DD)")
         # Clamp to a sane range: not in the future, not more than 10 years back
         if cutoff > today_date:
@@ -153,17 +167,12 @@ async def get_weight_history(
     else:
         cutoff = today_date - timedelta(days=days)
 
-    # Refresh today's weight on demand; _log_weight_entry updates the existing
-    # daily snapshot only when Yazio reports a meaningfully different value.
-    if current_user.yazio_email and current_user.yazio_password:
-        try:
-            from app.services.yazio_service import fetch_yazio_summary
-            email = decrypt_value(current_user.yazio_email)
-            password = decrypt_value(current_user.yazio_password)
-            yazio_data = await fetch_yazio_summary(email, password, target_date=today_date)
-            _log_weight_entry(current_user.id, yazio_data, db)
-        except Exception as exc:
-            logger.debug("Could not refresh weight from Yazio: %s", exc)
+    latest = (
+        db.query(WeightEntry)
+        .filter(WeightEntry.user_id == current_user.id)
+        .order_by(WeightEntry.date.desc())
+        .first()
+    )
 
     entries = (
         db.query(WeightEntry)
@@ -181,6 +190,7 @@ async def get_weight_history(
         ],
         "start_weight": entries[0].weight_kg if entries else None,
         "current_weight": entries[-1].weight_kg if entries else None,
+        "latest": {"date": latest.date.isoformat(), "weight_kg": round(latest.weight_kg, 2)} if latest else None,
         "count": len(entries),
     }
 

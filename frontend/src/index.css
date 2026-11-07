@@ -475,3 +475,8 @@ body { overscroll-behavior-y: none; }
 /* No double-tap zoom delay and no accidental text selection on controls. */
 button, a, label, [role="button"] { touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 input, textarea, select { -webkit-user-select: auto; user-select: auto; }
+
+/* ── Weight entry autosave countdown ────────────────── */
+@keyframes weight-countdown { from { width: 0; } to { width: 100%; } }
+.weight-countdown { animation-name: weight-countdown; animation-timing-function: linear; animation-fill-mode: forwards; }
+@media (prefers-reduced-motion: reduce) { .weight-countdown { animation: none; width: 100%; opacity: 0.35; } }

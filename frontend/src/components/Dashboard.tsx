@@ -19,6 +19,7 @@ import {
 import ConfirmDialog from './ConfirmDialog';
 import ForgeAlternativeStartSheet from './ForgeAlternativeStartSheet';
 import ForgePlanImagePreview from './ForgePlanImagePreview';
+import WeightEntryCard from './WeightEntryCard';
 
 const SAND = '#e8c58a';
 const CARD_BORDER = 'rgba(232,197,138,0.11)';
@@ -146,6 +147,7 @@ export default function Dashboard() {
     const navigate = useNavigate();
 
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
+    const [weightLatest, setWeightLatest] = useState<WeightHistoryEntry | null>(null);
     const [todayNutrition, setTodayNutrition] = useState<TodayNutrition | null>(null);
     const [trackDay, setTrackDay] = useState<TrackDay | null>(null);
     const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
@@ -177,7 +179,16 @@ export default function Dashboard() {
     }, []);
 
     useEffect(() => {
-        getWeightHistory(weightStartDate).then(d => setWeightHistory(d.entries)).catch(() => { });
+        getWeightHistory(weightStartDate).then(d => { setWeightHistory(d.entries); setWeightLatest(d.latest); }).catch(() => { });
+    }, [weightStartDate]);
+
+    // A weight saved by the entry card appears in the chart right away, without a reload.
+    const handleWeightSaved = useCallback((entry: WeightHistoryEntry) => {
+        setWeightLatest(previous => (!previous || entry.date >= previous.date ? entry : previous));
+        setWeightHistory(previous => {
+            if (entry.date < weightStartDate) return previous;
+            return [...previous.filter(item => item.date !== entry.date), entry].sort((a, b) => a.date.localeCompare(b.date));
+        });
     }, [weightStartDate]);
 
     useEffect(() => {
@@ -269,11 +280,14 @@ export default function Dashboard() {
     return (
         <div className="space-y-4">
             {/* ── Greeting ── */}
-            <header className="forge-anim">
-                <p className="text-[13px]" style={{ color: TEXT_DIM }}>{greeting},</p>
-                <h1 className="text-[28px] font-semibold tracking-tight leading-none mt-1" style={{ color: '#f2ece0' }}>
-                    {user?.first_name || user?.username}
-                </h1>
+            <header className="forge-anim flex items-end justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="text-[13px]" style={{ color: TEXT_DIM }}>{greeting},</p>
+                    <h1 className="truncate text-[28px] font-semibold tracking-tight leading-none mt-1" style={{ color: '#f2ece0' }}>
+                        {user?.first_name || user?.username}
+                    </h1>
+                </div>
+                {consistency && <ConsistencyDots data={consistency} />}
             </header>
 
             {activeForgeSession ? (() => {
@@ -363,14 +377,10 @@ export default function Dashboard() {
                     </section>
                 )}
 
-                {/* ── Konsistenz ── */}
-                {consistency && (
-                    <section className="forge-anim forge-d2">
-                        <ConsistencyTimeline data={consistency} />
-                    </section>
-                )}
+                {/* ── Gewicht eintragen ── */}
+                <WeightEntryCard latest={weightLatest} onSaved={handleWeightSaved} />
 
-                {/* ── Gewicht ── */}
+                {/* ── Gewichtsverlauf ── */}
                 {weightValues.length > 0 && (
                     <section className="forge-anim forge-d2">
                         <div className="card-forge p-3">
@@ -438,29 +448,34 @@ export default function Dashboard() {
     );
 }
 
-/* ── 14-day consistency timeline ── */
-function ConsistencyTimeline({ data }: { data: ConsistencyData }) {
-    const formatDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
-    const weekday = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('de-DE', { weekday: 'narrow' });
+/* ── 14-day consistency dots (header, right of the name) ── */
+function ConsistencyDots({ data }: { data: ConsistencyData }) {
     const today = data.days[data.days.length - 1]?.date;
+    const dateLabel = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
     const rows = [
-        { key: 'nutrition' as const, label: 'Ernährung', active: (day: ConsistencyData['days'][number]) => day.nutrition, icon: <Flame size={13} />, value: `${data.nutrition_streak_days} Tg.`, detail: data.nutrition_connected ? 'Tages-Streak' : 'Yazio verbinden' },
-        { key: 'training' as const, label: 'Training', active: (day: ConsistencyData['days'][number]) => day.training, icon: <Dumbbell size={13} />, value: `${data.training_streak_weeks} Wo.`, detail: `Diese Woche ${data.training_sessions_this_week}/${data.training_weekly_goal}` },
+        { key: 'nutrition' as const, label: 'Ernährung', icon: <Flame size={9} />, done: 'getrackt', active: (day: ConsistencyData['days'][number]) => day.nutrition },
+        { key: 'training' as const, label: 'Training', icon: <Dumbbell size={9} />, done: 'Training erledigt', active: (day: ConsistencyData['days'][number]) => day.training },
     ];
+    const count = (active: (day: ConsistencyData['days'][number]) => boolean) => data.days.filter(active).length;
+    const summary = `Letzte ${data.days.length} Tage: Ernährung an ${count(rows[0].active)} Tagen, Training an ${count(rows[1].active)} Tagen. `
+        + `Ernährungs-Streak ${data.nutrition_streak_days} Tage, Trainings-Streak ${data.training_streak_weeks} Wochen.`;
 
-    return <section className="card-forge p-4 min-w-0" style={{ borderColor: `${SAND}20` }}>
-        <div className="flex items-center justify-between gap-3 mb-4"><div><p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>Konsistenz</p><p className="text-[12px] mt-1" style={{ color: TEXT_DIM }}>Letzte 14 Tage</p></div><p className="text-[10px] text-right leading-relaxed" style={{ color: TEXT_DIM }}>Training zählt ab<br />2 Einheiten pro Woche</p></div>
-        <div className="space-y-3">{rows.map((row) => <div key={row.key} className="grid items-center gap-2" style={{ gridTemplateColumns: '72px minmax(0, 1fr) 72px' }}>
-            <div className="flex items-center gap-1.5 text-[11px]" style={{ color: TEXT_MID }}>{row.icon}<span className="truncate">{row.label}</span></div>
-            <div className="min-w-0"><div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${data.days.length}, minmax(0, 1fr))` }}>{data.days.map((day, index) => {
+    return <div role="img" aria-label={summary} className="flex shrink-0 flex-col gap-[5px]" title={`Letzte ${data.days.length} Tage`}>
+        {rows.map((row) => <div key={row.key} className="flex items-center gap-1.5">
+            <span style={{ color: TEXT_DIM }} aria-hidden="true">{row.icon}</span>
+            <div className="flex gap-[3px]">{data.days.map((day, index) => {
                 const active = row.active(day);
                 const isToday = day.date === today;
-                return <span key={`${row.key}-${day.date}`} title={`${formatDate(day.date)}: ${active ? row.label === 'Ernährung' ? 'getrackt' : 'Training erledigt' : 'nicht erfasst'}`} aria-label={`${row.label} am ${formatDate(day.date)}: ${active ? 'erledigt' : 'nicht erfasst'}`} className="consistency-dot aspect-square max-h-4 min-h-2 rounded-full" style={{ animationDelay: `${index * 38 + (row.key === 'training' ? 90 : 0)}ms`, background: active ? '#4ade80' : 'rgba(242,236,226,0.09)', border: `1px solid ${isToday ? (active ? '#86efac' : 'rgba(232,197,138,0.6)') : active ? '#4ade80' : 'rgba(242,236,226,0.08)'}`, boxShadow: active ? '0 0 10px rgba(74,222,128,0.32)' : 'none' }} />;
+                return <span key={`${row.key}-${day.date}`} title={`${dateLabel(day.date)}: ${active ? row.done : 'nicht erfasst'}`}
+                    className="consistency-dot h-[7px] w-[7px] rounded-full"
+                    style={{
+                        animationDelay: `${index * 30 + (row.key === 'training' ? 80 : 0)}ms`,
+                        background: active ? '#4ade80' : 'rgba(242,236,226,0.1)',
+                        boxShadow: active ? '0 0 6px rgba(74,222,128,0.4)' : isToday ? `0 0 0 1px ${SAND}99` : 'none',
+                    }} />;
             })}</div>
-                <div className="grid mt-1 gap-1" style={{ gridTemplateColumns: `repeat(${data.days.length}, minmax(0, 1fr))` }}>{data.days.map((day) => <span key={`label-${row.key}-${day.date}`} className="text-center text-[8px] leading-none" style={{ color: day.date === today ? SAND : TEXT_DIM }}>{weekday(day.date)}</span>)}</div></div>
-            <div className="text-right"><p className="text-[14px] font-semibold tabular-nums leading-none" style={{ color: '#f2ece0' }}>{row.value}</p><p className="text-[9px] mt-1 leading-tight" style={{ color: TEXT_DIM }}>{row.detail}</p></div>
-        </div>)}</div>
-    </section>
+        </div>)}
+    </div>;
 }
 
 // end of file

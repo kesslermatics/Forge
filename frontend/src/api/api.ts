@@ -401,10 +401,20 @@ export interface WeightHistoryEntry {
 
 export interface WeightHistoryData {
   entries: WeightHistoryEntry[];
+  /** Newest entry overall, independent of the requested window. */
+  latest: WeightHistoryEntry | null;
   start_weight: number | null;
   current_weight: number | null;
   count: number;
 }
+
+/** `keepalive` lets the request finish while the app is being closed or sent to the background. */
+export const saveWeight = (weightKg: number, date: string, keepalive = false) =>
+  apiRequest<WeightHistoryEntry>('/api/briefing/weight', {
+    method: 'PUT',
+    body: JSON.stringify({ weight_kg: weightKg, date }),
+    keepalive,
+  });
 
 export const getWeightHistory = (startDate: string | null = null, days = 90) => {
   const params = startDate

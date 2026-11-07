@@ -137,8 +137,8 @@ class ChatMessage(Base):
 
 class WeightEntry(Base):
     """
-    Stores daily weight readings collected from Yazio.
-    One entry per user per date — auto-inserted whenever we fetch Yazio data.
+    Daily body weight, entered by the user in the app (PUT /api/briefing/weight).
+    One entry per user per date; older rows were imported from Yazio.
     """
 
     __tablename__ = "weight_entries"
