@@ -47,6 +47,9 @@ with engine.connect() as _conn:
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS training_plan JSON;",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION;",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS agent_details JSON;",
+        # nutrition_goals existed before sugar/salt limits; create_all does not add columns.
+        "ALTER TABLE nutrition_goals ADD COLUMN IF NOT EXISTS sugar DOUBLE PRECISION;",
+        "ALTER TABLE nutrition_goals ADD COLUMN IF NOT EXISTS salt DOUBLE PRECISION;",
         # Yazio was removed completely; drop its stored credentials.
         "ALTER TABLE users DROP COLUMN IF EXISTS yazio_email;",
         "ALTER TABLE users DROP COLUMN IF EXISTS yazio_password;",
