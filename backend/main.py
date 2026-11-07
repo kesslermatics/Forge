@@ -14,6 +14,7 @@ from app.routes import coach_tools as coach_tools_router
 from app.routes import briefing as briefing_router
 from app.routes import forge as forge_router
 from app.routes import nutrition_tracking as nutrition_tracking_router
+from app.routes import goals as goals_router
 from app.mcp_server import mcp, mcp_http_app
 from app.config import settings
 
@@ -46,6 +47,9 @@ with engine.connect() as _conn:
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS training_plan JSON;",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION;",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS agent_details JSON;",
+        # Yazio was removed completely; drop its stored credentials.
+        "ALTER TABLE users DROP COLUMN IF EXISTS yazio_email;",
+        "ALTER TABLE users DROP COLUMN IF EXISTS yazio_password;",
         # weight_entries and chat tables are created by create_all above (new tables)
     ]
     for stmt in _legacy_migrations:
@@ -158,6 +162,7 @@ app.include_router(coach_tools_router.router)
 app.include_router(briefing_router.router)
 app.include_router(forge_router.router)
 app.include_router(nutrition_tracking_router.router)
+app.include_router(goals_router.router)
 
 
 @app.get("/", tags=["Health"])

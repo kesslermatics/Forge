@@ -1,11 +1,11 @@
 """
-Coaching routes – nutrition, weight, analytics, reports and the coach chat.
+Coaching routes – body weight, training analytics, consistency and the coach chat.
 """
 import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Optional
+
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -16,23 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, User, WeightEntry
-from app.services.aggregator import gather_user_context
+from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, NutritionEntry, ProfileGoal, User, WeightEntry
+from app.services import profile_goals
 from app.services.chat_agent import refresh_chat_summary, run_chat_agent
-from app.services.forge_session_adapter import (
-    completed_forge_workout_dates,
-)
-from app.services.yazio_service import fetch_nutrition_dates, fetch_yazio_summary
-from app.services.analytics_service import (
-    compute_macro_performance_correlation,
-    compute_progressive_overload,
-    compute_consistency_timeline,
-    compute_weekly_streaks,
-    compute_weekly_report,
-    compute_monthly_report,
-    compute_achievements,
-)
-from app.encryption import decrypt_value
+from app.services.forge_session_adapter import completed_forge_workouts
+from app.services.analytics_service import compute_progressive_overload, compute_consistency_timeline
+from app.services.profile_goals import GoalError
 
 logger = logging.getLogger(__name__)
 
@@ -58,141 +47,12 @@ class WeightUpsert(BaseModel):
         return round(value, 1)
 
 
-@router.put("/weight")
-def save_weight(
-    data: WeightUpsert,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Save the body weight of one day (one entry per day; saving again overwrites)."""
-    today = _berlin_today()
-    day = data.date or today
-    if day > today:
-        raise HTTPException(status_code=422, detail="Das Datum liegt in der Zukunft.")
-    if day < today - timedelta(days=3650):
-        raise HTTPException(status_code=422, detail="Das Datum liegt zu weit zurück.")
-    entry = db.query(WeightEntry).filter(WeightEntry.user_id == current_user.id, WeightEntry.date == day).first()
-    if entry is None:
-        entry = WeightEntry(user_id=current_user.id, date=day, weight_kg=data.weight_kg)
-        db.add(entry)
-    else:
-        entry.weight_kg = data.weight_kg
-    db.commit()
-    return {"date": day.isoformat(), "weight_kg": round(entry.weight_kg, 2)}
 
 
-@router.get("/workouts")
-async def get_workout_list(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Return the user's recent completed Forge sessions as a lightweight picker list.
-    """
-    context = await gather_user_context(current_user, db)
-    workouts = context.get("workouts") or []
-
-    # Return a simplified list with index, title, date, exercises, duration
-    result = []
-    for i, w in enumerate(workouts):
-        exercise_names = [ex.get("title", "?") for ex in w.get("exercises", [])]
-        result.append({
-            "index": i,
-            "title": w.get("title", "Workout"),
-            "date": (w.get("start_time") or "")[:10],
-            "duration_min": w.get("duration_min"),
-            "exercise_names": exercise_names,
-        })
-
-    return result
 
 
-@router.get("/activity-heatmap")
-async def get_activity_heatmap(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Return workout dates + nutrition tracking dates for a GitHub-style activity heatmap.
-    Returns {workouts: [{date, title, duration_min}], nutrition: [{date, calories, protein}]}.
-    """
-    workout_dates: list[dict] = []
-    nutrition_dates: list[dict] = []
-
-    workout_dates = completed_forge_workout_dates(db, current_user.id)
-
-    # Fetch nutrition tracking dates from Yazio
-    if current_user.yazio_email and current_user.yazio_password:
-        try:
-            email = decrypt_value(current_user.yazio_email)
-            password = decrypt_value(current_user.yazio_password)
-            nutrition_dates = await fetch_nutrition_dates(email, password, days=180)
-        except Exception as exc:
-            logger.error("Failed to fetch nutrition dates: %s", exc)
-
-    return {
-        "workouts": workout_dates,
-        "nutrition": nutrition_dates,
-    }
 
 
-@router.get("/weight-history")
-async def get_weight_history(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    days: int = Query(90, ge=7, le=3650),
-    start_date: str | None = Query(None, description="ISO date string YYYY-MM-DD; overrides 'days' when provided"),
-):
-    """
-    Return the user's weight history from a given start date until today.
-
-    Either supply ``start_date`` (ISO date, e.g. 2024-01-01) or ``days``
-    (integer, default 90).  When both are present, ``start_date`` wins.
-
-    Weights are entered manually in the app (PUT /weight); ``latest`` is the newest
-    entry regardless of the requested window.
-    """
-    today_date = _berlin_today()
-
-    if start_date:
-        try:
-            cutoff = date.fromisoformat(start_date)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="start_date must be a valid ISO date (YYYY-MM-DD)")
-        # Clamp to a sane range: not in the future, not more than 10 years back
-        if cutoff > today_date:
-            cutoff = today_date
-        if cutoff < today_date - timedelta(days=3650):
-            cutoff = today_date - timedelta(days=3650)
-    else:
-        cutoff = today_date - timedelta(days=days)
-
-    latest = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == current_user.id)
-        .order_by(WeightEntry.date.desc())
-        .first()
-    )
-
-    entries = (
-        db.query(WeightEntry)
-        .filter(
-            WeightEntry.user_id == current_user.id,
-            WeightEntry.date >= cutoff,
-        )
-        .order_by(WeightEntry.date.asc())
-        .all()
-    )
-    return {
-        "entries": [
-            {"date": e.date.isoformat(), "weight_kg": round(e.weight_kg, 2)}
-            for e in entries
-        ],
-        "start_weight": entries[0].weight_kg if entries else None,
-        "current_weight": entries[-1].weight_kg if entries else None,
-        "latest": {"date": latest.date.isoformat(), "weight_kg": round(latest.weight_kg, 2)} if latest else None,
-        "count": len(entries),
-    }
 
 
 # ════════════════════════════════════════════════════════
@@ -444,116 +304,130 @@ async def stream_chat_message(
 #  ANALYTICS ENDPOINTS
 # ════════════════════════════════════════════════════════
 
-async def _build_nutrition_by_date(user: User, days: int = 180) -> dict:
-    """Build a dict of {date_str: {calories, protein, carbs, fat, goals}} from Yazio."""
-    if not user.yazio_email or not user.yazio_password:
-        return {}
-
-    try:
-        email = decrypt_value(user.yazio_email)
-        password = decrypt_value(user.yazio_password)
-    except Exception:
-        return {}
-
-    import asyncio
-    import httpx
-    from app.services.yazio_service import _yazio_login, YAZIO_BASE_URL, MEAL_KEYS
-
-    nutrition = {}
-    today = date.today()
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        token = await _yazio_login(client, email, password)
-        if not token:
-            return {}
-
-        semaphore = asyncio.Semaphore(5)
-
-        async def fetch_day(d: date):
-            async with semaphore:
-                try:
-                    resp = await client.get(
-                        f"{YAZIO_BASE_URL}/user/widgets/daily-summary",
-                        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                        params={"date": d.isoformat()},
-                    )
-                    if resp.status_code != 200:
-                        return
-                    data = resp.json()
-                    meals = data.get("meals", {})
-                    goals = data.get("goals", {})
-
-                    total_cal = 0.0
-                    total_prot = 0.0
-                    total_carb = 0.0
-                    total_fat = 0.0
-                    for key in MEAL_KEYS:
-                        nutrients = meals.get(key, {}).get("nutrients", {})
-                        total_cal += nutrients.get("energy.energy", 0)
-                        total_prot += nutrients.get("nutrient.protein", 0)
-                        total_carb += nutrients.get("nutrient.carb", 0)
-                        total_fat += nutrients.get("nutrient.fat", 0)
-
-                    if total_cal > 0:
-                        nutrition[d.isoformat()] = {
-                            "calories": round(total_cal, 1),
-                            "protein": round(total_prot, 1),
-                            "carbs": round(total_carb, 1),
-                            "fat": round(total_fat, 1),
-                            "goals": {
-                                "calories": round(goals.get("energy.energy", 0), 1),
-                                "protein": round(goals.get("nutrient.protein", 0), 1),
-                                "carbs": round(goals.get("nutrient.carb", 0), 1),
-                                "fat": round(goals.get("nutrient.fat", 0), 1),
-                            },
-                        }
-                except Exception:
-                    pass
-
-        dates_to_check = [today - timedelta(days=i) for i in range(days)]
-        await asyncio.gather(*[fetch_day(d) for d in dates_to_check])
-
-    return nutrition
 
 
-@router.get("/macro-performance")
-async def get_macro_performance(
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ════════════════════════════════════════════════════════
+#  WEIGHT, TRAINING ANALYTICS, CONSISTENCY
+# ════════════════════════════════════════════════════════
+
+@router.put("/weight")
+def save_weight(
+    data: WeightUpsert,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Macro-Performance Correlation: Links nutrition data with workout performance.
-    """
-    context = await gather_user_context(current_user, db, include_today_nutrition=False)
-    workouts = context.get("workouts") or []
+    """Save the body weight of one day (one entry per day; saving again overwrites)."""
+    try:
+        return profile_goals.save_weight(db, current_user, data.weight_kg, data.date)
+    except GoalError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Build nutrition by date (up to 90 days to limit API calls)
-    nutrition_by_date = await _build_nutrition_by_date(current_user, days=90)
 
-    result = compute_macro_performance_correlation(workouts, nutrition_by_date)
-    return result
+@router.get("/weight-history")
+def get_weight_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    days: int = Query(90, ge=7, le=3650),
+    start_date: str | None = Query(None, description="ISO date string YYYY-MM-DD; overrides the profile start date and 'days'"),
+):
+    """Weight history plus the profile weight goal.
+
+    Window: explicit ``start_date``, else the profile goal's start date, else the last ``days``.
+    ``latest`` is the newest entry regardless of the window.
+    """
+    today_date = _berlin_today()
+    profile = db.query(ProfileGoal).filter(ProfileGoal.user_id == current_user.id).first()
+
+    if start_date:
+        try:
+            cutoff = date.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="start_date must be a valid ISO date (YYYY-MM-DD)")
+    elif profile is not None and profile.start_date is not None:
+        cutoff = profile.start_date
+    else:
+        cutoff = today_date - timedelta(days=days)
+    cutoff = min(cutoff, today_date)
+    cutoff = max(cutoff, today_date - timedelta(days=3650))
+
+    latest = profile_goals.latest_weight(db, current_user.id)
+    entries = (
+        db.query(WeightEntry)
+        .filter(WeightEntry.user_id == current_user.id, WeightEntry.date >= cutoff)
+        .order_by(WeightEntry.date.asc())
+        .all()
+    )
+    return {
+        "entries": [{"date": e.date.isoformat(), "weight_kg": round(e.weight_kg, 2)} for e in entries],
+        "start_weight": entries[0].weight_kg if entries else None,
+        "current_weight": entries[-1].weight_kg if entries else None,
+        "latest": {"date": latest.date.isoformat(), "weight_kg": round(latest.weight_kg, 2)} if latest else None,
+        "goal": {
+            "start_kg": profile.start_weight_kg if profile else None,
+            "start_date": profile.start_date.isoformat() if profile and profile.start_date else None,
+            "target_kg": profile.target_weight_kg if profile else None,
+            "target_date": profile.target_date.isoformat() if profile and profile.target_date else None,
+        },
+        "count": len(entries),
+    }
+
+
+@router.get("/workouts")
+def get_workout_list(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The user's recent completed Forge sessions as a lightweight picker list."""
+    workouts = completed_forge_workouts(db, current_user.id, limit=20)
+    return [
+        {
+            "index": i,
+            "title": w.get("title", "Workout"),
+            "date": (w.get("start_time") or "")[:10],
+            "duration_min": w.get("duration_min"),
+            "exercise_names": [ex.get("title", "?") for ex in w.get("exercises", [])],
+        }
+        for i, w in enumerate(workouts)
+    ]
 
 
 @router.get("/progressive-overload")
-async def get_progressive_overload(
+def get_progressive_overload(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Progressive Overload Dashboard: Per-exercise progression over time.
-    """
-    context = await gather_user_context(current_user, db, include_today_nutrition=False)
-    workouts = context.get("workouts") or []
-    result = compute_progressive_overload(workouts)
-    return result
+    """Per-exercise progression over time."""
+    return compute_progressive_overload(completed_forge_workouts(db, current_user.id, limit=20))
 
 
 @router.get("/consistency")
-async def get_consistency(
+def get_consistency(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return the compact 14-day dashboard timeline and its streak metrics."""
+    """The compact 14-day dashboard timeline (training and food logging) and its streak metrics."""
     workout_dates = [
         completed_at.date().isoformat()
         for (completed_at,) in db.query(ForgeWorkoutSession.completed_at).filter(
@@ -563,556 +437,11 @@ async def get_consistency(
         ).all()
         if completed_at is not None
     ]
-    nutrition_connected = bool(current_user.yazio_email and current_user.yazio_password)
-    nutrition_dates: list[str] = []
-    if nutrition_connected:
-        try:
-            email = decrypt_value(current_user.yazio_email)
-            password = decrypt_value(current_user.yazio_password)
-            nutrition_dates = [
-                item["date"]
-                for item in await fetch_nutrition_dates(email, password, days=90)
-                if item.get("date")
-            ]
-        except Exception as exc:
-            logger.error("Failed to fetch nutrition dates for dashboard consistency: %s", exc)
-
-    result = compute_consistency_timeline(workout_dates, nutrition_dates)
-    result["nutrition_connected"] = nutrition_connected
-    return result
-
-
-@router.get("/streaks")
-async def get_streaks(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Weekly streaks for training and nutrition."""
-    import asyncio
-
-    workout_dates = [
-        item["date"]
-        for item in completed_forge_workout_dates(db, current_user.id)
-        if item.get("date")
+    since = _berlin_today() - timedelta(days=90)
+    nutrition_dates = [
+        day.isoformat()
+        for (day,) in db.query(NutritionEntry.date).filter(
+            NutritionEntry.user_id == current_user.id, NutritionEntry.date >= since,
+        ).distinct().all()
     ]
-
-    async def _fetch_nutrition_dates() -> list[str]:
-        if not current_user.yazio_email or not current_user.yazio_password:
-            return []
-        try:
-            email = decrypt_value(current_user.yazio_email)
-            password = decrypt_value(current_user.yazio_password)
-            raw = await fetch_nutrition_dates(email, password, days=90)
-            return [n["date"] for n in raw if n.get("date")]
-        except Exception as exc:
-            logger.error("Failed to fetch nutrition dates for streaks: %s", exc)
-            return []
-
-    nutrition_dates = await _fetch_nutrition_dates()
-
-    result = compute_weekly_streaks(workout_dates, nutrition_dates)
-    return result
-
-
-@router.get("/weekly-report")
-async def get_weekly_report(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    week_offset: int = Query(0, ge=0, le=52),
-):
-    """
-    Weekly Report with training, nutrition, and weight summary.
-    week_offset=0 means current week.
-    """
-    context = await gather_user_context(current_user, db, include_today_nutrition=False)
-    workouts = context.get("workouts") or []
-
-    # Get nutrition data
-    nutrition_by_date = await _build_nutrition_by_date(current_user, days=90)
-
-    # Get weight entries
-    weight_entries_raw = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == current_user.id)
-        .order_by(WeightEntry.date.asc())
-        .all()
-    )
-    weight_entries = [{"date": e.date.isoformat(), "weight_kg": e.weight_kg} for e in weight_entries_raw]
-
-    result = compute_weekly_report(workouts, nutrition_by_date, weight_entries, week_offset)
-
-    # Also compute the previous week for comparison
-    prev_result = compute_weekly_report(workouts, nutrition_by_date, weight_entries, week_offset + 1)
-
-    return {
-        "current": result,
-        "previous": prev_result,
-    }
-
-
-@router.get("/monthly-report")
-async def get_monthly_report(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    month_offset: int = Query(0, ge=0, le=12),
-):
-    """Monthly Report with comparison to previous month."""
-    context = await gather_user_context(current_user, db, include_today_nutrition=False)
-    workouts = context.get("workouts") or []
-    nutrition_by_date = await _build_nutrition_by_date(current_user, days=365)
-
-    weight_entries_raw = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == current_user.id)
-        .order_by(WeightEntry.date.asc())
-        .all()
-    )
-    weight_entries = [{"date": e.date.isoformat(), "weight_kg": e.weight_kg} for e in weight_entries_raw]
-
-    result = compute_monthly_report(workouts, nutrition_by_date, weight_entries, month_offset)
-    prev_result = compute_monthly_report(workouts, nutrition_by_date, weight_entries, month_offset + 1)
-
-    return {
-        "current": result,
-        "previous": prev_result,
-    }
-
-
-@router.get("/achievements")
-async def get_achievements(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Compute all achievements/badges for the user."""
-    context = await gather_user_context(current_user, db, include_today_nutrition=False)
-    workouts = context.get("workouts") or []
-
-    workout_dates = [
-        item["date"]
-        for item in completed_forge_workout_dates(db, current_user.id)
-        if item.get("date")
-    ]
-
-    # Get nutrition dates
-    nutrition_dates: list[str] = []
-    if current_user.yazio_email and current_user.yazio_password:
-        try:
-            email = decrypt_value(current_user.yazio_email)
-            password = decrypt_value(current_user.yazio_password)
-            raw = await fetch_nutrition_dates(email, password, days=365)
-            nutrition_dates = [n["date"] for n in raw if n.get("date")]
-        except Exception:
-            pass
-
-    # Get weight entries
-    weight_entries_raw = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == current_user.id)
-        .order_by(WeightEntry.date.asc())
-        .all()
-    )
-    weight_entries = [{"date": e.date.isoformat(), "weight_kg": e.weight_kg} for e in weight_entries_raw]
-
-    # Get nutrition by date for protein tracking
-    nutrition_by_date = await _build_nutrition_by_date(current_user, days=365)
-
-    result = compute_achievements(
-        workouts=workouts,
-        nutrition_dates=nutrition_dates,
-        workout_dates=workout_dates,
-        weight_entries=weight_entries,
-        nutrition_by_date=nutrition_by_date,
-    )
-    return result
-
-
-@router.get("/today-nutrition")
-async def get_today_nutrition(
-    current_user: User = Depends(get_current_user),
-):
-    """Get today's live nutrition data from Yazio."""
-    if not current_user.yazio_email or not current_user.yazio_password:
-        return {"error": "No Yazio credentials"}
-    try:
-        email = decrypt_value(current_user.yazio_email)
-        password = decrypt_value(current_user.yazio_password)
-        data = await fetch_yazio_summary(email, password, target_date=date.today())
-        if not data:
-            return {"error": "Could not fetch today's data"}
-        return {
-            "totals": data.get("totals", {}),
-            "goals": data.get("goals", {}),
-            "meals": data.get("meals", {}),
-            "food_items": data.get("food_items", {}),
-            "water_ml": data.get("water_ml", 0),
-        }
-    except Exception as exc:
-        logger.error("Failed to fetch today's nutrition: %s", exc)
-        return {"error": str(exc)}
-
-
-@router.get("/nutrition-history")
-async def get_nutrition_history(
-    days: int = 7,
-    start_date: str | None = None,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Get nutrition history from start_date until today (or last N days when start_date is omitted).
-    Returns daily totals + goals for charting.
-    """
-    if not current_user.yazio_email or not current_user.yazio_password:
-        return {"error": "No Yazio credentials", "days": []}
-
-    today = date.today()
-    if start_date:
-        try:
-            parsed = date.fromisoformat(start_date)
-            if parsed > today:
-                parsed = today
-            days = min((today - parsed).days + 1, 365)
-        except ValueError:
-            days = min(max(days, 1), 365)
-    else:
-        days = min(max(days, 1), 365)
-
-    try:
-        email = decrypt_value(current_user.yazio_email)
-        password = decrypt_value(current_user.yazio_password)
-    except Exception:
-        return {"error": "Decryption failed", "days": []}
-
-    import asyncio
-    import httpx
-    from app.services.yazio_service import _yazio_login, _fetch_daily_summary, _parse_summary, YAZIO_BASE_URL
-
-    history = []
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        token = await _yazio_login(client, email, password)
-        if not token:
-            return {"error": "Yazio login failed", "days": []}
-
-        semaphore = asyncio.Semaphore(5)
-
-        async def fetch_day(d: date):
-            async with semaphore:
-                raw = await _fetch_daily_summary(client, token, d.isoformat())
-                if not raw:
-                    return None
-                parsed = _parse_summary(raw)
-                return {
-                    "date": d.isoformat(),
-                    "totals": parsed.get("totals", {}),
-                    "goals": parsed.get("goals", {}),
-                }
-
-        dates_to_check = [today - timedelta(days=i) for i in range(days)]
-        results = await asyncio.gather(*[fetch_day(d) for d in dates_to_check])
-
-        history = [r for r in results if r is not None]
-
-    # Sort by date ascending
-    history.sort(key=lambda x: x["date"])
-
-    return {"days": history}
-
-
-@router.get("/food-statistics")
-async def get_food_statistics(
-    days: int = 30,
-    start_date: str | None = None,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Get aggregated food statistics from start_date until today (or last N days when start_date is omitted).
-    Returns top foods, top protein sources, top calorie items, top brands, new items this week.
-    """
-    if not current_user.yazio_email or not current_user.yazio_password:
-        return {"error": "No Yazio credentials"}
-
-    today = date.today()
-    if start_date:
-        try:
-            parsed = date.fromisoformat(start_date)
-            if parsed > today:
-                parsed = today
-            days = min((today - parsed).days + 1, 365)
-        except ValueError:
-            days = min(max(days, 7), 365)
-    else:
-        days = min(max(days, 7), 365)
-
-    try:
-        email = decrypt_value(current_user.yazio_email)
-        password = decrypt_value(current_user.yazio_password)
-    except Exception:
-        return {"error": "Decryption failed"}
-
-    import asyncio
-    import httpx
-    from collections import Counter, defaultdict
-    from app.services.yazio_service import (
-        _yazio_login, _fetch_consumed_items, _fetch_product, YAZIO_BASE_URL
-    )
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        token = await _yazio_login(client, email, password)
-        if not token:
-            return {"error": "Yazio login failed"}
-
-        # Fetch consumed items for each day
-        semaphore = asyncio.Semaphore(5)
-        all_items = []  # List of (date, product_id, amount)
-
-        async def fetch_day(d: date):
-            async with semaphore:
-                items = await _fetch_consumed_items(client, token, d.isoformat())
-                return [(d.isoformat(), item.get("product_id"), item.get("amount", 0))
-                        for item in items if item.get("product_id")]
-
-        dates_to_check = [today - timedelta(days=i) for i in range(days)]
-        results = await asyncio.gather(*[fetch_day(d) for d in dates_to_check])
-
-        for day_items in results:
-            all_items.extend(day_items)
-
-        # Collect unique product IDs
-        product_ids = {item[1] for item in all_items}
-        product_cache = {}
-
-        async def fetch_with_sem(pid: str):
-            async with semaphore:
-                await _fetch_product(client, token, pid, product_cache)
-
-        await asyncio.gather(*[fetch_with_sem(pid) for pid in product_ids])
-
-    # Aggregate statistics
-    food_frequency = Counter()  # product_id -> count
-    food_names = {}  # product_id -> name
-    food_brands = {}  # product_id -> brand
-    protein_total = defaultdict(float)  # product_id -> total protein
-    calorie_total = defaultdict(float)  # product_id -> total calories
-    first_seen = {}  # product_id -> first date seen
-
-    for date_str, product_id, amount in all_items:
-        food_frequency[product_id] += 1
-
-        product = product_cache.get(product_id)
-        if not product:
-            continue
-
-        food_names[product_id] = product.get("name", "Unknown")
-        food_brands[product_id] = product.get("producer", "")
-
-        nutrients = product.get("nutrients", {})
-        protein_total[product_id] += (nutrients.get("nutrient.protein", 0) or 0) * amount
-        calorie_total[product_id] += (nutrients.get("energy.energy", 0) or 0) * amount
-
-        if product_id not in first_seen:
-            first_seen[product_id] = date_str
-
-    # Top 10 most frequent foods
-    top_foods = [
-        {"name": food_names.get(pid, "Unknown"), "brand": food_brands.get(pid, ""), "count": count}
-        for pid, count in food_frequency.most_common(10)
-    ]
-
-    # Top 10 protein sources (by total protein consumed)
-    top_protein = sorted(
-        [(pid, protein_total[pid]) for pid in protein_total],
-        key=lambda x: x[1], reverse=True
-    )[:10]
-    top_protein_list = [
-        {"name": food_names.get(pid, "Unknown"), "brand": food_brands.get(pid, ""), "protein_g": round(total, 1)}
-        for pid, total in top_protein
-    ]
-
-    # Top 10 calorie bombs (by total calories consumed)
-    top_calories = sorted(
-        [(pid, calorie_total[pid]) for pid in calorie_total],
-        key=lambda x: x[1], reverse=True
-    )[:10]
-    top_calories_list = [
-        {"name": food_names.get(pid, "Unknown"), "brand": food_brands.get(pid, ""), "calories": round(total, 0)}
-        for pid, total in top_calories
-    ]
-
-    # Top brands
-    brand_frequency = Counter(food_brands.get(pid, "") for pid in food_frequency if food_brands.get(pid, ""))
-    top_brands = [{"brand": brand, "count": count} for brand, count in brand_frequency.most_common(10)]
-
-    # New this week (first seen in last 7 days)
-    week_ago = (today - timedelta(days=7)).isoformat()
-    new_this_week = [
-        {"name": food_names.get(pid, "Unknown"), "brand": food_brands.get(pid, ""), "first_seen": first_seen[pid]}
-        for pid in first_seen
-        if first_seen[pid] >= week_ago
-    ]
-
-    return {
-        "top_foods": top_foods,
-        "top_protein": top_protein_list,
-        "top_calories": top_calories_list,
-        "top_brands": top_brands,
-        "new_this_week": new_this_week,
-        "days_analyzed": days,
-    }
-
-
-@router.post("/nutrition-analysis")
-async def get_nutrition_analysis(
-    start_date: str | None = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    AI-powered nutrition analysis with an optional custom date range.
-
-    When start_date is provided (ISO date), an aggregate summary of the interval
-    from start_date to today is computed and passed to the AI as the primary
-    trend signal.  Otherwise only yesterday + today are used (legacy behavior).
-    """
-    from app.services.ai_service import generate_nutrition_analysis
-
-    context = await gather_user_context(current_user, db)
-
-    range_summary = None
-    if start_date and current_user.yazio_email and current_user.yazio_password:
-        try:
-            parsed_start = date.fromisoformat(start_date)
-        except ValueError:
-            parsed_start = None
-
-        if parsed_start is not None:
-            today_date = date.today()
-            if parsed_start > today_date:
-                parsed_start = today_date
-
-            try:
-                email = decrypt_value(current_user.yazio_email)
-                password = decrypt_value(current_user.yazio_password)
-            except Exception:
-                email = password = None
-
-            if email and password:
-                import asyncio
-                import httpx
-                from collections import Counter, defaultdict
-                from app.services.yazio_service import (
-                    _yazio_login, _fetch_daily_summary, _parse_summary,
-                    _fetch_consumed_items, _fetch_product,
-                )
-
-                total_days = (today_date - parsed_start).days + 1
-                dates_to_check = [parsed_start + timedelta(days=i) for i in range(total_days)]
-
-                async with httpx.AsyncClient(timeout=45.0) as client:
-                    token = await _yazio_login(client, email, password)
-                    if token:
-                        semaphore = asyncio.Semaphore(5)
-
-                        async def fetch_summary(d):
-                            async with semaphore:
-                                raw = await _fetch_daily_summary(client, token, d.isoformat())
-                                return _parse_summary(raw) if raw else None
-
-                        async def fetch_items(d):
-                            async with semaphore:
-                                items = await _fetch_consumed_items(client, token, d.isoformat())
-                                return [(item.get("product_id"), item.get("amount", 0))
-                                        for item in items if item.get("product_id")]
-
-                        summaries, item_lists = await asyncio.gather(
-                            asyncio.gather(*[fetch_summary(d) for d in dates_to_check]),
-                            asyncio.gather(*[fetch_items(d) for d in dates_to_check]),
-                        )
-
-                        # Aggregate macros over logged days only.
-                        logged = [
-                            s for s in summaries
-                            if s and (s.get("totals") or {}).get("calories", 0) > 0
-                        ]
-                        days_logged = len(logged)
-
-                        def mean(key: str, source: str = "totals"):
-                            values = [
-                                (row.get(source) or {}).get(key)
-                                for row in logged
-                                if (row.get(source) or {}).get(key) is not None
-                            ]
-                            values = [v for v in values if isinstance(v, (int, float)) and v > 0]
-                            return round(sum(values) / len(values), 1) if values else None
-
-                        def attainment(actual_key: str, goal_key: str = None):
-                            ratios = []
-                            for row in logged:
-                                actual = (row.get("totals") or {}).get(actual_key)
-                                goal = (row.get("goals") or {}).get(goal_key or actual_key)
-                                if isinstance(actual, (int, float)) and isinstance(goal, (int, float)) and goal > 0:
-                                    ratios.append(actual / goal)
-                            return round(sum(ratios) / len(ratios), 3) if ratios else None
-
-                        # Aggregate food frequency + protein contribution.
-                        all_items = [pair for sublist in item_lists for pair in sublist]
-                        product_ids = {pid for pid, _ in all_items if pid}
-                        product_cache: dict = {}
-
-                        async with httpx.AsyncClient(timeout=45.0) as client2:
-                            token2 = await _yazio_login(client2, email, password) or token
-                            sem2 = asyncio.Semaphore(5)
-
-                            async def load_product(pid):
-                                async with sem2:
-                                    await _fetch_product(client2, token2, pid, product_cache)
-
-                            await asyncio.gather(*[load_product(pid) for pid in product_ids])
-
-                        food_freq = Counter()
-                        protein_sum: dict = defaultdict(float)
-                        food_names: dict = {}
-                        for pid, amount in all_items:
-                            if not pid:
-                                continue
-                            food_freq[pid] += 1
-                            product = product_cache.get(pid)
-                            if product:
-                                food_names[pid] = product.get("name", "Unknown")
-                                nutrients = product.get("nutrients", {})
-                                protein_sum[pid] += (nutrients.get("nutrient.protein", 0) or 0) * amount
-
-                        top_foods = [
-                            {"name": food_names.get(pid, "Unbekannt"), "count": count}
-                            for pid, count in food_freq.most_common(10)
-                        ]
-                        top_protein = sorted(protein_sum.items(), key=lambda x: x[1], reverse=True)[:8]
-                        top_protein_sources = [
-                            {"name": food_names.get(pid, "Unbekannt"), "protein_g": round(total, 1)}
-                            for pid, total in top_protein
-                        ]
-
-                        range_summary = {
-                            "start_date": parsed_start.isoformat(),
-                            "end_date": today_date.isoformat(),
-                            "days_covered": total_days,
-                            "days_logged": days_logged,
-                            "avg_calories": mean("calories"),
-                            "avg_protein": mean("protein"),
-                            "avg_carbs": mean("carbs"),
-                            "avg_fat": mean("fat"),
-                            "avg_calorie_goal": mean("calories", "goals"),
-                            "avg_protein_goal": mean("protein", "goals"),
-                            "calorie_attainment": attainment("calories"),
-                            "protein_attainment": attainment("protein"),
-                            "top_foods": top_foods,
-                            "top_protein_sources": top_protein_sources,
-                        }
-
-    response = await generate_nutrition_analysis(
-        yazio_yesterday=context.get("yazio"),
-        yazio_today=context.get("yazio_today"),
-        language=current_user.language or "de",
-        range_summary=range_summary,
-    )
-
-    return response
+    return compute_consistency_timeline(workout_dates, nutrition_dates)

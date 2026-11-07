@@ -12,6 +12,7 @@ from app.services.chat_agent import execute_coach_tool
 
 CoachToolName = Literal[
     "get_user_profile",
+    "get_goals",
     "get_training_plan",
     "get_latest_workout",
     "get_workouts",

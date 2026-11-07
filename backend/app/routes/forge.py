@@ -16,7 +16,6 @@ from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.encryption import decrypt_value
 from app.models import (
     ForgeExercise,
     ForgeMachineProfile,
@@ -88,42 +87,11 @@ from app.services.ai_service import (
     generate_forge_session_start_coaching,
 )
 from app.services.forge_session_agent import run_session_agent
-from app.services.yazio_service import fetch_yazio_coaching_trends, resolve_yazio_goal_context
+from app.services import day_notes, nutrition_native, profile_goals
 from app.services.google_health_service import export_completed_session
 
 router = APIRouter(prefix="/api/forge", tags=["Forge"])
 logger = logging.getLogger(__name__)
-
-
-async def _yazio_coaching_context(user: User) -> dict:
-    """Resolve optional rolling nutrition context without blocking coaching."""
-    unavailable = {"source": "unavailable", "profile": {}, "rolling": {"7d": {}, "14d": {}}}
-    if not user.yazio_email or not user.yazio_password:
-        return unavailable
-    try:
-        result = await fetch_yazio_coaching_trends(
-            decrypt_value(user.yazio_email),
-            decrypt_value(user.yazio_password),
-            end_date=date.today(),
-        )
-        return result if isinstance(result, dict) else unavailable
-    except Exception:
-        return unavailable
-
-
-async def _yazio_goal_context(user: User) -> dict:
-    """Resolve the plan-draft goal only from Yazio; never fall back to Forge profile data."""
-    unavailable = {"available": False, "source": "unavailable", "goal": None, "profile": {}, "nutrition": None}
-    if not user.yazio_email or not user.yazio_password:
-        return unavailable
-    try:
-        return await resolve_yazio_goal_context(
-            decrypt_value(user.yazio_email),
-            decrypt_value(user.yazio_password),
-            target_date=date.today(),
-        )
-    except Exception:
-        return unavailable
 
 
 def _not_found(detail: str = "Not found") -> HTTPException:
@@ -1125,12 +1093,11 @@ async def create_plan_draft(
                 for profile in _available_machine_profiles(db, current_user.id, exercise.equipment)
             ],
         })
-    yazio_context = await _yazio_goal_context(current_user)
     draft = await generate_forge_plan_draft(
         data.instructions,
         catalog,
         current_user.language or "de",
-        yazio_context["goal"],
+        _goal_text(db, current_user),
     )
     return {"draft": draft}
 
@@ -1255,13 +1222,55 @@ def _local_weight_trends(db: Session, user_id: UUID) -> dict:
     return {"source": "local_weight_entries", "14d": window(14), "28d": window(28)}
 
 
+def _goal_text(db: Session, user: User) -> str | None:
+    """The user's own weight goal and nutrition rules as one short text for prompts (None when empty)."""
+    goals = profile_goals.get_goals(db, user)
+    weight = goals["weight"]
+    parts: list[str] = []
+    if weight["target_kg"] is not None:
+        text = f"Zielgewicht {weight['target_kg']} kg"
+        if weight["target_date"]:
+            text += f" bis {weight['target_date']}"
+        if weight["current_kg"] is not None:
+            text += f" (aktuell {weight['current_kg']} kg)"
+        parts.append(text)
+    if goals["nutrition_rules"]:
+        parts.append(f"Ernährungsregeln: {goals['nutrition_rules']}")
+    return "; ".join(parts) or None
+
+
+def _nutrition_coaching_context(db: Session, user: User) -> dict:
+    """Rolling 7/14 day intake from the Forge food diary plus goals, rules and today's note."""
+    today = nutrition_native.berlin_today()
+    days = nutrition_native.nutrition_range(db, user, today - timedelta(days=13), today)["days"]
+
+    def window(count: int) -> dict:
+        rows = [row for row in days[-count:] if row["logged"] and row["date"] != today.isoformat()]
+        if not rows:
+            return {"window_days": count, "logged_days": 0}
+        average = lambda key: round(sum(row[key] for row in rows) / len(rows), 1)
+        return {
+            "window_days": count, "logged_days": len(rows), "avg_kcal": average("calories"),
+            "avg_protein_g": average("protein"), "avg_carbs_g": average("carbs"), "avg_fat_g": average("fat"),
+        }
+
+    goals = profile_goals.get_goals(db, user)
+    return {
+        "source": "forge_food_diary",
+        "rolling": {"7d": window(7), "14d": window(14)},
+        "targets": goals["nutrition"],
+        "weight_goal": goals["weight"],
+        "nutrition_rules": goals["nutrition_rules"],
+        "day_note": day_notes.get_note(db, user.id, today),
+    }
+
+
 async def _forge_coaching_profile(db: Session, user: User) -> dict:
     """Build optional nutrition/background confidence data for hypertrophy coaching."""
-    yazio = await _yazio_coaching_context(user)
     return {
         "training_goal": "hypertrophy",
         "nutrition_role": "background_confidence_only",
-        "yazio": {"source": yazio.get("source", "unavailable"), "rolling": yazio.get("rolling") or {}},
+        "nutrition": _nutrition_coaching_context(db, user),
         "bodyweight": _local_weight_trends(db, user.id),
     }
 
@@ -2269,12 +2278,8 @@ async def _run_start_coaching(
 
     await emit({"type": "step", "id": "nutrition", "status": "active"})
     coaching_profile = await _forge_coaching_profile(db, user)
-    rolling = ((coaching_profile.get("yazio") or {}).get("rolling") or {}).get("14d") or {}
-    nutrition_detail = (
-        f"{rolling.get('logged_days', 0)} von 14 Tagen geloggt"
-        if (coaching_profile.get("yazio") or {}).get("source") not in (None, "unavailable")
-        else "Yazio nicht verfügbar"
-    )
+    rolling = ((coaching_profile.get("nutrition") or {}).get("rolling") or {}).get("14d") or {}
+    nutrition_detail = f"{rolling.get('logged_days', 0)} von 14 Tagen geloggt"
     await emit({"type": "step", "id": "nutrition", "status": "done", "detail": nutrition_detail})
 
     await emit({"type": "step", "id": "history", "status": "active"})

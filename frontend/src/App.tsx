@@ -5,7 +5,6 @@ import AppLayout from './components/AppLayout';
 import Dashboard from './components/Dashboard';
 import ChatPage from './components/ChatPage';
 import NutritionPage from './components/NutritionPage';
-import SetupPage from './components/SetupPage';
 import SettingsPage from './components/SettingsPage';
 import ForgePlanPage from './components/ForgePlanPage';
 import ForgeTrainingDayPage from './components/ForgeTrainingDayPage';
@@ -33,7 +32,6 @@ function App() {
       <Route path="/nutrition/track" element={<TrackDayPage />} />
       <Route path="/nutrition/track/:slotId" element={<TrackSlotPage />} />
       <Route path="/nutrition/food/:source/:sourceId" element={<FoodDetailPage />} />
-      <Route path="/achievements" element={<Navigate to="/dashboard" replace />} />
       <Route path="/forge" element={<ForgePlanPage />} />
       <Route path="/forge/days/new" element={<ForgeTrainingDayPage />} />
       <Route path="/forge/days/:planId" element={<ForgeTrainingDayPage />} />
@@ -46,7 +44,6 @@ function App() {
       <Route path="/forge/progress" element={<ForgeProgressPhotosPage />} />
       <Route path="/forge/session/:sessionId" element={<ForgeSessionPage />} />
       <Route path="/forge/exercises/:exerciseId/history" element={<ForgeExerciseHistoryPage />} />
-      <Route path="/setup" element={<SetupPage />} />
       <Route path="/settings" element={<SettingsPage />} />
     </Route>
     <Route path="*" element={<Navigate to="/login" replace />} />

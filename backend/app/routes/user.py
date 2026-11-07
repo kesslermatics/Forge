@@ -18,7 +18,6 @@ from app.schemas import (
     ApiKeyCreate, ApiKeyCreatedResponse, ApiKeyListResponse, ApiKeyResponse,
     GoogleHealthConnectResponse, GoogleHealthStatusResponse,
     UserResponse,
-    YazioCredentialsUpdate, YazioCredentialsResponse,
     LanguageUpdate, LanguageResponse,
     TrainingPlanUpdate, TrainingPlanResponse,
     ProfileUpdate, ProfileResponse,
@@ -49,7 +48,6 @@ async def get_current_user_info(current_user: User = Depends(get_current_user), 
     return UserResponse(
         id=current_user.id,
         username=current_user.username,
-        has_yazio=current_user.yazio_email is not None,
         has_google_health=google_connection is not None,
         first_name=current_user.first_name,
         height_cm=current_user.height_cm,
@@ -117,44 +115,6 @@ async def revoke_api_key(
         stored_key.revoked_at = datetime.now(timezone.utc)
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post("/yazio", response_model=YazioCredentialsResponse)
-async def update_yazio_credentials(
-    creds: YazioCredentialsUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Save or update Yazio credentials for the current user.
-    Credentials are encrypted before storage.
-    """
-    current_user.yazio_email = encrypt_value(creds.yazio_email)
-    current_user.yazio_password = encrypt_value(creds.yazio_password)
-    db.commit()
-    db.refresh(current_user)
-
-    return YazioCredentialsResponse(
-        message="Yazio credentials saved successfully",
-        has_yazio=True
-    )
-
-
-@router.delete("/yazio", response_model=YazioCredentialsResponse)
-async def delete_yazio_credentials(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Remove Yazio credentials for the current user."""
-    current_user.yazio_email = None
-    current_user.yazio_password = None
-    db.commit()
-    db.refresh(current_user)
-
-    return YazioCredentialsResponse(
-        message="Yazio credentials removed successfully",
-        has_yazio=False
-    )
 
 
 @router.patch("/profile", response_model=ProfileResponse)

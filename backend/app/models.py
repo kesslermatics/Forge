@@ -36,9 +36,7 @@ class User(Base):
     username = Column(String(50), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
     hevy_api_key = Column(String(512), nullable=True)       # Encrypted with Fernet
-    yazio_email = Column(String(512), nullable=True)         # Encrypted with Fernet
-    yazio_password = Column(String(512), nullable=True)      # Encrypted with Fernet
-    first_name = Column(String(100), nullable=True)          # From Yazio profile
+    first_name = Column(String(100), nullable=True)          # User-managed profile data
     height_cm = Column(Float, nullable=True)                 # User-managed profile data
     language = Column(String(5), nullable=False, server_default="de")  # "de" or "en"
     training_plan = Column(JSON, nullable=True)                          # List of workout names in current plan
@@ -50,6 +48,8 @@ class User(Base):
     nutrition_meal_slots = relationship("NutritionMealSlot", back_populates="user", cascade="all, delete-orphan")
     nutrition_entries = relationship("NutritionEntry", back_populates="user", cascade="all, delete-orphan")
     nutrition_goals = relationship("NutritionGoal", back_populates="user", cascade="all, delete-orphan")
+    profile_goal = relationship("ProfileGoal", back_populates="user", cascade="all, delete-orphan", uselist=False)
+    day_notes = relationship("DayNote", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
     forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
     forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
@@ -139,7 +139,7 @@ class ChatMessage(Base):
 class WeightEntry(Base):
     """
     Daily body weight, entered by the user in the app (PUT /api/briefing/weight).
-    One entry per user per date; older rows were imported from Yazio.
+    One entry per user per date.
     """
 
     __tablename__ = "weight_entries"
@@ -218,10 +218,11 @@ class NutritionEntry(Base):
 
 
 class NutritionGoal(Base):
-    """Daily calorie and macro targets, valid from a date until the next entry.
+    """Daily calorie, macro, sugar and salt targets, valid from a date until the next entry.
 
     Changing the targets adds (or overwrites today's) row, so past days keep being measured
     against the targets that applied back then. The oldest row also covers earlier days.
+    Sugar and salt are upper limits and optional.
     """
 
     __tablename__ = "nutrition_goals"
@@ -237,9 +238,46 @@ class NutritionGoal(Base):
     protein = Column(Float, nullable=False)
     carbs = Column(Float, nullable=False)
     fat = Column(Float, nullable=False)
+    sugar = Column(Float, nullable=True)
+    salt = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="nutrition_goals")
+
+
+class ProfileGoal(Base):
+    """The user's body-weight goal and free-text nutrition rules (one row per user).
+
+    ``start_*`` is the weight at ``start_date``; the weight chart begins on that date.
+    All fields are optional so a goal can be built up step by step.
+    """
+
+    __tablename__ = "profile_goals"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    start_weight_kg = Column(Float, nullable=True)
+    start_date = Column(Date, nullable=True)
+    target_weight_kg = Column(Float, nullable=True)
+    target_date = Column(Date, nullable=True)
+    nutrition_rules = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="profile_goal")
+
+
+class DayNote(Base):
+    """Free text for one calendar day. Delivered with the day's nutrition and training to the Coach."""
+
+    __tablename__ = "day_notes"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_day_note_user_date"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(Date, nullable=False)
+    text = Column(Text, nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="day_notes")
 
 
 class ForgeExercise(Base):

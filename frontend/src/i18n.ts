@@ -43,20 +43,6 @@ const translations = {
     'nav.logout': { de: 'Abmelden', en: 'Logout' },
 
     /* ── Setup Page ───────────────────────────────────── */
-    'setup.title': { de: "Los geht's!", en: "Let's get you set up" },
-    'setup.subtitle': { de: 'Verbinde deine Accounts für KI-Coaching', en: 'Connect your accounts to unlock AI coaching' },
-    'setup.hevyTitle': { de: 'Hevy API Key', en: 'Hevy API Key' },
-    'setup.hevyDesc': { de: 'Gib deinen Hevy API Key ein, um deine Trainingsdaten zu verbinden. Finde ihn in deinen', en: 'Enter your Hevy API key to connect your workout data. Find it in your' },
-    'setup.hevyLink': { de: 'Hevy Entwickler-Einstellungen', en: 'Hevy Developer Settings' },
-    'setup.hevyEncrypted': { de: 'verschlüsselt', en: 'encrypted' },
-    'setup.hevySaved': { de: 'Hevy API Key gespeichert!', en: 'Hevy API Key saved!' },
-    'setup.saveAndContinue': { de: 'Speichern & Weiter', en: 'Save & Continue' },
-    'setup.skipToYazio': { de: 'Bereits eingerichtet — weiter zu Yazio →', en: 'Already set — skip to Yazio →' },
-    'setup.yazioTitle': { de: 'Yazio Account', en: 'Yazio Account' },
-    'setup.yazioDesc': { de: 'Gib deine Yazio-Zugangsdaten ein, um deine täglichen Ernährungsdaten zu laden. Dein Ziel, Gewicht und Körperdaten werden automatisch von Yazio importiert. Zugangsdaten werden', en: 'Enter your Yazio login so we can fetch your daily nutrition data. Your goal, weight, and body stats will be imported automatically from Yazio. Credentials are' },
-    'setup.yazioConnected': { de: 'Yazio verbunden!', en: 'Yazio connected!' },
-    'setup.connectAndStart': { de: 'Verbinden & Coaching starten', en: 'Connect & Start Coaching' },
-    'setup.backToHevy': { de: '← Zurück zu Hevy', en: '← Back to Hevy' },
 
     /* ── Settings Page ────────────────────────────────── */
     'settings.title': { de: 'Profil & Einstellungen', en: 'Profile & settings' },
@@ -71,13 +57,6 @@ const translations = {
     'settings.hevyPlaceholder': { de: '••••••••  (neuen Key eingeben)', en: '••••••••  (enter new key to update)' },
     'settings.updateKey': { de: 'Key aktualisieren', en: 'Update API Key' },
     'settings.saveKey': { de: 'Key speichern', en: 'Save API Key' },
-    'settings.yazioTitle': { de: 'Yazio Account', en: 'Yazio Account' },
-    'settings.yazioDesc': { de: 'Deine Yazio-Zugangsdaten werden verschlüsselt und nur zum Abrufen deiner Ernährungsdaten verwendet.', en: 'Your Yazio credentials are encrypted and only used to fetch your nutrition data.' },
-    'settings.yazioUpdated': { de: 'Yazio-Zugangsdaten aktualisiert!', en: 'Yazio credentials updated!' },
-    'settings.yazioEmailPlaceholder': { de: '••••••••  (neue E-Mail eingeben)', en: '••••••••  (enter new email to update)' },
-    'settings.yazioPasswordPlaceholder': { de: '••••••••  (neues Passwort eingeben)', en: '••••••••  (enter new password to update)' },
-    'settings.updateYazio': { de: 'Yazio aktualisieren', en: 'Update Yazio Login' },
-    'settings.saveYazio': { de: 'Yazio speichern', en: 'Save Yazio Login' },
     'settings.connected': { de: 'Verbunden', en: 'Connected' },
     'settings.notSet': { de: 'Nicht gesetzt', en: 'Not set' },
     'settings.saving': { de: 'Speichern…', en: 'Saving…' },
@@ -258,7 +237,6 @@ const translations = {
     /* ── Tab Navigation ───────────────────────────────── */
     'tabs.dashboard': { de: 'Dashboard', en: 'Dashboard' },
     'tabs.nutrition': { de: 'Ernährung', en: 'Nutrition' },
-    'tabs.achievements': { de: 'Erfolge', en: 'Achievements' },
 
     /* ── Streaks ──────────────────────────────────────── */
     'streaks.title': { de: 'Wochen-Streaks', en: 'Weekly Streaks' },
@@ -285,16 +263,6 @@ const translations = {
     'progress.peak': { de: 'Peak', en: 'Peak' },
     'progress.change': { de: 'Veränderung', en: 'Change' },
 
-    /* ── Achievements ─────────────────────────────────── */
-    'achievements.title': { de: 'Achievements', en: 'Achievements' },
-    'achievements.subtitle': { de: 'Deine gesammelten Abzeichen', en: 'Your collected badges' },
-    'achievements.unlocked': { de: '{n} freigeschaltet', en: '{n} unlocked' },
-    'achievements.locked': { de: 'Gesperrt', en: 'Locked' },
-    'achievements.training': { de: 'Training', en: 'Training' },
-    'achievements.strength': { de: 'Kraft', en: 'Strength' },
-    'achievements.nutritionCat': { de: 'Ernährung', en: 'Nutrition' },
-    'achievements.consistency': { de: 'Konstanz', en: 'Consistency' },
-    'achievements.body': { de: 'Körper', en: 'Body' },
 
     /* ── Reports ──────────────────────────────────────── */
     'reports.title': { de: 'Reports', en: 'Reports' },

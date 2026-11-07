@@ -19,14 +19,14 @@ Forge is a private, full-stack training coach for planning workouts, logging ses
 ### AI-assisted coaching
 
 - Gemini-assisted exercise and routine drafts that must be explicitly saved by the user.
-- Training/nutrition analysis, reports, trends, and achievements.
+- Training/nutrition analysis and trends for the Coach.
 - In-session coaching chat that may propose a set adjustment or exercise addition. Proposed actions are validated against the current session and the user's own library, then require an explicit apply or dismiss action.
 
 ### Progress and optional nutrition
 
 - Native food tracking with user-defined meal slots (e.g. Frühstück, Pre-Workout), hybrid search (trigram + embeddings), barcode scanning and a product page with full nutrient breakdown.
 - Daily calorie and macro targets (valid from a date, history kept), a dashboard tile with today's intake and a manual body-weight entry (autosave). The Coach and MCP tools read this data directly.
-- Optional Yazio connection; it remains only for the old nutrition pages and the diet-phase goal text.
+- Profile goals: weight goal with start/target date (the start date is also where the weight chart begins), daily kcal/macro/sugar/salt targets and free-text nutrition rules. A free-text day note on the dashboard travels with that day's nutrition and training to the Coach. All of it can also be set through MCP tools.
 - Private progress photos with server-side image normalization and metadata stripping. Photo files require authenticated owner access and are not exposed through public URLs.
 
 ## Architecture
@@ -39,13 +39,13 @@ React 19 + TypeScript + Vite
 FastAPI + SQLAlchemy + APScheduler
      |              |              |
      v              v              v
-PostgreSQL      Gemini API     Optional Yazio data
+PostgreSQL      Gemini API     Food catalog DB
      |
      v
 Private persistent photo storage
 ```
 
-Forge keeps workout plans and completed workout sessions in PostgreSQL. Yazio is optional and supplies nutrition/weight context only; the core training experience does not depend on a third-party workout tracker.
+Forge keeps workout plans and completed workout sessions in PostgreSQL. Food tracking and body weight are native as well, so Forge does not depend on a third-party tracker.
 
 ## Technology
 
@@ -66,7 +66,7 @@ Forge keeps workout plans and completed workout sessions in PostgreSQL. Yazio is
 ├── backend/
 │   ├── app/
 │   │   ├── routes/              # Auth, user, Forge, briefing, challenges
-│   │   ├── services/            # AI, Forge, Yazio, photo-storage services
+│   │   ├── services/            # AI, Forge, food, goals, photo-storage services
 │   │   ├── models.py            # SQLAlchemy models
 │   │   ├── schemas.py           # Pydantic API schemas
 │   │   ├── security.py          # Password, JWT, and personal-key helpers
@@ -141,11 +141,6 @@ S3_REGION=auto
 S3_KEY_PREFIX=photos/
 S3_ACCESS_KEY_ID=
 S3_SECRET_ACCESS_KEY=
-
-# Optional server-level Yazio example values. Individual users connect Yazio
-# through the authenticated application settings instead.
-YAZIO_EMAIL=
-YAZIO_PASSWORD=
 ```
 
 Generate safe local secrets with:
@@ -226,7 +221,7 @@ Browser routes use `Authorization: Bearer <JWT>`. The dedicated read-only Coach-
 | Area | Route group | Purpose |
 | --- | --- | --- |
 | Authentication | `/auth/register`, `/auth/login` | Account registration and login |
-| User settings | `/user/*` | Profile, personal API keys, language, and optional Yazio connection |
+| User settings | `/user/*` | Profile, personal API keys, language, Google Health |
 | Coach tool API | `POST /api/coach/tools/{tool_name}` | API-key- or JWT-authenticated read-only Coach context |
 | Remote MCP | `/mcp` | Bearer-key-authenticated Streamable HTTP tools for external agents |
 | Forge | `/api/forge/*` | Exercise library, plans, programs, sessions, AI drafts/chat, and progress photos |
@@ -241,7 +236,9 @@ The FastAPI backend serves the Coach context tools and a set of plan-editing too
 https://forge.kesslermatics.com/mcp
 ```
 
-**Read tools** cover profile/current Yazio goal, training plans, workouts, exercise history, nutrition, steps/activity, sleep, weight history, and saved coaching memory. `get_workouts`, `get_exercise_history` and `get_nutrition_range` accept `start_date`/`end_date` or `days` (up to 730 days for training, 180 for nutrition). To keep responses small, long ranges are aggregated (`granularity` for nutrition, `detail: summary` for workouts), paged (`offset`/`next_offset`) and trimmed to a size budget; a `truncation` or `notes` field says when that happened.
+**Read tools** cover profile and goals (weight goal, targets, nutrition rules), training plans, workouts, exercise history, nutrition, steps/activity, sleep, weight history, and saved coaching memory. `get_workouts`, `get_exercise_history` and `get_nutrition_range` accept `start_date`/`end_date` or `days` (up to 730 days for training, 180 for nutrition). To keep responses small, long ranges are aggregated (`granularity` for nutrition, `detail: summary` for workouts), paged (`offset`/`next_offset`) and trimmed to a size budget; a `truncation` or `notes` field says when that happened.
+
+**Goal tools**: `get_goals`, `set_goals` (weight goal with dates, daily kcal/protein/carbs/fat targets, sugar/salt limits, free-text `nutrition_rules`; only passed fields change), `set_day_note` (free text for one day, returned as `day_note` with that day's nutrition and workouts) and `log_weight`.
 
 **Plan tools** let an agent manage the training setup: `list_plans`, `create_plan`, `update_plan` (exercises, order, warm-up and working sets), `delete_plan` (needs `confirm=true`), `get_training_program` / `update_training_program` (rotation or weekly split), and `list_exercises` / `create_exercise` / `update_exercise`. Workout tracking itself stays in the Forge app; MCP cannot start, edit or complete sessions.
 
@@ -383,7 +380,7 @@ Copy `backend/.env.example` into the backend application's environment and `fron
 
 This is a public repository. Treat all real credentials and user data as private.
 
-- Never commit `.env` files, database URLs containing passwords, API keys, JWT secrets, Fernet keys, Yazio credentials, screenshots, or user exports.
+- Never commit `.env` files, database URLs containing passwords, API keys, JWT secrets, Fernet keys, screenshots, or user exports.
 - The repository ignores `.env` files; verify this before every commit with `git status`.
 - Passwords are hashed with bcrypt. Browser API access uses seven-day JWT bearer tokens.
 - Personal MCP/API keys are generated with high entropy, stored only as SHA-256 hashes, never expire automatically, and remain individually revocable. They can read Coach data and edit plans, the training split and exercises; they cannot change the profile, integrations or recorded workouts.

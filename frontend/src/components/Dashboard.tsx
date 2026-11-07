@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
     AreaChart, Area, YAxis, XAxis, Tooltip,
-    ResponsiveContainer, CartesianGrid,
+    ResponsiveContainer, CartesianGrid, ReferenceLine,
 } from 'recharts';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
@@ -10,17 +10,17 @@ import {
 } from '../api/api';
 import type {
     UserInfo,
-    WeightHistoryEntry, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
+    WeightHistoryData, WeightHistoryEntry, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
     Loader2, Flame, Plus, ChevronRight,
-    Dumbbell, Scale, Pencil,
+    Dumbbell, Scale, Target,
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 import ForgeAlternativeStartSheet from './ForgeAlternativeStartSheet';
 import ForgePlanImagePreview from './ForgePlanImagePreview';
 import WeightEntryCard from './WeightEntryCard';
-import GoalsSheet from './track/GoalsSheet';
+import DayNoteCard from './DayNoteCard';
 import { MacroPills } from './track/shared';
 
 const SAND = '#e8c58a';
@@ -31,7 +31,7 @@ const TEXT_MID = 'rgba(242,236,226,0.7)';
 type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 
 /* ── weight chart — Recharts ── */
-function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
+function WeightChart({ entries, target }: { entries: WeightHistoryEntry[]; target: number | null }) {
     if (entries.length < 2) return null;
 
     // Daily weigh-ins swing with water and food; the line shows a centred 7-day trend
@@ -45,8 +45,9 @@ function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
 
     // A minimum visible span keeps tiny fluctuations from filling the whole chart height.
     const MIN_SPAN_KG = 3;
-    const rawMin = Math.min(...trend);
-    const rawMax = Math.max(...trend);
+    // The target weight stays inside the visible range so the distance to it is always visible.
+    const rawMin = Math.min(...trend, ...(target !== null ? [target] : []));
+    const rawMax = Math.max(...trend, ...(target !== null ? [target] : []));
     const centre = (rawMin + rawMax) / 2;
     const span = Math.max(rawMax - rawMin, MIN_SPAN_KG) * 1.2;
     const yMin = Math.floor((centre - span / 2) * 10) / 10;
@@ -108,6 +109,10 @@ function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
                     }}
                     cursor={{ stroke: 'rgba(232,197,138,0.3)', strokeWidth: 1 }}
                 />
+                {target !== null && (
+                    <ReferenceLine y={target} stroke="#4ade80" strokeDasharray="4 4" strokeOpacity={0.7}
+                        label={{ value: `Ziel ${target.toFixed(1)}`, position: 'insideBottomRight', fontSize: 9, fill: '#4ade80' }} />
+                )}
                 <Area
                     type="basis"
                     dataKey="kg"
@@ -123,20 +128,21 @@ function WeightChart({ entries }: { entries: WeightHistoryEntry[] }) {
     );
 }
 /* ── macro bar ── */
-function MacroBar({ label, current, goal, color }: { label: string; current: number; goal: number; color: string }) {
+function MacroBar({ label, current, goal, color, limit = false, decimals = 0 }: { label: string; current: number; goal: number; color: string; limit?: boolean; decimals?: number }) {
     const pct = goal > 0 ? Math.min(current / goal, 1) : 0;
+    const over = limit && current > goal;
     return (
         <div>
             <div className="flex items-baseline justify-between mb-1">
                 <span className="text-[11px]" style={{ color: TEXT_DIM }}>{label}</span>
                 <span className="text-[11px] tabular-nums" style={{ color: TEXT_MID }}>
-                    {Math.round(current)}<span style={{ color: TEXT_DIM }}>/{goal}g</span>
+                    <span style={{ color: over ? '#fbbf24' : undefined }}>{current.toFixed(decimals)}</span><span style={{ color: TEXT_DIM }}>{limit ? ' von max. ' : '/'}{goal}g</span>
                 </span>
             </div>
             <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,247,235,0.08)' }}>
                 <div className="h-full rounded-full" style={{
                     width: `${pct * 100}%`,
-                    background: color,
+                    background: over ? '#fbbf24' : color,
                     transition: 'width 0.9s cubic-bezier(0.22,1,0.36,1)',
                 }} />
             </div>
@@ -151,7 +157,6 @@ export default function Dashboard() {
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
     const [weightLatest, setWeightLatest] = useState<WeightHistoryEntry | null>(null);
     const [trackDay, setTrackDay] = useState<TrackDay | null>(null);
-    const [goalsOpen, setGoalsOpen] = useState(false);
     const [trackFailed, setTrackFailed] = useState(false);
     const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
     const [forgeToday, setForgeToday] = useState<ForgeToday | null>(null);
@@ -161,20 +166,9 @@ export default function Dashboard() {
     const [startingSession, setStartingSession] = useState(false);
     const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
-    // Weight chart range — persisted in localStorage
-    const [weightStartDate, setWeightStartDate] = useState<string>(() => {
-        const saved = localStorage.getItem('weightStartDate');
-        if (saved) return saved;
-        const d = new Date();
-        d.setDate(d.getDate() - 90);
-        return d.toISOString().slice(0, 10);
-    });
-    const weightInputRef = useRef<HTMLInputElement>(null);
-
-    const updateWeightStartDate = (val: string) => {
-        setWeightStartDate(val);
-        localStorage.setItem('weightStartDate', val);
-    };
+    // The chart starts at the start date of the weight goal in the profile (last 90 days without one).
+    const [weightGoal, setWeightGoal] = useState<WeightHistoryData['goal'] | null>(null);
+    const weightStartDate = weightGoal?.start_date ?? null;
 
     const refreshForgeDashboard = useCallback(() => {
         getForgeToday().then(setForgeToday).catch(() => { });
@@ -182,14 +176,14 @@ export default function Dashboard() {
     }, []);
 
     useEffect(() => {
-        getWeightHistory(weightStartDate).then(d => { setWeightHistory(d.entries); setWeightLatest(d.latest); }).catch(() => { });
-    }, [weightStartDate]);
+        getWeightHistory().then(d => { setWeightHistory(d.entries); setWeightLatest(d.latest); setWeightGoal(d.goal); }).catch(() => { });
+    }, []);
 
     // A weight saved by the entry card appears in the chart right away, without a reload.
     const handleWeightSaved = useCallback((entry: WeightHistoryEntry) => {
         setWeightLatest(previous => (!previous || entry.date >= previous.date ? entry : previous));
         setWeightHistory(previous => {
-            if (entry.date < weightStartDate) return previous;
+            if (weightStartDate && entry.date < weightStartDate) return previous;
             return [...previous.filter(item => item.date !== entry.date), entry].sort((a, b) => a.date.localeCompare(b.date));
         });
     }, [weightStartDate]);
@@ -347,8 +341,8 @@ export default function Dashboard() {
                                 Ernährung heute
                                 <ChevronRight size={12} />
                             </button>
-                            <button type="button" onClick={() => setGoalsOpen(true)} className="tap flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
-                                {goals ? <><Pencil size={10} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : 'Ziele festlegen'}
+                            <button type="button" onClick={() => navigate('/settings#ziele')} className="tap flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
+                                {goals ? <><Target size={10} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : 'Ziele festlegen'}
                             </button>
                         </div>
 
@@ -373,20 +367,19 @@ export default function Dashboard() {
                                 <MacroBar label="Protein" current={trackDay.totals.protein} goal={goals.protein} color="#f87171" />
                                 <MacroBar label="Carbs" current={trackDay.totals.carbs} goal={goals.carbs} color="#fbbf24" />
                                 <MacroBar label="Fett" current={trackDay.totals.fat} goal={goals.fat} color="#34d399" />
+                                {goals.sugar != null && <MacroBar label="Zucker" current={trackDay.totals.sugar} goal={goals.sugar} color="#c084fc" limit />}
+                                {goals.salt != null && <MacroBar label="Salz" current={trackDay.totals.salt} goal={goals.salt} color="#60a5fa" limit decimals={1} />}
                             </div>
                         </> : <div className="mt-4"><MacroPills totals={trackDay.totals} /></div>}
                     </section>
                 ) : !trackFailed && (
                     <div className="forge-skeleton h-[212px] rounded-3xl" aria-hidden="true" />
                 )}
-                {goalsOpen && <GoalsSheet
-                    current={goals}
-                    onSaved={(saved) => setTrackDay(day => day ? { ...day, goals: saved } : day)}
-                    onClose={() => setGoalsOpen(false)}
-                />}
-
                 {/* ── Gewicht eintragen ── */}
                 <WeightEntryCard latest={weightLatest} onSaved={handleWeightSaved} />
+
+                {/* ── Tagesnotiz ── */}
+                <DayNoteCard />
 
                 {/* ── Gewichtsverlauf ── */}
                 {weightValues.length > 0 && (
@@ -400,25 +393,12 @@ export default function Dashboard() {
                                     <span>Gewicht</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    {/* Date picker — always visible */}
-                                    <label className="flex items-center gap-1 rounded-md px-1.5 py-0.5 cursor-pointer"
-                                        style={{ background: 'rgba(232,197,138,0.08)' }}>
-                                        <Pencil size={9} style={{ color: TEXT_DIM }} />
-                                        <span className="tabular-nums" style={{ color: TEXT_DIM }}>
-                                            {new Date(`${weightStartDate}T12:00:00`).toLocaleDateString('de-DE', {
-                                                day: 'numeric', month: 'short', year: '2-digit',
-                                            })}
-                                        </span>
-                                        <input
-                                            ref={weightInputRef}
-                                            type="date"
-                                            max={new Date().toISOString().slice(0, 10)}
-                                            value={weightStartDate}
-                                            onChange={e => { if (e.target.value) updateWeightStartDate(e.target.value); }}
-                                            className="sr-only"
-                                            style={{ colorScheme: 'dark' }}
-                                        />
-                                    </label>
+                                    {weightGoal?.target_kg != null && (
+                                        <button type="button" onClick={() => navigate('/settings#ziele')} className="tap tabular-nums rounded-md px-1.5 py-0.5"
+                                            style={{ background: 'rgba(74,222,128,0.08)', color: '#4ade80' }}>
+                                            Ziel {weightGoal.target_kg.toFixed(1)} kg{weightGoal.target_date ? ` · ${new Date(`${weightGoal.target_date}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: '2-digit' })}` : ''}
+                                        </button>
+                                    )}
 
                                     {/* Total delta */}
                                     {weightDelta !== null && (
@@ -438,7 +418,7 @@ export default function Dashboard() {
                             {/* ── Chart ── */}
                             {weightHistory.length >= 4 && (
                                 <div className="mt-2">
-                                    <WeightChart entries={weightHistory} />
+                                    <WeightChart entries={weightHistory} target={weightGoal?.target_kg ?? null} />
                                 </div>
                             )}
 

@@ -81,7 +81,6 @@ export const logoutUser = () => { removeToken(); };
 export interface UserInfo {
   id: string;
   username: string;
-  has_yazio: boolean;
   has_google_health: boolean;
   first_name: string | null;
   height_cm: number | null;
@@ -115,12 +114,6 @@ export const createPersonalApiKey = (name: string) =>
 
 export const revokePersonalApiKey = (id: string) =>
   apiRequest<void>(`/user/api-keys/${id}`, { method: 'DELETE' });
-
-export const saveYazioCredentials = (yazio_email: string, yazio_password: string) =>
-  apiRequest<{ message: string; has_yazio: boolean }>('/user/yazio', {
-    method: 'POST',
-    body: JSON.stringify({ yazio_email, yazio_password }),
-  });
 
 export const updateLanguage = (language: 'de' | 'en') =>
   apiRequest<{ message: string; language: string }>('/user/language', {
@@ -258,28 +251,6 @@ export interface WorkoutReviewItem {
 
 
 
-/* ── Activity Heatmap ───────────────────────────────────── */
-
-export interface WorkoutDate {
-  date: string;
-  title: string;
-  duration_min: number | null;
-}
-
-export interface NutritionDate {
-  date: string;
-  calories: number;
-  protein: number;
-}
-
-export interface ActivityHeatmapData {
-  workouts: WorkoutDate[];
-  nutrition: NutritionDate[];
-}
-
-export const getActivityHeatmap = () =>
-  apiRequest<ActivityHeatmapData>('/api/briefing/activity-heatmap');
-
 /* ── Training Plan ──────────────────────────────────────── */
 
 export const getTrainingPlan = () =>
@@ -405,6 +376,8 @@ export interface WeightHistoryData {
   latest: WeightHistoryEntry | null;
   start_weight: number | null;
   current_weight: number | null;
+  /** Weight goal from the profile (all null when unset). */
+  goal: { start_kg: number | null; start_date: string | null; target_kg: number | null; target_date: string | null };
   count: number;
 }
 
@@ -422,40 +395,6 @@ export const getWeightHistory = (startDate: string | null = null, days = 90) => 
     : `days=${days}`;
   return apiRequest<WeightHistoryData>(`/api/briefing/weight-history?${params}`);
 };
-
-/* ── Macro-Performance Correlation ──────────────────── */
-
-export interface MacroPerformanceDataPoint {
-  workout_date: string;
-  workout_title: string;
-  volume: number;
-  best_e1rm: number;
-  duration_min: number | null;
-  prev_day_calories: number;
-  prev_day_protein: number;
-  prev_day_carbs: number;
-  prev_day_fat: number;
-  calorie_goal: number;
-  protein_goal: number;
-}
-
-export interface MacroInsight {
-  type: string;
-  message_de: string;
-  message_en: string;
-  diff_percent: number;
-  threshold?: number;
-}
-
-export interface MacroPerformanceData {
-  data_points: MacroPerformanceDataPoint[];
-  insights: MacroInsight[];
-  has_enough_data: boolean;
-  total_correlated_workouts: number;
-}
-
-export const getMacroPerformance = () =>
-  apiRequest<MacroPerformanceData>('/api/briefing/macro-performance');
 
 /* ── Progressive Overload ───────────────────────────── */
 
@@ -483,23 +422,6 @@ export interface ExerciseProgress {
 export const getProgressiveOverload = () =>
   apiRequest<ExerciseProgress[]>('/api/briefing/progressive-overload');
 
-/* ── Streaks ────────────────────────────────────────── */
-
-export interface StreakInfo {
-  current_streak: number;
-  longest_streak: number;
-  total_active_weeks: number;
-}
-
-export interface StreaksData {
-  training: StreakInfo;
-  nutrition: StreakInfo;
-  combined: StreakInfo;
-}
-
-export const getStreaks = () =>
-  apiRequest<StreaksData>('/api/briefing/streaks');
-
 export interface ConsistencyDay {
   date: string;
   training: boolean;
@@ -512,181 +434,10 @@ export interface ConsistencyData {
   training_streak_weeks: number;
   training_sessions_this_week: number;
   training_weekly_goal: number;
-  nutrition_connected: boolean;
 }
 
 export const getConsistency = () =>
   apiRequest<ConsistencyData>('/api/briefing/consistency');
-
-/* ── Weekly / Monthly Reports ───────────────────────── */
-
-export interface ReportTraining {
-  workouts_count: number;
-  total_volume_kg: number;
-  total_sets: number;
-  total_duration_min: number;
-  muscle_groups: Record<string, number>;
-  workout_names?: string[];
-  best_e1rms?: Record<string, number>;
-}
-
-export interface ReportNutrition {
-  days_tracked: number;
-  avg_calories: number;
-  avg_protein: number;
-  avg_carbs?: number;
-  avg_fat?: number;
-  calorie_goal?: number;
-  protein_goal?: number;
-}
-
-export interface ReportWeight {
-  start: number | null;
-  end: number | null;
-  change: number | null;
-}
-
-export interface WeeklyReport {
-  week_start: string;
-  week_end: string;
-  week_offset: number;
-  training: ReportTraining;
-  nutrition: ReportNutrition;
-  weight: ReportWeight;
-}
-
-export interface MonthlyReport {
-  month: string;
-  month_start: string;
-  month_end: string;
-  month_offset: number;
-  training: ReportTraining;
-  nutrition: ReportNutrition;
-  weight: ReportWeight;
-}
-
-export const getWeeklyReport = (weekOffset = 0) =>
-  apiRequest<{ current: WeeklyReport; previous: WeeklyReport }>(`/api/briefing/weekly-report?week_offset=${weekOffset}`);
-
-export const getMonthlyReport = (monthOffset = 0) =>
-  apiRequest<{ current: MonthlyReport; previous: MonthlyReport }>(`/api/briefing/monthly-report?month_offset=${monthOffset}`);
-
-/* ── Achievements ───────────────────────────────────── */
-
-export interface Achievement {
-  id: string;
-  name_de: string;
-  name_en: string;
-  desc_de: string;
-  desc_en: string;
-  icon: string;
-  category: string;
-  unlocked: boolean;
-  unlocked_date: string | null;
-  progress: number;
-  target: number;
-}
-
-export const getAchievements = () =>
-  apiRequest<Achievement[]>('/api/briefing/achievements');
-
-/* ── Today's Nutrition ──────────────────────────────── */
-
-export interface NutritionMacros {
-  calories: number; protein: number; carbs: number; fat: number;
-  sugar: number; fiber: number; saturated: number; salt: number;
-}
-
-export interface FoodItem {
-  name: string;
-  brand: string;
-  amount: number;
-  serving: string;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
-}
-
-export interface TodayNutrition {
-  totals: NutritionMacros;
-  goals: NutritionMacros;
-  meals: Record<string, NutritionMacros>;
-  food_items?: Record<string, FoodItem[]>;
-  water_ml: number;
-  error?: string;
-}
-
-export const getTodayNutrition = () =>
-  apiRequest<TodayNutrition>('/api/briefing/today-nutrition');
-
-/* ── Nutrition History ──────────────────────────────── */
-
-export interface NutritionDay {
-  date: string;
-  totals: NutritionMacros;
-  goals: NutritionMacros;
-}
-
-export interface NutritionHistoryData {
-  days: NutritionDay[];
-  error?: string;
-}
-
-export const getNutritionHistory = (startDate: string | null = null, days = 7) => {
-  const params = startDate
-    ? `start_date=${encodeURIComponent(startDate)}`
-    : `days=${days}`;
-  return apiRequest<NutritionHistoryData>(`/api/briefing/nutrition-history?${params}`);
-};
-
-/* ── Food Statistics ────────────────────────────────── */
-
-export interface TopFood {
-  name: string;
-  brand: string;
-  count: number;
-}
-
-export interface TopProteinFood {
-  name: string;
-  brand: string;
-  protein_g: number;
-}
-
-export interface TopCalorieFood {
-  name: string;
-  brand: string;
-  calories: number;
-}
-
-export interface TopBrand {
-  brand: string;
-  count: number;
-}
-
-export interface NewFood {
-  name: string;
-  brand: string;
-  first_seen: string;
-}
-
-export interface FoodStatisticsData {
-  top_foods: TopFood[];
-  top_protein: TopProteinFood[];
-  top_calories: TopCalorieFood[];
-  top_brands: TopBrand[];
-  new_this_week: NewFood[];
-  days_analyzed: number;
-  error?: string;
-}
-
-export const getFoodStatistics = (startDate: string | null = null, days = 30) => {
-  const params = startDate
-    ? `start_date=${encodeURIComponent(startDate)}`
-    : `days=${days}`;
-  return apiRequest<FoodStatisticsData>(`/api/briefing/food-statistics?${params}`);
-};
 
 /* ── Native food tracking ───────────────────────────── */
 
@@ -703,7 +454,7 @@ export interface MealSlot { id: string; name: string; position: number }
 export interface MealSlotDay extends MealSlot { totals: TrackMacros; entry_count: number }
 
 /** Daily targets; null until the user has set them. */
-export interface NutritionGoals { kcal: number; protein: number; carbs: number; fat: number }
+export interface NutritionGoals { kcal: number; protein: number; carbs: number; fat: number; sugar: number | null; salt: number | null }
 
 export interface TrackDay {
   date: string;
@@ -770,10 +521,6 @@ export const reorderMealSlots = (slotIds: string[]) =>
 export const deleteMealSlot = (id: string) =>
   apiRequest<void>(`/api/nutrition/slots/${id}`, { method: 'DELETE' });
 
-/** Targets apply from today on; earlier days keep the targets they had. */
-export const saveNutritionGoals = (goals: NutritionGoals) =>
-  apiRequest<{ current: NutritionGoals; valid_from: string }>('/api/nutrition/goals', { method: 'PUT', body: JSON.stringify(goals) });
-
 export const getTrackDay = (date: string) =>
   apiRequest<TrackDay>(`/api/nutrition/day?date=${encodeURIComponent(date)}`);
 export const getTrackEntries = (date: string, slotId: string | null) =>
@@ -796,20 +543,6 @@ export const lookupBarcode = (code: string) =>
   apiRequest<FoodDetail>(`/api/nutrition/barcode/${encodeURIComponent(code)}`);
 export const getFoodDetail = (source: FoodSource, sourceId: string) =>
   apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}`);
-
-/* ── Nutrition Analysis (AI) ────────────────────────── */
-
-export interface NutritionAnalysis {
-  analysis: string;
-}
-
-export const getNutritionAnalysis = (startDate: string | null = null) => {
-  const qs = startDate ? `?start_date=${encodeURIComponent(startDate)}` : '';
-  return apiRequest<NutritionAnalysis>(`/api/briefing/nutrition-analysis${qs}`, {
-    method: 'POST',
-  });
-};
-
 
 /* ── Native Forge planning ─────────────────────────────── */
 
@@ -1352,3 +1085,52 @@ export const deleteForgeProgressPhoto = (id: string) =>
   apiRequest<void>(`/api/forge/progress-photos/${id}`, { method: 'DELETE' });
 export const fetchForgeProgressPhotoImage = (id: string) =>
   apiBlob(`/api/forge/progress-photos/${id}/image`);
+
+/* ── Goals and day note ─────────────────────────────── */
+
+export interface WeightGoal {
+  start_kg: number | null;
+  start_date: string | null;
+  target_kg: number | null;
+  target_date: string | null;
+  current_kg: number | null;
+  current_date: string | null;
+  kg_to_go: number | null;
+  days_left: number | null;
+  required_rate_kg_per_week: number | null;
+}
+
+export interface GoalsData {
+  weight: WeightGoal;
+  nutrition: (NutritionGoals & { valid_from: string }) | null;
+  nutrition_rules: string | null;
+}
+
+/** Every field is optional: only the fields that are sent change. Daily targets apply from today on. */
+export interface GoalsInput {
+  start_weight_kg?: number | null;
+  start_date?: string | null;
+  target_weight_kg?: number | null;
+  target_date?: string | null;
+  kcal?: number;
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  sugar?: number | null;
+  salt?: number | null;
+  nutrition_rules?: string | null;
+}
+
+export const getGoals = () => apiRequest<GoalsData>('/api/goals');
+export const saveGoals = (data: GoalsInput) =>
+  apiRequest<GoalsData>('/api/goals', { method: 'PUT', body: JSON.stringify(data) });
+
+export const getDayNote = (date: string) =>
+  apiRequest<{ date: string; text: string | null }>(`/api/day-note?date=${encodeURIComponent(date)}`);
+/** `keepalive` lets the request finish while the app is being closed or sent to the background. */
+export const saveDayNote = (date: string, text: string, keepalive = false) =>
+  apiRequest<{ date: string; text: string | null }>('/api/day-note', {
+    method: 'PUT',
+    body: JSON.stringify({ date, text }),
+    keepalive,
+  });

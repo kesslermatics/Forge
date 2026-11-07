@@ -6,13 +6,10 @@ __pycache__/
 .env.*
 !.env.example
 migration_backups/
-yazio_probe_results.json
-probe_yazio_*.py
 debug_*.py
 _read_only_*.py
 test_*.py
 test_*.json
 test_prompt.txt
-YAZIO_API_DOCS.md
 Dockerfile
 .dockerignore

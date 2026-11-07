@@ -4,7 +4,7 @@ Encryption utilities for storing sensitive API credentials.
 We use Fernet symmetric encryption (AES-128-CBC) so we can
 decrypt credentials when we need to call external APIs.
 This is NOT hashing – hashing is one-way and we need the
-original values to authenticate with Hevy/Yazio.
+original values to authenticate with external APIs.
 """
 from cryptography.fernet import Fernet
 from app.config import settings

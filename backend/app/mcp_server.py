@@ -1,6 +1,7 @@
 """Authenticated Streamable HTTP MCP server mounted by the FastAPI backend."""
 import logging
 from typing import Annotated, Any, Literal
+from datetime import date as date_type
 from uuid import UUID
 
 from collections.abc import Callable
@@ -18,7 +19,9 @@ from app.database import SessionLocal
 from app.dependencies import resolve_api_key_user
 from app.models import User
 from app.security import api_key_id
-from app.services import forge_plan_tools
+from app.services import day_notes, forge_plan_tools, profile_goals
+from app.services.nutrition_native import berlin_today
+from app.services.profile_goals import GoalError
 from app.services.chat_agent import execute_coach_tool
 from app.services.forge_plan_tools import ForgePlanToolError, PlanExerciseSpec, ProgramRoutineSpec
 from starlette.concurrency import run_in_threadpool
@@ -62,7 +65,9 @@ mcp = MCPServer(
     instructions=(
         "Access to the authenticated user's Forge training, nutrition, activity, and coaching context. "
         "Read tools accept date ranges; long ranges are aggregated or paged, so prefer summaries first and drill down. "
-        "Write tools can change training plans, the training split (program) and the exercise library. "
+        "Write tools can change training plans, the training split (program), the exercise library, the user's goals "
+        "(weight goal with dates, daily kcal/macro/sugar/salt targets, free-text nutrition rules), the free-text note of a day and the body weight. "
+        "Day notes (day_note) are delivered with workouts and nutrition data of that day. "
         "Workout tracking itself happens in the Forge app and cannot be changed here. "
         "Call list_plans / list_exercises / get_training_program first to obtain IDs, and only modify what the user asked for."
     ),
@@ -98,7 +103,7 @@ async def _call(name: str, arguments: dict[str, Any] | None = None) -> dict[str,
 
 @mcp.tool()
 async def get_user_profile() -> dict[str, Any]:
-    """Read the user's profile, daily calorie/macro targets (nutrition_targets), integration status, and the current Yazio goal."""
+    """Read the user's profile, daily calorie/macro targets (nutrition_targets) and the goals (weight goal, nutrition rules)."""
     return await _call("get_user_profile")
 
 
@@ -135,7 +140,7 @@ async def _call_sync(function: Callable[..., dict[str, Any]], **kwargs: Any) -> 
         return await run_in_threadpool(run)
     except ToolError:
         raise
-    except ForgePlanToolError as exc:
+    except (ForgePlanToolError, GoalError) as exc:
         raise ToolError(str(exc)) from exc
     except Exception as exc:
         logger.exception("MCP tool %s failed", getattr(function, "__name__", "?"))
@@ -216,10 +221,8 @@ async def get_nutrition_range(
 async def get_steps(date: str | None = None) -> dict[str, Any]:
     """Read step count for YYYY-MM-DD; omit date for today.
 
-    Uses Google Health when the account is connected with the activity read scope (preferred).
-    Falls back to Yazio if Google Health is unavailable.
-    Google Health returns: available, source, date, steps.
-    Yazio fallback also returns: activity_kcal, water_ml.
+    Requires a Google Health connection with the activity read scope.
+    Returns: available, source, date, steps.
     """
     return await _call("get_steps", {"date": date} if date is not None else {})
 
@@ -323,14 +326,96 @@ async def get_performance_correlations(
 
 @mcp.tool()
 async def project_goal_timeline(
-    target_weight_kg: Annotated[float, Field(ge=30, le=300)],
+    target_weight_kg: Annotated[float | None, Field(ge=30, le=300, description="Default: the target weight from the profile goals")] = None,
     scenarios: Annotated[list[GoalScenario] | None, Field(max_length=6, description="What-if cases; defaults to -200 kcal/day and +3000 steps/day when losing")] = None,
 ) -> dict[str, Any]:
-    """Project when a target weight is reached from the current trend (earliest-latest corridor) and simulate scenarios."""
+    """Project when a target weight is reached from the current trend (earliest-latest corridor) and simulate scenarios.
+
+    Without target_weight_kg the profile goal is used, and the result compares the current rate with the rate the goal date requires.
+    """
     return await _call("project_goal_timeline", _range_args(
         target_weight_kg=target_weight_kg,
         scenarios=[item.model_dump(exclude_none=True) for item in scenarios] if scenarios else None,
     ))
+
+
+# ── Goals, day note, weight ─────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_goals() -> dict[str, Any]:
+    """Read the goals: weight goal (start/target weight and date, current weight, kg to go, days left, required kg/week),
+    the daily targets (kcal, protein, carbs, fat, sugar and salt limits) and the free-text nutrition rules."""
+    return await _call("get_goals")
+
+
+def _parse_day(value: str | None, field: str) -> date_type | None:
+    if value is None:
+        return None
+    try:
+        return date_type.fromisoformat(value)
+    except ValueError as exc:
+        raise ToolError(f"{field}: bitte ein Datum im Format YYYY-MM-DD angeben.") from exc
+
+
+def _apply_goals(db: Any, user: User, *, fields: dict[str, Any]) -> dict[str, Any]:
+    return profile_goals.set_goals(db, user, fields)
+
+
+@mcp.tool()
+async def set_goals(
+    start_weight_kg: Annotated[float | None, Field(description="Weight on the start date; also stored as that day's weight entry")] = None,
+    start_date: Annotated[str | None, Field(description="YYYY-MM-DD; start of the weight chart")] = None,
+    target_weight_kg: float | None = None,
+    target_date: Annotated[str | None, Field(description="YYYY-MM-DD; must be after start_date")] = None,
+    kcal: float | None = None,
+    protein: Annotated[float | None, Field(description="grams per day")] = None,
+    carbs: Annotated[float | None, Field(description="grams per day")] = None,
+    fat: Annotated[float | None, Field(description="grams per day")] = None,
+    sugar: Annotated[float | None, Field(description="upper limit, grams per day")] = None,
+    salt: Annotated[float | None, Field(description="upper limit, grams per day")] = None,
+    nutrition_rules: Annotated[str | None, Field(max_length=2000, description="Free text; empty string clears it")] = None,
+) -> dict[str, Any]:
+    """Set or overwrite goals. Only the fields you pass change; omitted fields stay as they are.
+
+    Daily targets apply from today on (earlier days keep their targets). The first time targets are set,
+    kcal, protein, carbs and fat are needed together. Returns the goals after the change.
+    """
+    fields: dict[str, Any] = {
+        "start_weight_kg": start_weight_kg, "start_date": _parse_day(start_date, "start_date"),
+        "target_weight_kg": target_weight_kg, "target_date": _parse_day(target_date, "target_date"),
+        "kcal": kcal, "protein": protein, "carbs": carbs, "fat": fat, "sugar": sugar, "salt": salt,
+        "nutrition_rules": nutrition_rules,
+    }
+    return await _call_sync(_apply_goals, fields={key: value for key, value in fields.items() if value is not None})
+
+
+def _apply_day_note(db: Any, user: User, *, day: date_type, text: str) -> dict[str, Any]:
+    return {"date": day.isoformat(), "text": day_notes.set_note(db, user.id, day, text)}
+
+
+@mcp.tool()
+async def set_day_note(
+    text: Annotated[str, Field(max_length=2000, description="Free text; empty string deletes the note")],
+    date: Annotated[str | None, Field(description="YYYY-MM-DD; default today")] = None,
+) -> dict[str, Any]:
+    """Write (overwrite) the free-text note of one day, e.g. illness, bad sleep or a restaurant visit.
+
+    The note is returned with that day's nutrition and workouts.
+    """
+    return await _call_sync(_apply_day_note, day=_parse_day(date, "date") or berlin_today(), text=text)
+
+
+def _apply_weight(db: Any, user: User, *, weight_kg: float, day: date_type | None) -> dict[str, Any]:
+    return profile_goals.save_weight(db, user, weight_kg, day)
+
+
+@mcp.tool()
+async def log_weight(
+    weight_kg: Annotated[float, Field(ge=20, le=400)],
+    date: Annotated[str | None, Field(description="YYYY-MM-DD; default today")] = None,
+) -> dict[str, Any]:
+    """Save the body weight of one day (overwrites that day's entry)."""
+    return await _call_sync(_apply_weight, weight_kg=weight_kg, day=_parse_day(date, "date"))
 
 
 # ── Training plans, split and exercise library ──────────────────────────────────

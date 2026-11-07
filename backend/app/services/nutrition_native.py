@@ -1,8 +1,7 @@
 """Nutrition data from Forge's own tracking (NutritionEntry, NutritionGoal).
 
-This is what the Coach tools, the MCP server and the analytics read. Keys follow the shape the
-old Yazio-based tools returned (``calories``, ``totals``, ``goals``) so prompts and clients keep
-working unchanged. All dates are Europe/Berlin calendar days.
+This is what the Coach tools, the MCP server and the analytics read. Keys are ``calories``, ``totals``
+and ``goals`` so prompts and clients stay stable. All dates are Europe/Berlin calendar days.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import NutritionEntry, NutritionGoal, NutritionMealSlot, User
+from app.services import day_notes
 
 BERLIN = ZoneInfo("Europe/Berlin")
 UNASSIGNED = "Ohne Mahlzeit"
@@ -44,29 +44,49 @@ def goal_for_day(goals: list[NutritionGoal], day: date) -> NutritionGoal | None:
     return chosen
 
 
-def goals_native(goal: NutritionGoal | None) -> dict[str, float] | None:
-    """Keys used by the tracking API and the app: kcal, protein, carbs, fat."""
+def _opt(value: float | None) -> float | None:
+    return None if value is None else round(value, 1)
+
+
+def goals_native(goal: NutritionGoal | None) -> dict[str, float | None] | None:
+    """Keys used by the tracking API and the app: kcal, protein, carbs, fat, sugar, salt (limits may be null)."""
     if goal is None:
         return None
-    return {"kcal": round(goal.kcal), "protein": round(goal.protein), "carbs": round(goal.carbs), "fat": round(goal.fat)}
+    return {
+        "kcal": round(goal.kcal), "protein": round(goal.protein), "carbs": round(goal.carbs), "fat": round(goal.fat),
+        "sugar": _opt(goal.sugar), "salt": _opt(goal.salt),
+    }
 
 
 def goals_coach(goal: NutritionGoal | None) -> dict[str, float]:
     """Keys used by the coach tools; zeros mean "no target set"."""
     if goal is None:
-        return {"calories": 0, "protein": 0, "carbs": 0, "fat": 0}
-    return {"calories": round(goal.kcal), "protein": round(goal.protein), "carbs": round(goal.carbs), "fat": round(goal.fat)}
+        return {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar": 0, "salt": 0}
+    return {
+        "calories": round(goal.kcal), "protein": round(goal.protein), "carbs": round(goal.carbs), "fat": round(goal.fat),
+        "sugar": goal.sugar or 0, "salt": goal.salt or 0,
+    }
 
 
-def save_goals(db: Session, user: User, kcal: float, protein: float, carbs: float, fat: float) -> NutritionGoal:
-    """Set the targets from today on (saving again today overwrites)."""
+def save_goals(
+    db: Session, user: User, kcal: float, protein: float, carbs: float, fat: float,
+    sugar: float | None = None, salt: float | None = None,
+) -> NutritionGoal:
+    """Set the targets from today on (saving again today overwrites).
+
+    A save that changes nothing relative to the targets already in force does not add a row.
+    """
     today = berlin_today()
+    current = goal_for_day(load_goals(db, user.id), today)
+    values = (kcal, protein, carbs, fat, sugar, salt)
+    if current is not None and (current.kcal, current.protein, current.carbs, current.fat, current.sugar, current.salt) == values:
+        return current
     goal = db.query(NutritionGoal).filter(NutritionGoal.user_id == user.id, NutritionGoal.valid_from == today).first()
     if goal is None:
-        goal = NutritionGoal(user_id=user.id, valid_from=today, kcal=kcal, protein=protein, carbs=carbs, fat=fat)
+        goal = NutritionGoal(user_id=user.id, valid_from=today, kcal=kcal, protein=protein, carbs=carbs, fat=fat, sugar=sugar, salt=salt)
         db.add(goal)
     else:
-        goal.kcal, goal.protein, goal.carbs, goal.fat = kcal, protein, carbs, fat
+        goal.kcal, goal.protein, goal.carbs, goal.fat, goal.sugar, goal.salt = kcal, protein, carbs, fat, sugar, salt
     db.commit()
     db.refresh(goal)
     return goal
@@ -121,6 +141,9 @@ def day_summary(db: Session, user: User, day: date, include_items: bool = False)
         result["note"] = "Es sind noch keine Tagesziele hinterlegt (Dashboard, Kachel Ernährung heute)."
     if include_items:
         result["food_items"] = {name: items[name] for name in order if name in items}
+    note = day_notes.get_note(db, user.id, day)
+    if note:
+        result["day_note"] = note
     return result
 
 
@@ -129,8 +152,7 @@ def day_summary(db: Session, user: User, day: date, include_items: bool = False)
 def nutrition_range(db: Session, user: User, start: date, end: date) -> dict[str, Any]:
     """Per-day totals and targets for an inclusive range, one row for every day.
 
-    Same shape as the former Yazio range (``days`` + ``failed_days``) minus steps/water, which
-    now come from Google Health.
+    Returns ``days`` + ``failed_days``; steps come from Google Health.
     """
     if end < start:
         return {"days": [], "failed_days": 0}
@@ -147,17 +169,21 @@ def nutrition_range(db: Session, user: User, start: date, end: date) -> dict[str
     ).group_by(NutritionEntry.date).all()
     by_day = {row[0]: row[1:] for row in rows}
     goals = load_goals(db, user.id)
+    notes = day_notes.notes_between(db, user.id, start, end)
 
     days = []
     cursor = start
     while cursor <= end:
         calories, protein, carbs, fat, fiber, sugar = by_day.get(cursor, (0.0,) * 6)
-        days.append({
+        row = {
             "date": cursor.isoformat(),
             "logged": calories > 0,
             "calories": round(calories, 1), "protein": round(protein, 1), "carbs": round(carbs, 1), "fat": round(fat, 1),
             "fiber": round(fiber, 1), "sugar": round(sugar, 1),
             "goals": goals_coach(goal_for_day(goals, cursor)),
-        })
+        }
+        if cursor in notes:
+            row["day_note"] = notes[cursor]
+        days.append(row)
         cursor += timedelta(days=1)
     return {"days": days, "failed_days": 0}

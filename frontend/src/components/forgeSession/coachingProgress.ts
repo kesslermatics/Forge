@@ -11,7 +11,7 @@ export interface CoachingProgress {
 
 export const COACHING_STEPS: Array<{ id: ForgeCoachingStepId; label: string }> = [
   { id: 'profiles', label: 'Session & Geräte laden' },
-  { id: 'nutrition', label: 'Ernährung aus Yazio' },
+  { id: 'nutrition', label: 'Ernährung der letzten Tage' },
   { id: 'history', label: 'Trainingsverlauf auswerten' },
   { id: 'ai', label: 'KI plant deine Sätze' },
   { id: 'save', label: 'Ziele speichern' },

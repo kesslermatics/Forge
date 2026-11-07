@@ -18,7 +18,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import GoogleHealthConnection, User, WeightEntry
+from app.models import GoogleHealthConnection, ProfileGoal, User, WeightEntry
 from app.services.ai_service import _canonical_forge_muscle
 from app.services.forge_session_adapter import completed_forge_workouts
 from app.services.google_health_service import (
@@ -811,9 +811,13 @@ def _corridor(current: float, target: float, rate_per_week: float, stderr_per_we
 
 
 async def goal_projection(db: Session, user: User, args: dict) -> dict[str, Any]:
+    profile = db.query(ProfileGoal).filter(ProfileGoal.user_id == user.id).first()
     target = args.get("target_weight_kg")
+    from_profile = target is None and profile is not None and profile.target_weight_kg is not None
+    if from_profile:
+        target = profile.target_weight_kg
     if isinstance(target, bool) or not isinstance(target, (int, float)) or not 30 <= float(target) <= 300:
-        return {"available": False, "reason": "target_weight_kg (30-300) is required."}
+        return {"available": False, "reason": "Kein Zielgewicht: target_weight_kg (30-300) angeben oder im Profil ein Zielgewicht hinterlegen."}
     target = float(target)
     today = date.today()
 
@@ -837,6 +841,17 @@ async def goal_projection(db: Session, user: User, args: dict) -> dict[str, Any]
         "current_trend": {"rate_kg_per_week": round(rate, 2), "weight_entries": trend["entries"], "span_days": trend["span_days"]},
         "baseline": _corridor(current, target, rate, stderr, today),
     }
+    if from_profile:
+        payload["target_source"] = "profile_goal"
+    if profile is not None and profile.target_date is not None:
+        days_left = (profile.target_date - today).days
+        deadline: dict[str, Any] = {"target_date": profile.target_date.isoformat(), "days_left": days_left}
+        if days_left > 0:
+            required = (target - current) / (days_left / 7)
+            deadline["required_rate_kg_per_week"] = round(required, 2)
+            deadline["current_rate_kg_per_week"] = round(rate, 2)
+            deadline["on_track"] = (rate <= required) if target < current else (rate >= required)
+        payload["deadline"] = deadline
     warnings = []
     if abs(rate) > 0.01 * current:
         warnings.append("Current rate exceeds 1% of body weight per week; it is unlikely to stay that fast.")
@@ -953,7 +968,7 @@ ANALYTICS_DECLARATIONS = [
         "project_goal_timeline",
         "Projects when a target body weight is reached from the current weight trend (earliest-latest corridor) and simulates scenarios such as eating 200 kcal less or walking 3000 more steps per day.",
         {
-            "target_weight_kg": {"type": "number", "minimum": 30, "maximum": 300},
+            "target_weight_kg": {"type": "number", "minimum": 30, "maximum": 300, "description": "Optional; defaults to the target weight in the profile goals"},
             "scenarios": {
                 "type": "array", "maxItems": 6,
                 "items": {"type": "object", "properties": {
@@ -963,7 +978,7 @@ ANALYTICS_DECLARATIONS = [
                 }},
             },
         },
-        ["target_weight_kg"],
+        [],
     ),
 ]
 

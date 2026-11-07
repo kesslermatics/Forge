@@ -13,6 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import ForgeWorkoutSession, User
+from app.services import day_notes
 from app.services.forge_session_adapter import completed_forge_workouts, local_day_bounds
 from app.services.nutrition_native import nutrition_range
 from app.services.range_tools import (
@@ -76,6 +77,13 @@ def _workout_digest(workout: dict) -> dict:
     }
 
 
+def _iso_date(value: object) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
 def workouts_in_range(
     db: Session,
     user: User,
@@ -110,6 +118,12 @@ def workouts_in_range(
         workouts = workouts[:FULL_DETAIL_MAX_WORKOUTS]
 
     items = [full_formatter(item) | {"date": item.get("local_date")} if detail == "full" else _workout_digest(item) for item in workouts]
+    # The user's free-text note of that day (illness, poor sleep, ...) travels with each workout.
+    notes_by_day = day_notes.notes_for_dates(db, user.id, [d for d in (_iso_date(item.get("date")) for item in items) if d])
+    for item in items:
+        note = notes_by_day.get(_iso_date(item.get("date")))
+        if note:
+            item["day_note"] = note
     returned_end = offset + len(items)
     payload: dict[str, Any] = {
         "range": range_info(window),
@@ -230,6 +244,7 @@ def nutrition_in_range(db: Session, user: User, args: dict) -> dict[str, Any]:
                 "logged": item["logged"],
                 "totals": {k: item[k] for k in ("calories", "protein", "carbs", "fat")},
                 "goals": item["goals"],
+                **({"day_note": item["day_note"]} if item.get("day_note") else {}),
             }
             for item in days
         ]

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, saveYazioCredentials, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
+import { createPersonalApiKey, disconnectGoogleHealth, getGoogleHealthStatus, listPersonalApiKeys, revokePersonalApiKey, startGoogleHealthConnection, updateLanguage, updateUserProfile, logoutUser } from '../api/api';
 import type { GoogleHealthStatus, PersonalApiKey, UserInfo } from '../api/api';
-import { UtensilsCrossed, Eye, EyeOff, CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Dumbbell, KeyRound, Plus, Trash2, Unplug } from 'lucide-react';
+import { CheckCircle, AlertCircle, Shield, Globe, LogOut, UserRound, Loader2, Dumbbell, KeyRound, Plus, Trash2, Unplug } from 'lucide-react';
 import ApiKeyCreatedDialog from './ApiKeyCreatedDialog';
 import ConfirmDialog from './ConfirmDialog';
+import GoalsCard from './GoalsCard';
 import { useLanguage } from '../i18n';
 import type { Lang } from '../i18n';
 
@@ -23,11 +24,6 @@ export default function SettingsPage() {
     const [heightCm, setHeightCm] = useState('');
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileMsg, setProfileMsg] = useState<Feedback>(null);
-    const [yazioEmail, setYazioEmail] = useState('');
-    const [yazioPassword, setYazioPassword] = useState('');
-    const [showYazioPw, setShowYazioPw] = useState(false);
-    const [savingYazio, setSavingYazio] = useState(false);
-    const [yazioMsg, setYazioMsg] = useState<Feedback>(null);
     const [langMsg, setLangMsg] = useState<Feedback>(null);
     const [googleHealth, setGoogleHealth] = useState<GoogleHealthStatus | null>(null);
     const [loadingGoogleHealth, setLoadingGoogleHealth] = useState(true);
@@ -93,17 +89,10 @@ export default function SettingsPage() {
         try {
             await updateUserProfile({ first_name: firstName.trim() || null, height_cm: parsedHeight });
             await refreshUser();
-            setProfileMsg({ type: 'success', text: 'Profil gespeichert. Trainings- und Ernährungsziele kommen ausschließlich aus Yazio.' });
+            setProfileMsg({ type: 'success', text: 'Profil gespeichert.' });
         } catch (caught: unknown) {
             setProfileMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Profil konnte nicht gespeichert werden.' });
         } finally { setSavingProfile(false); }
-    };
-
-    const handleSaveYazio = async (event: React.FormEvent) => {
-        event.preventDefault(); setYazioMsg(null); setSavingYazio(true);
-        try { await saveYazioCredentials(yazioEmail, yazioPassword); setYazioMsg({ type: 'success', text: t('settings.yazioUpdated') }); await refreshUser(); setYazioEmail(''); setYazioPassword(''); }
-        catch (caught: unknown) { setYazioMsg({ type: 'error', text: caught instanceof Error ? caught.message : 'Yazio konnte nicht gespeichert werden.' }); }
-        finally { setSavingYazio(false); }
     };
 
     const handleLangChange = async (newLang: Lang) => {
@@ -175,11 +164,12 @@ export default function SettingsPage() {
         <Card icon={<UserRound size={15} style={{ color: SAND }} />} title="Dein Profil">
             <form onSubmit={handleSaveProfile} className="space-y-3">
                 <div className="grid grid-cols-2 gap-3"><label className="text-[11px]" style={{ color: TEXT_DIM }}>Vorname<input value={firstName} onChange={(event) => setFirstName(event.target.value)} maxLength={100} placeholder="Wie sollen wir dich nennen?" className="input-forge mt-1 !px-3 !py-2.5 text-[13px]" /></label><label className="text-[11px]" style={{ color: TEXT_DIM }}>Größe (cm)<input type="number" inputMode="decimal" min="80" max="280" value={heightCm} onChange={(event) => setHeightCm(event.target.value)} placeholder="z. B. 182" className="input-forge mt-1 !px-3 !py-2.5 text-[13px]" /></label></div>
-                <p className="text-[10px] leading-relaxed" style={{ color: TEXT_DIM }}>Dein Trainings- und Ernährungsziel wird ausschließlich aus deinem verbundenen Yazio-Profil übernommen.</p>
                 <FeedMsg msg={profileMsg} />
                 <button type="submit" disabled={savingProfile} className="btn-forge w-full text-[14px]">{savingProfile ? <><Loader2 size={15} className="animate-spin" />Speichert…</> : <><UserRound size={15} />Profil speichern</>}</button>
             </form>
         </Card>
+
+        <GoalsCard />
 
         <Card icon={<Shield size={15} style={{ color: SAND }} />} title={t('settings.account')}><div className="grid grid-cols-2 gap-4 text-[13px]"><div><p style={{ color: TEXT_DIM }}>{t('settings.username')}</p><p className="mt-0.5 font-medium" style={{ color: '#f2ece0' }}>{user?.username}</p></div><div><p style={{ color: TEXT_DIM }}>Account</p><p className="mt-0.5 font-mono text-[11px] truncate" style={{ color: '#f2ece0' }}>{user?.id}</p></div></div></Card>
 
@@ -195,8 +185,6 @@ export default function SettingsPage() {
         <Card icon={<Dumbbell size={15} style={{ color: SAND }} />} title="Google Health" badge={<ConnBadge connected={!!googleHealth?.connected} />}>
             {loadingGoogleHealth ? <p className="text-[13px]" style={{ color: TEXT_DIM }}>Verbindungsstatus wird geladen…</p> : !googleHealth?.configured ? <p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Google Health ist bereit, muss aber zuerst mit OAuth-Credentials im Backend konfiguriert werden.</p> : googleHealth?.connected ? <><p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Abgeschlossene Forge-Workouts werden automatisch als Google-Health-Training synchronisiert.</p>{googleHealth.last_exported_at && <p className="text-[11px]" style={{ color: TEXT_DIM }}>Letzter Export: {new Date(googleHealth.last_exported_at).toLocaleString(lang === 'de' ? 'de-DE' : 'en-GB')}</p>}{googleHealth.failed_exports > 0 && <p className="text-[11px]" style={{ color: '#fbbf24' }}>{googleHealth.failed_exports} Export{googleHealth.failed_exports === 1 ? '' : 'e'} konnten nicht synchronisiert werden.</p>}<FeedMsg msg={googleHealthMsg} /><button type="button" onClick={() => void handleGoogleHealthDisconnect()} disabled={changingGoogleHealth} className="tap w-full rounded-2xl px-4 py-3 text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.18)' }}>{changingGoogleHealth ? <Loader2 size={15} className="animate-spin" /> : <Unplug size={15} />}Google Health trennen</button></> : <><p className="text-[13px] leading-relaxed" style={{ color: TEXT_DIM }}>Verbinde dein Google-Konto, damit abgeschlossene Forge-Workouts automatisch zu Google Health exportiert werden.</p>{googleHealth?.status === 'reauthorization_required' && <p className="text-[11px]" style={{ color: '#fbbf24' }}>{googleHealth.last_error ?? 'Die Google-Autorisierung muss erneuert werden.'}</p>}<FeedMsg msg={googleHealthMsg} /><button type="button" onClick={() => void handleGoogleHealthConnect()} disabled={changingGoogleHealth} className="btn-forge w-full text-[14px]">{changingGoogleHealth ? <><Loader2 size={15} className="animate-spin" />Google wird geöffnet…</> : <><Dumbbell size={15} />Mit Google Health verbinden</>}</button></>}
         </Card>
-
-        <Card icon={<UtensilsCrossed size={15} style={{ color: SAND }} />} title={t('settings.yazioTitle')} badge={<ConnBadge connected={!!user?.has_yazio} />}><p className="text-[13px] mb-4" style={{ color: TEXT_DIM }}>{t('settings.yazioDesc')}</p><form onSubmit={handleSaveYazio} className="space-y-3"><input type="email" className="input-forge text-[13px]" placeholder={user?.has_yazio ? t('settings.yazioEmailPlaceholder') : 'email@yazio.com'} value={yazioEmail} onChange={(event) => setYazioEmail(event.target.value)} required /><div className="relative"><input type={showYazioPw ? 'text' : 'password'} className="input-forge text-[13px] pr-11" placeholder={user?.has_yazio ? t('settings.yazioPasswordPlaceholder') : 'Passwort'} value={yazioPassword} onChange={(event) => setYazioPassword(event.target.value)} required /><button type="button" onClick={() => setShowYazioPw((current) => !current)} className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer" style={{ color: TEXT_DIM }}>{showYazioPw ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><FeedMsg msg={yazioMsg} /><button type="submit" disabled={savingYazio} className="btn-forge w-full text-[14px]">{savingYazio ? t('settings.saving') : user?.has_yazio ? t('settings.updateYazio') : t('settings.saveYazio')}</button></form></Card>
 
         <section className="pt-2 pb-3"><button onClick={logout} className="tap w-full rounded-2xl px-4 py-3.5 text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.18)' }}><LogOut size={16} />Abmelden</button></section>
         <ApiKeyCreatedDialog apiKey={createdApiKey} onClose={() => setCreatedApiKey(null)} />
