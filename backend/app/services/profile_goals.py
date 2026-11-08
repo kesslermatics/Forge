@@ -17,10 +17,10 @@ from app.services.nutrition_native import berlin_today
 WEIGHT_RANGE = (20.0, 400.0)
 NUTRITION_RANGES = {
     "kcal": (800.0, 10000.0), "protein": (0.0, 600.0), "carbs": (0.0, 1500.0),
-    "fat": (0.0, 600.0), "sugar": (0.0, 500.0), "salt": (0.0, 50.0),
+    "fat": (0.0, 600.0), "sugar": (0.0, 500.0), "salt": (0.0, 50.0), "fiber": (0.0, 200.0),
 }
 REQUIRED_NUTRITION = ("kcal", "protein", "carbs", "fat")
-OPTIONAL_NUTRITION = ("sugar", "salt")
+OPTIONAL_NUTRITION = ("sugar", "salt", "fiber")
 WEIGHT_FIELDS = ("start_weight_kg", "start_date", "target_weight_kg", "target_date")
 MAX_RULES_LENGTH = 2000
 MAX_HISTORY_DAYS = 3650
@@ -113,7 +113,7 @@ def set_goals(db: Session, user: User, fields: dict[str, Any]) -> dict[str, Any]
     """Apply a partial update. Only keys present in ``fields`` change; ``None`` clears optional values.
 
     Keys: start_weight_kg, start_date, target_weight_kg, target_date (body weight goal),
-    kcal, protein, carbs, fat, sugar, salt (daily targets, valid from today) and nutrition_rules.
+    kcal, protein, carbs, fat, sugar, salt, fiber (daily targets, valid from today) and nutrition_rules.
     """
     today = berlin_today()
     profile = _profile(db, user.id)
@@ -172,6 +172,7 @@ def set_goals(db: Session, user: User, fields: dict[str, Any]) -> dict[str, Any]
         nutrition_native.save_goals(
             db, user, round(merged["kcal"]), round(merged["protein"]), round(merged["carbs"]), round(merged["fat"]),
             None if merged["sugar"] is None else round(merged["sugar"]), None if merged["salt"] is None else round(merged["salt"], 1),
+            None if merged["fiber"] is None else round(merged["fiber"]),
         )
 
     db.commit()

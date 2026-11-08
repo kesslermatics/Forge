@@ -223,7 +223,7 @@ class NutritionGoal(Base):
 
     Changing the targets adds (or overwrites today's) row, so past days keep being measured
     against the targets that applied back then. The oldest row also covers earlier days.
-    Sugar and salt are upper limits and optional.
+    Sugar and salt are upper limits and optional; fiber is an optional minimum.
     """
 
     __tablename__ = "nutrition_goals"
@@ -241,6 +241,7 @@ class NutritionGoal(Base):
     fat = Column(Float, nullable=False)
     sugar = Column(Float, nullable=True)
     salt = Column(Float, nullable=True)
+    fiber = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="nutrition_goals")

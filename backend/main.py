@@ -50,6 +50,7 @@ with engine.connect() as _conn:
         # nutrition_goals existed before sugar/salt limits; create_all does not add columns.
         "ALTER TABLE nutrition_goals ADD COLUMN IF NOT EXISTS sugar DOUBLE PRECISION;",
         "ALTER TABLE nutrition_goals ADD COLUMN IF NOT EXISTS salt DOUBLE PRECISION;",
+        "ALTER TABLE nutrition_goals ADD COLUMN IF NOT EXISTS fiber DOUBLE PRECISION;",
         # Yazio was removed completely; drop its stored credentials.
         "ALTER TABLE users DROP COLUMN IF EXISTS yazio_email;",
         "ALTER TABLE users DROP COLUMN IF EXISTS yazio_password;",

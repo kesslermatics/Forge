@@ -49,28 +49,28 @@ def _opt(value: float | None) -> float | None:
 
 
 def goals_native(goal: NutritionGoal | None) -> dict[str, float | None] | None:
-    """Keys used by the tracking API and the app: kcal, protein, carbs, fat, sugar, salt (limits may be null)."""
+    """Keys used by the tracking API and the app: kcal, protein, carbs, fat, sugar, salt, fiber (optional ones may be null)."""
     if goal is None:
         return None
     return {
         "kcal": round(goal.kcal), "protein": round(goal.protein), "carbs": round(goal.carbs), "fat": round(goal.fat),
-        "sugar": _opt(goal.sugar), "salt": _opt(goal.salt),
+        "sugar": _opt(goal.sugar), "salt": _opt(goal.salt), "fiber": _opt(goal.fiber),
     }
 
 
 def goals_coach(goal: NutritionGoal | None) -> dict[str, float]:
     """Keys used by the coach tools; zeros mean "no target set"."""
     if goal is None:
-        return {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar": 0, "salt": 0}
+        return {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar": 0, "salt": 0, "fiber": 0}
     return {
         "calories": round(goal.kcal), "protein": round(goal.protein), "carbs": round(goal.carbs), "fat": round(goal.fat),
-        "sugar": goal.sugar or 0, "salt": goal.salt or 0,
+        "sugar": goal.sugar or 0, "salt": goal.salt or 0, "fiber": goal.fiber or 0,
     }
 
 
 def save_goals(
     db: Session, user: User, kcal: float, protein: float, carbs: float, fat: float,
-    sugar: float | None = None, salt: float | None = None,
+    sugar: float | None = None, salt: float | None = None, fiber: float | None = None,
 ) -> NutritionGoal:
     """Set the targets from today on (saving again today overwrites).
 
@@ -78,15 +78,15 @@ def save_goals(
     """
     today = berlin_today()
     current = goal_for_day(load_goals(db, user.id), today)
-    values = (kcal, protein, carbs, fat, sugar, salt)
-    if current is not None and (current.kcal, current.protein, current.carbs, current.fat, current.sugar, current.salt) == values:
+    values = (kcal, protein, carbs, fat, sugar, salt, fiber)
+    if current is not None and (current.kcal, current.protein, current.carbs, current.fat, current.sugar, current.salt, current.fiber) == values:
         return current
     goal = db.query(NutritionGoal).filter(NutritionGoal.user_id == user.id, NutritionGoal.valid_from == today).first()
     if goal is None:
-        goal = NutritionGoal(user_id=user.id, valid_from=today, kcal=kcal, protein=protein, carbs=carbs, fat=fat, sugar=sugar, salt=salt)
+        goal = NutritionGoal(user_id=user.id, valid_from=today, kcal=kcal, protein=protein, carbs=carbs, fat=fat, sugar=sugar, salt=salt, fiber=fiber)
         db.add(goal)
     else:
-        goal.kcal, goal.protein, goal.carbs, goal.fat, goal.sugar, goal.salt = kcal, protein, carbs, fat, sugar, salt
+        goal.kcal, goal.protein, goal.carbs, goal.fat, goal.sugar, goal.salt, goal.fiber = kcal, protein, carbs, fat, sugar, salt, fiber
     db.commit()
     db.refresh(goal)
     return goal

@@ -28,6 +28,7 @@ class GoalsUpdate(BaseModel):
     fat: float | None = None
     sugar: float | None = None
     salt: float | None = None
+    fiber: float | None = None
     nutrition_rules: str | None = Field(default=None, max_length=2000)
 
 

@@ -466,7 +466,7 @@ export interface MealSlot { id: string; name: string; position: number }
 export interface MealSlotDay extends MealSlot { totals: TrackMacros; entry_count: number }
 
 /** Daily targets; null until the user has set them. */
-export interface NutritionGoals { kcal: number; protein: number; carbs: number; fat: number; sugar: number | null; salt: number | null }
+export interface NutritionGoals { kcal: number; protein: number; carbs: number; fat: number; sugar: number | null; salt: number | null; fiber: number | null }
 
 export interface TrackDay {
   date: string;
@@ -535,6 +535,29 @@ export const deleteMealSlot = (id: string) =>
 
 export const getTrackDay = (date: string) =>
   apiRequest<TrackDay>(`/api/nutrition/day?date=${encodeURIComponent(date)}`);
+export interface OverviewTotals { kcal: number; protein: number; carbs: number; fat: number; fiber: number; sugar: number; salt: number }
+export interface OverviewWeekDay { date: string; kcal: number; logged: boolean; goal_kcal: number | null; future: boolean }
+export interface OverviewDay {
+  date: string; kcal: number; protein: number; carbs: number; fat: number; fiber: number; logged: boolean;
+  goal_kcal: number | null; goal_protein: number | null; goal_fiber: number | null;
+}
+export interface OverviewWeek { start: string; avg_kcal: number | null; logged_days: number; avg_weight_kg: number | null }
+export interface OverviewMeal { name: string; kcal: number }
+export interface OverviewFood { source: FoodSource; source_id: string; name: string; brand: string | null; count: number; avg_kcal: number }
+export interface NutritionOverview {
+  today: { date: string; totals: OverviewTotals; goals: NutritionGoals | null };
+  week: OverviewWeekDay[];
+  streak_days: number;
+  /** Last 30 days, oldest first. */
+  days: OverviewDay[];
+  /** Last 8 Monday-based weeks, oldest first. */
+  weeks: OverviewWeek[];
+  weight_kg: number | null;
+  meals: Record<'7' | '30', OverviewMeal[]>;
+  top_foods: Record<'7' | '30', OverviewFood[]>;
+}
+export const getNutritionOverview = () => apiRequest<NutritionOverview>('/api/nutrition/overview');
+
 export const getTrackEntries = (date: string, slotId: string | null) =>
   apiRequest<{ items: TrackEntry[]; totals: TrackMacros }>(
     `/api/nutrition/entries?date=${encodeURIComponent(date)}${slotId ? `&slot_id=${slotId}` : '&unassigned=true'}`);
@@ -1168,6 +1191,7 @@ export interface GoalsInput {
   fat?: number;
   sugar?: number | null;
   salt?: number | null;
+  fiber?: number | null;
   nutrition_rules?: string | null;
 }
 

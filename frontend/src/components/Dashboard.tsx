@@ -353,6 +353,7 @@ export default function Dashboard() {
                                 <MacroBar label="Fett" current={trackDay.totals.fat} goal={goals.fat} color="#34d399" />
                                 {goals.sugar != null && <MacroBar label="Zucker" current={trackDay.totals.sugar} goal={goals.sugar} color="#c084fc" limit />}
                                 {goals.salt != null && <MacroBar label="Salz" current={trackDay.totals.salt} goal={goals.salt} color="#60a5fa" limit decimals={1} />}
+                                {goals.fiber != null && <MacroBar label="Ballaststoffe" current={trackDay.totals.fiber ?? 0} goal={goals.fiber} color="#b5d56a" />}
                             </div>
                         </> : <div className="mt-4"><MacroPills totals={trackDay.totals} /></div>}
                     </section>

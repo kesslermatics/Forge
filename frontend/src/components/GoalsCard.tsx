@@ -11,7 +11,7 @@ const MAX_RULES = 2000;
 
 interface Form {
   startKg: string; startDate: string; targetKg: string; targetDate: string;
-  kcal: string; protein: string; carbs: string; fat: string; sugar: string; salt: string;
+  kcal: string; protein: string; carbs: string; fat: string; sugar: string; salt: string; fiber: string;
   rules: string;
 }
 
@@ -21,7 +21,7 @@ const toForm = (data: GoalsData): Form => ({
   startKg: text(data.weight.start_kg), startDate: text(data.weight.start_date),
   targetKg: text(data.weight.target_kg), targetDate: text(data.weight.target_date),
   kcal: text(data.nutrition?.kcal), protein: text(data.nutrition?.protein), carbs: text(data.nutrition?.carbs),
-  fat: text(data.nutrition?.fat), sugar: text(data.nutrition?.sugar), salt: text(data.nutrition?.salt),
+  fat: text(data.nutrition?.fat), sugar: text(data.nutrition?.sugar), salt: text(data.nutrition?.salt), fiber: text(data.nutrition?.fiber),
   rules: data.nutrition_rules ?? '',
 });
 
@@ -62,7 +62,7 @@ export default function GoalsCard() {
     const numbers = {
       startKg: parse(form.startKg), targetKg: parse(form.targetKg),
       kcal: parse(form.kcal), protein: parse(form.protein), carbs: parse(form.carbs), fat: parse(form.fat),
-      sugar: parse(form.sugar), salt: parse(form.salt),
+      sugar: parse(form.sugar), salt: parse(form.salt), fiber: parse(form.fiber),
     };
     if (Object.values(numbers).some((value) => Number.isNaN(value))) {
       setFeedback({ type: 'error', text: 'Bitte nur Zahlen eingeben.' });
@@ -82,7 +82,7 @@ export default function GoalsCard() {
       return;
     }
 
-    const targetKeys = ['kcal', 'protein', 'carbs', 'fat', 'sugar', 'salt'] as const;
+    const targetKeys = ['kcal', 'protein', 'carbs', 'fat', 'sugar', 'salt', 'fiber'] as const;
     if (targetKeys.some((key) => form[key] !== before[key])) {
       const required = [numbers.kcal, numbers.protein, numbers.carbs, numbers.fat];
       if (required.some((value) => value === null)) {
@@ -90,7 +90,7 @@ export default function GoalsCard() {
         return;
       }
       payload.kcal = numbers.kcal!; payload.protein = numbers.protein!; payload.carbs = numbers.carbs!; payload.fat = numbers.fat!;
-      payload.sugar = numbers.sugar; payload.salt = numbers.salt;
+      payload.sugar = numbers.sugar; payload.salt = numbers.salt; payload.fiber = numbers.fiber;
     }
     if (form.rules !== before.rules) payload.nutrition_rules = form.rules;
 
@@ -157,8 +157,9 @@ export default function GoalsCard() {
               {field('Fett', 'fat', { unit: 'g' })}
               {field('Zucker (max.)', 'sugar', { unit: 'g' })}
               {field('Salz (max.)', 'salt', { unit: 'g' })}
+              {field('Ballaststoffe (min.)', 'fiber', { unit: 'g' })}
             </div>
-            <p className="text-[10px] leading-relaxed" style={{ color: TEXT_DIM }}>Gelten ab heute. Frühere Tage werden weiter an ihren damaligen Zielen gemessen. Zucker und Salz sind optionale Obergrenzen.</p>
+            <p className="text-[10px] leading-relaxed" style={{ color: TEXT_DIM }}>Gelten ab heute. Frühere Tage werden weiter an ihren damaligen Zielen gemessen. Zucker und Salz sind optionale Obergrenzen, Ballaststoffe ein optionales Minimum.</p>
           </fieldset>
 
           <fieldset className="space-y-2">

@@ -373,6 +373,7 @@ async def set_goals(
     fat: Annotated[float | None, Field(description="grams per day")] = None,
     sugar: Annotated[float | None, Field(description="upper limit, grams per day")] = None,
     salt: Annotated[float | None, Field(description="upper limit, grams per day")] = None,
+    fiber: Annotated[float | None, Field(description="minimum, grams per day")] = None,
     nutrition_rules: Annotated[str | None, Field(max_length=2000, description="Free text; empty string clears it")] = None,
 ) -> dict[str, Any]:
     """Set or overwrite goals. Only the fields you pass change; omitted fields stay as they are.
@@ -383,7 +384,7 @@ async def set_goals(
     fields: dict[str, Any] = {
         "start_weight_kg": start_weight_kg, "start_date": _parse_day(start_date, "start_date"),
         "target_weight_kg": target_weight_kg, "target_date": _parse_day(target_date, "target_date"),
-        "kcal": kcal, "protein": protein, "carbs": carbs, "fat": fat, "sugar": sugar, "salt": salt,
+        "kcal": kcal, "protein": protein, "carbs": carbs, "fat": fat, "sugar": sugar, "salt": salt, "fiber": fiber,
         "nutrition_rules": nutrition_rules,
     }
     return await _call_sync(_apply_goals, fields={key: value for key, value in fields.items() if value is not None})

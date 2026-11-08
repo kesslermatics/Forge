@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import NutritionEntry, NutritionMealSlot, User
-from app.services import food_catalog, food_smart_track, nutrition_native
+from app.services import food_catalog, food_smart_track, nutrition_native, nutrition_overview
 from app.services.food_catalog import CatalogUnavailable
 
 router = APIRouter(prefix="/api/nutrition", tags=["Nutrition tracking"])
@@ -280,6 +280,12 @@ def get_day(date: date_type = Query(...), current_user: User = Depends(get_curre
                   for slot in slots],
         "unassigned": {"totals": _totals(unassigned), "entry_count": len(unassigned)},
     }
+
+
+@router.get("/overview")
+def get_overview(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Today, week band, streak, 30-day series, weekly calories vs. weight, meal split and favourite foods."""
+    return nutrition_overview.overview(db, current_user)
 
 
 @router.get("/entries")
