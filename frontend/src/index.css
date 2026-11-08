@@ -233,13 +233,14 @@ button:focus { outline: none; }
 }
 .forge-set-done { background-color: rgba(232,197,138,0.075) !important; }
 
-/* Subtle PR burst from the check button: a few small flakes fan out to the left and fade. */
+/* PR burst from the check button: flakes fan out, then drift down while fading. Drawn in a portal by ConfettiBurst. */
 @keyframes forge-confetti {
-  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5) rotate(0deg); }
-  15% { opacity: 1; }
-  100% { opacity: 0; transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))) scale(1) rotate(var(--r)); }
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.4) rotate(0deg); }
+  10% { opacity: 1; }
+  55% { opacity: 1; transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))) scale(1) rotate(calc(var(--r) * 0.6)); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--x) * 1.12), calc(-50% + var(--y) + var(--fall))) scale(0.9) rotate(var(--r)); }
 }
-.forge-confetti { position: absolute; left: 50%; top: 50%; width: 5px; height: 8px; border-radius: 1.5px; pointer-events: none; opacity: 0; animation: forge-confetti 0.95s cubic-bezier(0.2, 0.7, 0.3, 1) var(--d, 0s) both; }
+.forge-confetti { position: absolute; left: 0; top: 0; opacity: 0; animation: forge-confetti 1.5s cubic-bezier(0.15, 0.7, 0.3, 1) var(--d, 0s) both; }
 @media (prefers-reduced-motion: reduce) { .forge-confetti { display: none; } }
 .forge-set-check { animation: forge-set-check 0.65s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .forge-session-complete { animation: forge-complete-pop 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }

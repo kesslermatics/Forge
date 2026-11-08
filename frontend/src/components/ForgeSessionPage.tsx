@@ -418,8 +418,8 @@ export default function ForgeSessionPage() {
           .map((item) => Math.round(epley(item.actual_weight_kg!, item.actual_reps!) * 10) / 10);
         if (estimate > Math.max(before, ...earlierToday)) {
           setPrSetId(live.id);
-          haptic([12, 50, 22]);
-          setTimeout(() => setPrSetId((current) => (current === live.id ? null : current)), 1200);
+          haptic([12, 50, 22, 40, 30]);
+          setTimeout(() => setPrSetId((current) => (current === live.id ? null : current)), 1800);
         }
       }
       const remaining = exercise.sets.filter((item) => !item.completed && item.id !== live.id);
