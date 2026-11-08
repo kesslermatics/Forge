@@ -12,7 +12,7 @@ const DIM = 'rgba(242,236,226,0.5)';
 const FAINT = 'rgba(242,236,226,0.32)';
 const BORDER = 'rgba(232,197,138,0.12)';
 
-const AUTOSAVE_MS = 30_000;
+const AUTOSAVE_MS = 5_000;
 const PENDING_KEY = 'forge.pendingWeight';
 const FALLBACK_KG = 70;
 
@@ -51,7 +51,7 @@ interface Props {
  * Weight entry: − / value / +, steps of 0.1 kg (hold to repeat). Every save adds a weighing; a day can
  * have several (shown as chips below, tap twice to delete one).
  *
- * Saving: 30 s after the last change. Anything unsaved is also sent the moment the app goes to the
+ * Saving: 5 s after the last change. Anything unsaved is also sent the moment the app goes to the
  * background or the page closes (keepalive request survives that) and when the dashboard is left.
  * The pending value additionally sits in localStorage and is sent on the next start, so a killed
  * app or a failed request loses nothing.

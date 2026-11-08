@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
-import type { WeightHistoryData, WeightHistoryEntry } from '../api/api';
+import type { WeightHistoryData, WeightHistoryEntry, WeightMeasurement } from '../api/api';
 import { SAND, TEXT, berlinToday } from './track/trackUtils';
 import { shortDay } from './nutrition/overviewUtils';
 
@@ -31,7 +31,7 @@ function smooth(points: { x: number; y: number }[]): string {
  * Weight over time inside the range between the starting weight and the target (both dashed).
  * Works from the first weigh-in on; tap or drag across the chart to read single days.
  */
-export default function WeightJourney({ entries, goal }: { entries: WeightHistoryEntry[]; goal: WeightHistoryData['goal'] | null }) {
+export default function WeightJourney({ entries, goal, latest }: { entries: WeightHistoryEntry[]; goal: WeightHistoryData['goal'] | null; latest?: WeightMeasurement | null }) {
   const [selected, setSelected] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   if (entries.length === 0) return null;
@@ -66,7 +66,10 @@ export default function WeightJourney({ entries, goal }: { entries: WeightHistor
   const startOnTop = targetY === null || startY <= targetY;
 
   const active = selected ?? entries.length - 1;
-  const current = entries[active];
+  const picked = entries[active];
+  // Without a selection "Zuletzt" is the last single weighing, not the day's mean the chart works with.
+  const lastMeasurement = selected === null && latest && latest.date === picked.date ? latest : null;
+  const current = lastMeasurement ? { date: lastMeasurement.date, weight_kg: lastMeasurement.weight_kg } : picked;
   const losing = targetKg !== null && targetKg < startKg;
   const reached = targetKg !== null && (losing ? current.weight_kg <= targetKg : current.weight_kg >= targetKg);
   const remaining = targetKg !== null ? Math.abs(current.weight_kg - targetKg) : null;

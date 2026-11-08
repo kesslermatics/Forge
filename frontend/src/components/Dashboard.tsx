@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getWeightHistory,
@@ -75,8 +75,13 @@ export default function Dashboard() {
         getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
     }, []);
 
+    const weightRequest = useRef(0);
     const loadWeights = useCallback(() => {
-        getWeightHistory().then(d => { setWeightHistory(d.entries); setWeightLatest(d.latest); setWeightToday(d.today); setWeightGoal(d.goal); }).catch(() => { });
+        const request = ++weightRequest.current;
+        getWeightHistory().then(d => {
+            if (request !== weightRequest.current) return; // a newer reload is already on its way
+            setWeightHistory(d.entries); setWeightLatest(d.latest); setWeightToday(d.today); setWeightGoal(d.goal);
+        }).catch(() => { });
     }, []);
 
     useEffect(() => { loadWeights(); }, [loadWeights]);
@@ -302,7 +307,7 @@ export default function Dashboard() {
 
                             {/* ── Chart ── */}
                             <div className="mt-3">
-                                <WeightJourney entries={weightHistory} goal={weightGoal} />
+                                <WeightJourney entries={weightHistory} goal={weightGoal} latest={weightLatest} />
                             </div>
 
                             {/* ── Weekly avg change ── */}
