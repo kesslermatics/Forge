@@ -5,9 +5,12 @@ stores the same way. All dates are Europe/Berlin calendar days.
 """
 from __future__ import annotations
 
-from datetime import date
-from typing import Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, NamedTuple
+from uuid import UUID
+from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import ProfileGoal, User, WeightEntry
@@ -24,6 +27,9 @@ OPTIONAL_NUTRITION = ("sugar", "salt", "fiber")
 WEIGHT_FIELDS = ("start_weight_kg", "start_date", "target_weight_kg", "target_date")
 MAX_RULES_LENGTH = 2000
 MAX_HISTORY_DAYS = 3650
+BERLIN = ZoneInfo("Europe/Berlin")
+# The same value twice within this window is a retried request (autosave, flaky network), not a new weighing.
+DUPLICATE_WINDOW = timedelta(minutes=10)
 
 
 class GoalError(ValueError):
@@ -41,8 +47,26 @@ def _check_weight(value: float | None, label: str) -> float | None:
 
 # ── body weight entries ──────────────────────────────────────────────────────────
 
+class DailyWeight(NamedTuple):
+    """Mean of all measurements of one day."""
+    date: date
+    weight_kg: float
+
+
+def _aware(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def serialize_weight(entry: WeightEntry) -> dict[str, Any]:
+    """One measurement; ``time`` is the Berlin time of day it was saved."""
+    return {
+        "id": str(entry.id), "date": entry.date.isoformat(), "weight_kg": round(entry.weight_kg, 2),
+        "time": _aware(entry.created_at).astimezone(BERLIN).strftime("%H:%M") if entry.created_at else None,
+    }
+
+
 def save_weight(db: Session, user: User, weight_kg: float, day: date | None = None) -> dict[str, Any]:
-    """Store the body weight of one day (one entry per day; saving again overwrites)."""
+    """Add one measurement. A day can have several; the same value again within minutes is not stored twice."""
     today = berlin_today()
     day = day or today
     weight = _check_weight(weight_kg, "Gewicht")
@@ -50,17 +74,43 @@ def save_weight(db: Session, user: User, weight_kg: float, day: date | None = No
         raise GoalError("Das Datum liegt in der Zukunft.")
     if (today - day).days > MAX_HISTORY_DAYS:
         raise GoalError("Das Datum liegt zu weit zurück.")
-    entry = db.query(WeightEntry).filter(WeightEntry.user_id == user.id, WeightEntry.date == day).first()
-    if entry is None:
-        db.add(WeightEntry(user_id=user.id, date=day, weight_kg=weight))
-    else:
-        entry.weight_kg = weight
+    entry = db.query(WeightEntry).filter(
+        WeightEntry.user_id == user.id, WeightEntry.date == day, WeightEntry.weight_kg == weight,
+    ).order_by(WeightEntry.created_at.desc()).first()
+    if entry is None or entry.created_at is None or datetime.now(timezone.utc) - _aware(entry.created_at) > DUPLICATE_WINDOW:
+        entry = WeightEntry(user_id=user.id, date=day, weight_kg=weight)
+        db.add(entry)
     db.commit()
-    return {"date": day.isoformat(), "weight_kg": weight}
+    db.refresh(entry)
+    return serialize_weight(entry)
+
+
+def delete_weight(db: Session, user: User, entry_id: UUID) -> bool:
+    entry = db.query(WeightEntry).filter(WeightEntry.id == entry_id, WeightEntry.user_id == user.id).first()
+    if entry is None:
+        return False
+    db.delete(entry)
+    db.commit()
+    return True
+
+
+def day_measurements(db: Session, user_id, day: date) -> list[dict[str, Any]]:
+    rows = db.query(WeightEntry).filter(WeightEntry.user_id == user_id, WeightEntry.date == day).order_by(WeightEntry.created_at).all()
+    return [serialize_weight(row) for row in rows]
+
+
+def daily_weights(db: Session, user_id, start: date, end: date | None = None) -> list[DailyWeight]:
+    """One value per day (mean of that day's measurements), oldest first."""
+    query = db.query(WeightEntry.date, func.avg(WeightEntry.weight_kg)).filter(WeightEntry.user_id == user_id, WeightEntry.date >= start)
+    if end is not None:
+        query = query.filter(WeightEntry.date <= end)
+    rows = query.group_by(WeightEntry.date).order_by(WeightEntry.date).all()
+    return [DailyWeight(row[0], round(float(row[1]), 2)) for row in rows]
 
 
 def latest_weight(db: Session, user_id) -> WeightEntry | None:
-    return db.query(WeightEntry).filter(WeightEntry.user_id == user_id).order_by(WeightEntry.date.desc()).first()
+    """The most recent measurement."""
+    return db.query(WeightEntry).filter(WeightEntry.user_id == user_id).order_by(WeightEntry.date.desc(), WeightEntry.created_at.desc()).first()
 
 
 # ── reading ──────────────────────────────────────────────────────────────────────
@@ -138,7 +188,7 @@ def set_goals(db: Session, user: User, fields: dict[str, Any]) -> dict[str, Any]
         profile.target_weight_kg, profile.target_date = target_weight, target_date
         # The start weight is also the weight of that day, so the chart begins exactly there.
         if ("start_weight_kg" in weight_patch or "start_date" in weight_patch) and start_weight is not None and start_date is not None:
-            entry = db.query(WeightEntry).filter(WeightEntry.user_id == user.id, WeightEntry.date == start_date).first()
+            entry = db.query(WeightEntry).filter(WeightEntry.user_id == user.id, WeightEntry.date == start_date).order_by(WeightEntry.created_at).first()
             if entry is None:
                 db.add(WeightEntry(user_id=user.id, date=start_date, weight_kg=start_weight))
             else:

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, ChevronDown, Leaf, Loader2, Plus } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, ChevronDown, Leaf, Loader2, Plus } from 'lucide-react';
 import { createTrackEntry, getFoodDetail, getMealSlots, type FoodDetail, type FoodNutrient, type FoodSource, type MealSlot } from '../../api/api';
 import { canGoBack, haptic, useGoBack } from '../navigation';
 import {
@@ -48,6 +48,23 @@ export default function FoodDetailPage() {
   const [saving, setSaving] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [showIngredients, setShowIngredients] = useState(false);
+  const [unitOpen, setUnitOpen] = useState(false);
+  const amountBarRef = useRef<HTMLDivElement>(null);
+
+  // The unit list opens above the amount bar; a tap outside or Escape closes it.
+  useEffect(() => {
+    if (!unitOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!amountBarRef.current?.contains(event.target as Node)) setUnitOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') setUnitOpen(false); };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [unitOpen]);
 
   useEffect(() => {
     if (slotId) getMealSlots().then((data) => setSlot(data.items.find((item) => item.id === slotId) ?? null)).catch(() => undefined);
@@ -75,6 +92,7 @@ export default function FoodDetailPage() {
     const next = units.find((item) => item.id === unitId);
     if (!next) return;
     haptic('tap');
+    setUnitOpen(false);
     // Servings start at 1; back to grams keeps the current weight.
     setAmount({ unitId, value: next.id === 'base' ? toAmountInput(qty || 100) : '1' });
   };
@@ -201,7 +219,20 @@ export default function FoodDetailPage() {
         <p className="truncate px-1 pb-2 text-[11px]" style={{ color: DIM }}>
           {slot ? <>Zu <span style={{ color: SAND }}>{slot.name}</span> · </> : null}<span className="tabular-nums" style={{ color: TEXT }}>{fmt(kcal)} kcal</span>{unit.id !== 'base' && <span className="tabular-nums"> · {fmt(qty, 1)} {base}</span>}
         </p>
-        <div className="flex items-stretch gap-2 rounded-[20px] p-1.5" style={{ background: '#211c14', border: `1px solid ${SAND}33`, boxShadow: '0 18px 40px -20px rgba(0,0,0,0.9)' }}>
+        <div ref={amountBarRef} className="relative flex items-stretch gap-2 rounded-[20px] p-1.5" style={{ background: '#211c14', border: `1px solid ${SAND}33`, boxShadow: '0 18px 40px -20px rgba(0,0,0,0.9)' }}>
+          {unitOpen && <ul role="listbox" aria-label="Einheit oder Portion" className="forge-pop-up absolute inset-x-0 bottom-full z-10 mb-2 max-h-[min(46dvh,320px)] overflow-y-auto overscroll-contain rounded-[20px] p-1.5"
+            style={{ background: '#211c14', border: `1px solid ${SAND}33`, boxShadow: '0 -18px 40px -20px rgba(0,0,0,0.9)' }}>
+            {units.map((item) => {
+              const active = item.id === unit.id;
+              return <li key={item.id} role="option" aria-selected={active}>
+                <button type="button" onClick={() => changeUnit(item.id)} className="tap flex min-h-12 w-full items-center gap-2 rounded-2xl px-3 text-left text-[14px]"
+                  style={{ color: active ? SAND : TEXT, background: active ? 'rgba(232,197,138,0.1)' : 'transparent' }}>
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                  {active && <Check size={16} className="shrink-0" />}
+                </button>
+              </li>;
+            })}
+          </ul>}
           <label className="flex h-12 w-[92px] shrink-0 items-center rounded-2xl px-3" style={{ background: 'rgba(255,247,235,0.06)' }}>
             <input
               value={amount.value}
@@ -214,17 +245,14 @@ export default function FoodDetailPage() {
               style={{ color: TEXT }}
             />
           </label>
-          <label className="relative flex h-12 min-w-0 flex-1 items-center gap-1.5 rounded-2xl px-3" style={{ background: 'rgba(255,247,235,0.06)' }}>
+          <button type="button" onClick={() => { haptic('tap'); setUnitOpen((open) => !open); }} disabled={units.length < 2}
+            aria-haspopup="listbox" aria-expanded={unitOpen} aria-label="Einheit oder Portion"
+            className="tap relative flex h-12 min-w-0 flex-1 items-center gap-1.5 rounded-2xl px-3 text-left" style={{ background: 'rgba(255,247,235,0.06)' }}>
             <span className="min-w-0 flex-1 truncate text-[14px] font-medium" style={{ color: TEXT }}>
               {unit.short}{unit.id !== 'base' && <span className="ml-1 text-[12px] font-normal" style={{ color: DIM }}>({fmtAmount(unit.factor)} {base})</span>}
             </span>
-            <ChevronDown size={16} className="shrink-0" style={{ color: SAND }} />
-            {/* Native select on top (invisible): the phone's own picker, fully accessible. */}
-            <select value={unit.id} onChange={(event) => changeUnit(event.target.value)} aria-label="Einheit oder Portion"
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0" disabled={units.length < 2}>
-              {units.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
+            <ChevronDown size={16} className="shrink-0" style={{ color: SAND, transform: unitOpen ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s', opacity: units.length < 2 ? 0.4 : 1 }} />
+          </button>
           <button type="submit" disabled={!food.trackable || !qty || saving} aria-label={slot ? `Zu ${slot.name} hinzufügen` : 'Hinzufügen'}
             className="tap flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl disabled:opacity-40"
             style={{ color: '#16130f', background: `linear-gradient(140deg, ${SAND}, #d4aa70)`, boxShadow: '0 10px 22px -12px rgba(232,197,138,0.8)' }}>

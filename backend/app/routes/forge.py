@@ -30,7 +30,6 @@ from app.models import (
     ForgeTrainingProgram,
     ForgeWorkoutSession,
     User,
-    WeightEntry,
 )
 from app.schemas import (
     ForgeDraftResponse,
@@ -115,10 +114,8 @@ def _owned_progress_photo(db: Session, user_id: UUID, photo_id: UUID) -> ForgePr
 
 def _progress_photo_context(db: Session, user: User, taken_on: date) -> dict:
     """Read-only account data for a journal card; never sent to AI services."""
-    weight_entry = db.query(WeightEntry).filter(
-        WeightEntry.user_id == user.id,
-        WeightEntry.date == taken_on,
-    ).first()
+    day_weights = profile_goals.daily_weights(db, user.id, taken_on, taken_on)
+    weight_entry = day_weights[0] if day_weights else None
     sessions = db.query(ForgeWorkoutSession).filter(
         ForgeWorkoutSession.user_id == user.id,
         ForgeWorkoutSession.status == "completed",
@@ -1200,10 +1197,7 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
 def _local_weight_trends(db: Session, user_id: UUID) -> dict:
     """Compute sparse local 14/28-day bodyweight context without interpolation."""
     today = date.today()
-    entries = db.query(WeightEntry).filter(
-        WeightEntry.user_id == user_id,
-        WeightEntry.date >= today - timedelta(days=27),
-    ).order_by(WeightEntry.date).all()
+    entries = profile_goals.daily_weights(db, user_id, today - timedelta(days=27))
 
     def window(days: int) -> dict:
         cutoff = today - timedelta(days=days - 1)

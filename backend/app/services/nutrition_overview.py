@@ -11,7 +11,8 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import NutritionEntry, NutritionMealSlot, User, WeightEntry
+from app.models import NutritionEntry, NutritionMealSlot, User
+from app.services import profile_goals
 from app.services.nutrition_native import UNASSIGNED, berlin_today, goal_for_day, goals_native, load_goals
 
 SERIES_DAYS = 30
@@ -99,11 +100,8 @@ def overview(db: Session, user: User) -> dict[str, Any]:
 
     totals = _daily_totals(db, user.id, first, today)
     goals = load_goals(db, user.id)
-    weight_rows = db.query(WeightEntry.date, WeightEntry.weight_kg).filter(
-        WeightEntry.user_id == user.id, WeightEntry.date >= weeks_start,
-    ).order_by(WeightEntry.date).all()
-    weights = [(row[0], float(row[1])) for row in weight_rows]
-    latest = db.query(WeightEntry).filter(WeightEntry.user_id == user.id).order_by(WeightEntry.date.desc()).first()
+    weights = [(row.date, row.weight_kg) for row in profile_goals.daily_weights(db, user.id, weeks_start)]
+    latest = profile_goals.latest_weight(db, user.id)
 
     def goal_of(day: date) -> dict[str, Any] | None:
         return goals_native(goal_for_day(goals, day))

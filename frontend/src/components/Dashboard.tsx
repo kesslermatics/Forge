@@ -1,8 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-    AreaChart, Area, YAxis, XAxis, Tooltip,
-    ResponsiveContainer, CartesianGrid, ReferenceLine,
-} from 'recharts';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import {
     getWeightHistory,
@@ -10,16 +6,17 @@ import {
 } from '../api/api';
 import type {
     UserInfo,
-    WeightHistoryData, WeightHistoryEntry, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
+    WeightHistoryData, WeightHistoryEntry, WeightMeasurement, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
     Loader2, Flame, Plus,
-    Dumbbell, Scale, Target,
+    Dumbbell, Scale, Target, UserRound,
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 import ForgeAlternativeStartSheet from './ForgeAlternativeStartSheet';
 import ForgePlanImagePreview from './ForgePlanImagePreview';
 import WeightEntryCard from './WeightEntryCard';
+import WeightJourney from './WeightJourney';
 import DayNoteCard from './DayNoteCard';
 import { MacroPills } from './track/shared';
 
@@ -30,103 +27,6 @@ const TEXT_MID = 'rgba(242,236,226,0.7)';
 
 type LayoutContext = { user: UserInfo | null; refreshUser: () => Promise<UserInfo> };
 
-/* ── weight chart — Recharts ── */
-function WeightChart({ entries, target }: { entries: WeightHistoryEntry[]; target: number | null }) {
-    if (entries.length < 2) return null;
-
-    // Daily weigh-ins swing with water and food; the line shows a centred 7-day trend
-    // (±3 days by date, so gaps between weigh-ins are handled correctly).
-    const DAY = 86_400_000;
-    const times = entries.map(e => new Date(`${e.date}T12:00:00`).getTime());
-    const trend = entries.map((_, index) => {
-        const nearby = entries.filter((__, other) => Math.abs(times[other] - times[index]) <= 3 * DAY);
-        return Math.round((nearby.reduce((sum, item) => sum + item.weight_kg, 0) / nearby.length) * 100) / 100;
-    });
-
-    // A minimum visible span keeps tiny fluctuations from filling the whole chart height.
-    const MIN_SPAN_KG = 3;
-    // The target weight stays inside the visible range so the distance to it is always visible.
-    const rawMin = Math.min(...trend, ...(target !== null ? [target] : []));
-    const rawMax = Math.max(...trend, ...(target !== null ? [target] : []));
-    const centre = (rawMin + rawMax) / 2;
-    const span = Math.max(rawMax - rawMin, MIN_SPAN_KG) * 1.2;
-    const yMin = Math.floor((centre - span / 2) * 10) / 10;
-    const yMax = Math.ceil((centre + span / 2) * 10) / 10;
-
-    // 3 evenly-spaced ticks
-    const mid = Math.round(((yMin + yMax) / 2) * 10) / 10;
-    const yTicks = [yMin, mid, yMax];
-
-    const data = entries.map((e, index) => ({
-        date: e.date,
-        kg: trend[index],
-        actual: e.weight_kg,
-    }));
-
-    return (
-        <ResponsiveContainer width="100%" height={100}>
-            <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                <defs>
-                    <linearGradient id="wgrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={SAND} stopOpacity={0.25} />
-                        <stop offset="100%" stopColor={SAND} stopOpacity={0} />
-                    </linearGradient>
-                </defs>
-                <CartesianGrid
-                    vertical={false}
-                    stroke="rgba(242,236,226,0.06)"
-                    strokeDasharray="0"
-                />
-                <XAxis dataKey="date" hide />
-                <YAxis
-                    domain={[yMin, yMax]}
-                    ticks={yTicks}
-                    tickFormatter={v => v.toFixed(1)}
-                    tick={{ fontSize: 9, fill: 'rgba(242,236,226,0.35)', fontFamily: 'inherit' }}
-                    axisLine={false}
-                    tickLine={false}
-                    width={32}
-                />
-                <Tooltip
-                    contentStyle={{
-                        background: 'rgba(30,24,18,0.92)',
-                        border: `1px solid rgba(232,197,138,0.2)`,
-                        borderRadius: 8,
-                        fontSize: 11,
-                        color: '#f2ece2',
-                        padding: '4px 10px',
-                    }}
-                    itemStyle={{ color: SAND }}
-                    labelStyle={{ color: 'rgba(242,236,226,0.45)', marginBottom: 2, fontSize: 10 }}
-                    formatter={(v: number | undefined, _name: unknown, item: { payload?: { actual?: number } }) => v != null
-                        ? `${v.toFixed(1)} kg Trend${item?.payload?.actual != null ? ` · gewogen ${item.payload.actual.toFixed(1)} kg` : ''}`
-                        : ''}
-                    labelFormatter={(label: unknown) => {
-                        const s = String(label);
-                        return new Date(`${s}T12:00:00`).toLocaleDateString('de-DE', {
-                            day: 'numeric', month: 'short', year: 'numeric',
-                        });
-                    }}
-                    cursor={{ stroke: 'rgba(232,197,138,0.3)', strokeWidth: 1 }}
-                />
-                {target !== null && (
-                    <ReferenceLine y={target} stroke="#4ade80" strokeDasharray="4 4" strokeOpacity={0.7}
-                        label={{ value: `Ziel ${target.toFixed(1)}`, position: 'insideBottomRight', fontSize: 9, fill: '#4ade80' }} />
-                )}
-                <Area
-                    type="basis"
-                    dataKey="kg"
-                    stroke={SAND}
-                    strokeWidth={2.2}
-                    fill="url(#wgrad)"
-                    dot={false}
-                    activeDot={{ r: 3.5, fill: SAND, strokeWidth: 0 }}
-                    isAnimationActive={false}
-                />
-            </AreaChart>
-        </ResponsiveContainer>
-    );
-}
 /* ── macro bar ── */
 function MacroBar({ label, current, goal, color, limit = false, decimals = 0 }: { label: string; current: number; goal: number; color: string; limit?: boolean; decimals?: number }) {
     const pct = goal > 0 ? Math.min(current / goal, 1) : 0;
@@ -155,7 +55,8 @@ export default function Dashboard() {
     const navigate = useNavigate();
 
     const [weightHistory, setWeightHistory] = useState<WeightHistoryEntry[]>([]);
-    const [weightLatest, setWeightLatest] = useState<WeightHistoryEntry | null>(null);
+    const [weightLatest, setWeightLatest] = useState<WeightMeasurement | null>(null);
+    const [weightToday, setWeightToday] = useState<WeightMeasurement[]>([]);
     const [trackDay, setTrackDay] = useState<TrackDay | null>(null);
     const [trackFailed, setTrackFailed] = useState(false);
     const [consistency, setConsistency] = useState<ConsistencyData | null>(null);
@@ -168,25 +69,23 @@ export default function Dashboard() {
 
     // The chart starts at the start date of the weight goal in the profile (last 90 days without one).
     const [weightGoal, setWeightGoal] = useState<WeightHistoryData['goal'] | null>(null);
-    const weightStartDate = weightGoal?.start_date ?? null;
 
     const refreshForgeDashboard = useCallback(() => {
         getForgeToday().then(setForgeToday).catch(() => { });
         getActiveForgeSession().then(setActiveForgeSession).catch(() => { });
     }, []);
 
-    useEffect(() => {
-        getWeightHistory().then(d => { setWeightHistory(d.entries); setWeightLatest(d.latest); setWeightGoal(d.goal); }).catch(() => { });
+    const loadWeights = useCallback(() => {
+        getWeightHistory().then(d => { setWeightHistory(d.entries); setWeightLatest(d.latest); setWeightToday(d.today); setWeightGoal(d.goal); }).catch(() => { });
     }, []);
 
-    // A weight saved by the entry card appears in the chart right away, without a reload.
-    const handleWeightSaved = useCallback((entry: WeightHistoryEntry) => {
+    useEffect(() => { loadWeights(); }, [loadWeights]);
+
+    // A weighing saved by the entry card shows up right away; the chart and the day's list are reloaded.
+    const handleWeightSaved = useCallback((entry: WeightMeasurement) => {
         setWeightLatest(previous => (!previous || entry.date >= previous.date ? entry : previous));
-        setWeightHistory(previous => {
-            if (weightStartDate && entry.date < weightStartDate) return previous;
-            return [...previous.filter(item => item.date !== entry.date), entry].sort((a, b) => a.date.localeCompare(b.date));
-        });
-    }, [weightStartDate]);
+        loadWeights();
+    }, [loadWeights]);
 
     useEffect(() => {
         getTrackDay(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()))
@@ -277,14 +176,15 @@ export default function Dashboard() {
     return (
         <div className="space-y-4">
             {/* ── Greeting ── */}
-            <header className="forge-anim flex items-end justify-between gap-3">
-                <div className="min-w-0">
+            <header className="forge-anim flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
                     <p className="text-[13px]" style={{ color: TEXT_DIM }}>{greeting},</p>
                     <h1 className="truncate text-[28px] font-semibold tracking-tight leading-none mt-1" style={{ color: '#f2ece0' }}>
                         {user?.first_name || user?.username}
                     </h1>
                 </div>
                 {consistency && <ConsistencyDots data={consistency} />}
+                <button type="button" onClick={() => navigate('/settings')} className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.10)', border: '1px solid rgba(232,197,138,0.18)' }} aria-label="Profil und Einstellungen öffnen"><UserRound size={19} /></button>
             </header>
 
             {activeForgeSession ? (() => {
@@ -361,7 +261,7 @@ export default function Dashboard() {
                     <div className="forge-skeleton h-[212px] rounded-3xl" aria-hidden="true" />
                 )}
                 {/* ── Gewicht eintragen ── */}
-                <WeightEntryCard latest={weightLatest} onSaved={handleWeightSaved} />
+                <WeightEntryCard latest={weightLatest} today={weightToday} onSaved={handleWeightSaved} onDeleted={loadWeights} />
 
                 {/* ── Tagesnotiz ── */}
                 <DayNoteCard />
@@ -401,11 +301,9 @@ export default function Dashboard() {
                             </div>
 
                             {/* ── Chart ── */}
-                            {weightHistory.length >= 4 && (
-                                <div className="mt-2">
-                                    <WeightChart entries={weightHistory} target={weightGoal?.target_kg ?? null} />
-                                </div>
-                            )}
+                            <div className="mt-3">
+                                <WeightJourney entries={weightHistory} goal={weightGoal} />
+                            </div>
 
                             {/* ── Weekly avg change ── */}
                             {weightWeeklyAvg !== null && (

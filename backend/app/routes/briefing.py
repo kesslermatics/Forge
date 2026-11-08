@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, NutritionEntry, ProfileGoal, User, WeightClothingItem, WeightEntry
+from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, NutritionEntry, ProfileGoal, User, WeightClothingItem
 from app.services import profile_goals
 from app.services.chat_agent import refresh_chat_summary, run_chat_agent
 from app.services.forge_session_adapter import completed_forge_workouts
@@ -362,12 +362,22 @@ def save_weight(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Save the body weight of one day (one entry per day; saving again overwrites)."""
+    """Add one weight measurement (a day can have several; the same value again within minutes is ignored)."""
     try:
         return profile_goals.save_weight(db, current_user, data.weight_kg, data.date)
     except GoalError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/weight/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_weight(
+    entry_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not profile_goals.delete_weight(db, current_user, entry_id):
+        raise HTTPException(status_code=404, detail="Messung nicht gefunden.")
 
 
 @router.get("/weight-clothing")
@@ -428,8 +438,9 @@ def get_weight_history(
 ):
     """Weight history plus the profile weight goal.
 
-    Window: explicit ``start_date``, else the profile goal's start date, else the last ``days``.
-    ``latest`` is the newest entry regardless of the window.
+    ``entries`` has one value per day (mean of that day's measurements); ``today`` lists today's single
+    measurements. Window: explicit ``start_date``, else the profile goal's start date, else the last ``days``.
+    ``latest`` is the newest measurement regardless of the window.
     """
     today_date = _berlin_today()
     profile = db.query(ProfileGoal).filter(ProfileGoal.user_id == current_user.id).first()
@@ -447,17 +458,13 @@ def get_weight_history(
     cutoff = max(cutoff, today_date - timedelta(days=3650))
 
     latest = profile_goals.latest_weight(db, current_user.id)
-    entries = (
-        db.query(WeightEntry)
-        .filter(WeightEntry.user_id == current_user.id, WeightEntry.date >= cutoff)
-        .order_by(WeightEntry.date.asc())
-        .all()
-    )
+    entries = profile_goals.daily_weights(db, current_user.id, cutoff)
     return {
-        "entries": [{"date": e.date.isoformat(), "weight_kg": round(e.weight_kg, 2)} for e in entries],
+        "entries": [{"date": e.date.isoformat(), "weight_kg": e.weight_kg} for e in entries],
+        "today": profile_goals.day_measurements(db, current_user.id, today_date),
         "start_weight": entries[0].weight_kg if entries else None,
         "current_weight": entries[-1].weight_kg if entries else None,
-        "latest": {"date": latest.date.isoformat(), "weight_kg": round(latest.weight_kg, 2)} if latest else None,
+        "latest": profile_goals.serialize_weight(latest) if latest else None,
         "goal": {
             "start_kg": profile.start_weight_kg if profile else None,
             "start_date": profile.start_date.isoformat() if profile and profile.start_date else None,

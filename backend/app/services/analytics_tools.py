@@ -18,7 +18,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import GoogleHealthConnection, ProfileGoal, User, WeightEntry
+from app.models import GoogleHealthConnection, ProfileGoal, User
+from app.services import profile_goals
 from app.services.ai_service import _canonical_forge_muscle
 from app.services.forge_session_adapter import completed_forge_workouts
 from app.services.google_health_service import (
@@ -482,9 +483,7 @@ async def strength_progression(db: Session, user: User, args: dict) -> dict[str,
 # ── Weight trend shared by metabolic and projection tools ────────────────────────
 
 def _weight_trend(db: Session, user: User, start: date, end: date) -> dict[str, Any] | None:
-    entries = db.query(WeightEntry).filter(
-        WeightEntry.user_id == user.id, WeightEntry.date >= start, WeightEntry.date <= end,
-    ).order_by(WeightEntry.date.asc()).all()
+    entries = profile_goals.daily_weights(db, user.id, start, end)
     if len(entries) < 4 or (entries[-1].date - entries[0].date).days < 10:
         return None
     xs = [float((e.date - start).days) for e in entries]

@@ -139,14 +139,12 @@ class ChatMessage(Base):
 
 class WeightEntry(Base):
     """
-    Daily body weight, entered by the user in the app (PUT /api/briefing/weight).
-    One entry per user per date.
+    Body weight measurement, entered by the user in the app (PUT /api/briefing/weight).
+    Several per user per date are allowed; ``created_at`` is the time of day of the measurement.
+    Everything that needs one value per day uses the mean of that day.
     """
 
     __tablename__ = "weight_entries"
-    __table_args__ = (
-        UniqueConstraint("user_id", "date", name="uq_user_weight_date"),
-    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)

@@ -66,7 +66,7 @@ export default function ForgeExerciseLibraryPage() {
       <ChevronRight size={18} style={{ color: DIM }} />
     </button>
 
-    <div className="sticky top-14 z-20 -mx-4 space-y-2 px-4 pb-2 pt-1" style={{ background: 'rgba(22,19,15,0.94)', backdropFilter: 'blur(12px)' }}>
+    <div className="sticky top-0 z-20 -mx-4 space-y-2 px-4 pb-2 pt-1" style={{ background: 'rgba(22,19,15,0.94)', backdropFilter: 'blur(12px)' }}>
       <label className="flex h-12 items-center gap-2 rounded-2xl px-3.5" style={{ background: 'rgba(255,247,235,0.05)', border: `1px solid ${BORDER}` }}>
         <Search size={17} style={{ color: DIM }} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="Übung suchen" aria-label="Übung suchen" className="min-w-0 flex-1 bg-transparent text-[15px] outline-none" style={{ color: TEXT }} />

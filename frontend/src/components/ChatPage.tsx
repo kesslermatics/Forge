@@ -135,9 +135,9 @@ export default function ChatPage() {
 
     if (initializing) return <div className="h-[60vh] flex items-center justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div>;
 
-    // Fills exactly the space between header (3.5rem), top padding (1.5rem) and tab bar (4rem). The layout
+    // Fills exactly the space between top padding (1.5rem) and tab bar (4rem). The layout
     // reserves 7rem at the bottom for the tab bar, 3rem of it is taken back so the page itself never scrolls.
-    return <div className="forge-anim -mb-12 flex h-[calc(100dvh-9.5rem)] min-h-0 flex-col gap-3 overflow-hidden">
+    return <div className="forge-anim -mb-12 flex h-[calc(100dvh-6rem)] min-h-0 flex-col gap-3 overflow-hidden">
         {error && <div role="alert" className="shrink-0 rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.18)' }}>{error}</div>}
 
         <section className="min-h-0 flex-1 flex flex-col overflow-hidden">

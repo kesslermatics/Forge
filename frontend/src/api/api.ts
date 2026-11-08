@@ -374,10 +374,19 @@ export interface WeightHistoryEntry {
   weight_kg: number;
 }
 
+/** One stored weighing; a day can have several. `time` is the Berlin time of day (HH:MM). */
+export interface WeightMeasurement extends WeightHistoryEntry {
+  id: string;
+  time: string | null;
+}
+
 export interface WeightHistoryData {
+  /** One value per day: the mean of that day's measurements. */
   entries: WeightHistoryEntry[];
-  /** Newest entry overall, independent of the requested window. */
-  latest: WeightHistoryEntry | null;
+  /** Today's single measurements, oldest first. */
+  today: WeightMeasurement[];
+  /** Newest measurement overall, independent of the requested window. */
+  latest: WeightMeasurement | null;
   start_weight: number | null;
   current_weight: number | null;
   /** Weight goal from the profile (all null when unset). */
@@ -387,11 +396,14 @@ export interface WeightHistoryData {
 
 /** `keepalive` lets the request finish while the app is being closed or sent to the background. */
 export const saveWeight = (weightKg: number, date: string, keepalive = false) =>
-  apiRequest<WeightHistoryEntry>('/api/briefing/weight', {
+  apiRequest<WeightMeasurement>('/api/briefing/weight', {
     method: 'PUT',
     body: JSON.stringify({ weight_kg: weightKg, date }),
     keepalive,
   });
+
+export const deleteWeight = (id: string) =>
+  apiRequest<void>(`/api/briefing/weight/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export interface ClothingItem { id: string; name: string; weight_g: number; icon: string }
 export type ClothingItemInput = Omit<ClothingItem, 'id'> & { id?: string };

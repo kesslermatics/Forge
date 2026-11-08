@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Loader2, Minus, Pencil, Plus, Scale } from 'lucide-react';
-import { getWeightClothing, saveWeight, type ClothingItem, type WeightHistoryEntry } from '../api/api';
+import { Check, Loader2, Minus, Pencil, Plus, Scale, Trash2 } from 'lucide-react';
+import { deleteWeight, getWeightClothing, saveWeight, type ClothingItem, type WeightMeasurement } from '../api/api';
 import { haptic } from './navigation';
 import { berlinToday } from './track/trackUtils';
 import ClothingIcon from './ClothingIcon';
@@ -39,13 +39,17 @@ let clothingRequest: Promise<{ items: ClothingItem[] }> | null = null;
 const loadClothing = () => clothingRequest ??= getWeightClothing().catch((caught: unknown) => { clothingRequest = null; throw caught; });
 
 interface Props {
-  /** Newest stored weight (any day), or null when nothing was ever entered. */
-  latest: WeightHistoryEntry | null;
-  onSaved: (entry: WeightHistoryEntry) => void;
+  /** Newest stored weighing (any day), or null when nothing was ever entered. */
+  latest: WeightMeasurement | null;
+  /** Today's weighings, oldest first. */
+  today: WeightMeasurement[];
+  onSaved: (entry: WeightMeasurement) => void;
+  onDeleted: () => void;
 }
 
 /**
- * Weight entry for today: − / value / +, steps of 0.1 kg (hold to repeat).
+ * Weight entry: − / value / +, steps of 0.1 kg (hold to repeat). Every save adds a weighing; a day can
+ * have several (shown as chips below, tap twice to delete one).
  *
  * Saving: 30 s after the last change. Anything unsaved is also sent the moment the app goes to the
  * background or the page closes (keepalive request survives that) and when the dashboard is left.
@@ -55,9 +59,11 @@ interface Props {
  * Below the stepper sit the user's clothing tiles (shorts, phone, ...). Once a weight was entered, a
  * tap subtracts that item from the value, a second tap adds it back; after saving all reset.
  */
-export default function WeightEntryCard({ latest, onSaved }: Props) {
+export default function WeightEntryCard({ latest, today: todayEntries, onSaved, onDeleted }: Props) {
   const today = berlinToday();
   const savedToday = latest?.date === today;
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const confirmTimerRef = useRef(0);
   // `draft` is the unsaved value; without one the card shows the stored weight.
   const [draft, setDraft] = useState<number | null>(null);
   const [text, setText] = useState<string | null>(null); // raw text while the field is being edited
@@ -223,6 +229,25 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
     </button>
   );
 
+  useEffect(() => () => window.clearTimeout(confirmTimerRef.current), []);
+
+  // First tap arms the chip ("Löschen?"), a second one within 3 s deletes the weighing.
+  async function pressMeasurement(entry: WeightMeasurement) {
+    window.clearTimeout(confirmTimerRef.current);
+    if (confirmId !== entry.id) {
+      setConfirmId(entry.id);
+      confirmTimerRef.current = window.setTimeout(() => setConfirmId(null), 3000);
+      haptic('tap');
+      return;
+    }
+    setConfirmId(null);
+    try {
+      await deleteWeight(entry.id);
+      haptic('success');
+    } catch { /* the list below is reloaded either way */ }
+    onDeleted();
+  }
+
   const offsetKg = (clothing ?? []).filter((item) => selected.has(item.id)).reduce((sum, item) => sum + item.weight_g, 0) / 1000;
   const canPick = draft !== null;
 
@@ -230,7 +255,7 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
     if (status === 'saving') return <><Loader2 size={11} className="animate-spin" />Speichert…</>;
     if (status === 'error') return <span style={{ color: '#fca5a5' }}>Nicht gespeichert · neuer Versuch folgt</span>;
     if (status === 'dirty') return <>Speichert automatisch{offsetKg > 0 ? ` · −${offsetKg.toLocaleString('de-DE', { maximumFractionDigits: 2 })} kg Kleidung` : ''}</>;
-    if (status === 'saved' || savedToday) return <><Check size={11} style={{ color: '#4ade80' }} />Heute gespeichert</>;
+    if (status === 'saved' || savedToday) return <><Check size={11} style={{ color: '#4ade80' }} />Heute gespeichert{todayEntries.length > 1 ? ` · ${todayEntries.length} Messungen` : ''}</>;
     if (latest) {
       const label = new Date(`${latest.date}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
       return <>Zuletzt gewogen am {label}</>;
@@ -264,6 +289,17 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
           </div>
           {stepButton(1)}
         </div>
+        {todayEntries.length > 0 && <div className="mt-2 flex flex-wrap justify-center gap-1.5" role="group" aria-label="Messungen heute">
+          {todayEntries.map((entry) => {
+            const armed = confirmId === entry.id;
+            return <button key={entry.id} type="button" onClick={() => void pressMeasurement(entry)}
+              aria-label={armed ? 'Messung löschen' : `Messung ${entry.time ?? ''} ${format(entry.weight_kg)} Kilogramm, zum Löschen zweimal tippen`}
+              className="tap flex h-8 items-center gap-1.5 rounded-full px-3 text-[11.5px] tabular-nums"
+              style={armed ? { color: '#fca5a5', background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.35)' } : { color: DIM, background: 'rgba(232,197,138,0.06)', border: `1px solid ${BORDER}` }}>
+              {armed ? <><Trash2 size={12} />Löschen?</> : <>{entry.time && <span style={{ color: FAINT }}>{entry.time}</span>}<span style={{ color: TEXT }}>{format(entry.weight_kg)} kg</span></>}
+            </button>;
+          })}
+        </div>}
         {!clothingFailed && <div className="mt-2.5 flex items-center gap-1.5">
           {clothing === null ? <div className="forge-skeleton h-11 flex-1 rounded-xl" aria-hidden="true" /> : <>
             <div className="flex min-w-0 flex-1 gap-1.5" role="group" aria-label="Kleidung abziehen">

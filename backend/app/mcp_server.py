@@ -415,7 +415,7 @@ async def log_weight(
     weight_kg: Annotated[float, Field(ge=20, le=400)],
     date: Annotated[str | None, Field(description="YYYY-MM-DD; default today")] = None,
 ) -> dict[str, Any]:
-    """Save the body weight of one day (overwrites that day's entry)."""
+    """Add a body weight measurement (a day can have several; identical values within minutes count once)."""
     return await _call_sync(_apply_weight, weight_kg=weight_kg, day=_parse_day(date, "date"))
 
 

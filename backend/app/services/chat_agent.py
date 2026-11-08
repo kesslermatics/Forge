@@ -22,7 +22,7 @@ def _openai_client() -> AsyncOpenAI:
 
 from sqlalchemy.orm import Session
 
-from app.models import ChatConversation, ChatMessage, User, WeightEntry, GoogleHealthConnection
+from app.models import ChatConversation, ChatMessage, User, GoogleHealthConnection
 from app.services.analytics_tools import ANALYTICS_DECLARATIONS, ANALYTICS_STATUS_TEXT, ANALYTICS_TOOLS
 from app.services.coach_range_tools import exercise_history_in_range, nutrition_in_range, workouts_in_range
 from app.services.forge_session_adapter import completed_forge_workouts, forge_training_plan_context
@@ -346,10 +346,7 @@ async def execute_coach_tool(name: str, args: dict, user: User, db: Session) -> 
     if name == "get_weight_history":
         days = _bounded_int(args.get("days"), 90, 7, 365)
         cutoff = date.today() - timedelta(days=days)
-        entries = db.query(WeightEntry).filter(
-            WeightEntry.user_id == user.id,
-            WeightEntry.date >= cutoff,
-        ).order_by(WeightEntry.date.asc()).all()
+        entries = profile_goals.daily_weights(db, user.id, cutoff)
         return {
             "entries": [{"date": entry.date.isoformat(), "weight_kg": round(entry.weight_kg, 2)} for entry in entries],
             "start_weight_kg": entries[0].weight_kg if entries else None,

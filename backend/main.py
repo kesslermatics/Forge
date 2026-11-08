@@ -55,6 +55,8 @@ with engine.connect() as _conn:
         "ALTER TABLE users DROP COLUMN IF EXISTS yazio_email;",
         "ALTER TABLE users DROP COLUMN IF EXISTS yazio_password;",
         # weight_entries and chat tables are created by create_all above (new tables)
+        # Several weight measurements per day are allowed now.
+        "ALTER TABLE weight_entries DROP CONSTRAINT IF EXISTS uq_user_weight_date;",
     ]
     for stmt in _legacy_migrations:
         try:
