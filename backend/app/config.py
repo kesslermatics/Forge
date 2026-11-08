@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     # Must match the model/dimensions used by tools/food_catalog_import.py.
     food_embedding_model: str = os.getenv("FOOD_EMBEDDING_MODEL", "google/gemini-embedding-2")
     food_embedding_dimensions: int = int(os.getenv("FOOD_EMBEDDING_DIMENSIONS", "768"))
+    # Small, cheap model for free-text food tracking (splitting text into items, picking a catalog match).
+    food_parse_model: str = os.getenv("FOOD_PARSE_MODEL", "google/gemini-2.5-flash-lite")
 
     # Private object storage (S3-compatible, e.g. Cloudflare R2) for progress photos and plan images.
     # Empty by default so uploads never silently fall back to ephemeral container storage.

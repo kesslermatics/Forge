@@ -5,19 +5,21 @@ Diary data lives in the Forge database. Product data comes from the separate foo
 """
 from __future__ import annotations
 
+import json
 from datetime import date as date_type
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import NutritionEntry, NutritionMealSlot, User
-from app.services import food_catalog, nutrition_native
+from app.services import food_catalog, food_smart_track, nutrition_native
 from app.services.food_catalog import CatalogUnavailable
 
 router = APIRouter(prefix="/api/nutrition", tags=["Nutrition tracking"])
@@ -54,6 +56,12 @@ class EntryCreate(BaseModel):
     source: Literal["bls", "off"]
     source_id: str = Field(min_length=1, max_length=64)
     amount: float = Field(gt=0, le=10000)
+
+
+class SmartTrackRequest(BaseModel):
+    text: str = Field(min_length=2)
+    date: date_type
+    slot_id: UUID | None = None
 
 
 class EntryUpdate(BaseModel):
@@ -120,11 +128,20 @@ def _apply_amount(entry: NutritionEntry, amount: float) -> None:
         setattr(entry, field, total)
 
 
-def _history(db: Session, user: User) -> dict[tuple[str, str], int]:
+def _history(db: Session, user_id: UUID) -> dict[tuple[str, str], int]:
     rows = db.query(NutritionEntry.source, NutritionEntry.source_id, func.count(NutritionEntry.id)).filter(
-        NutritionEntry.user_id == user.id,
+        NutritionEntry.user_id == user_id,
     ).group_by(NutritionEntry.source, NutritionEntry.source_id).all()
     return {(source, source_id): count for source, source_id, count in rows}
+
+
+def _recency(db: Session, user_id: UUID) -> dict[tuple[str, str], int]:
+    """Days since the user last tracked each food."""
+    rows = db.query(NutritionEntry.source, NutritionEntry.source_id, func.max(NutritionEntry.date)).filter(
+        NutritionEntry.user_id == user_id,
+    ).group_by(NutritionEntry.source, NutritionEntry.source_id).all()
+    today = date_type.today()
+    return {(source, source_id): max((today - last).days, 0) for source, source_id, last in rows if last}
 
 
 def _last_amounts(db: Session, user: User, keys: list[tuple[str, str]]) -> dict[tuple[str, str], float]:
@@ -147,6 +164,25 @@ def _default_amount(item: dict, last: dict[tuple[str, str], float]) -> float:
         return round(previous, 1)
     serving = item.get("serving_g")
     return round(serving, 1) if serving and 0 < serving <= 2000 else 100.0
+
+
+def _is_complete(food: dict) -> bool:
+    return None not in (food.get("kcal"), food.get("protein"), food.get("carbs"), food.get("fat"))
+
+
+def _track_food(db: Session, user_id: UUID, food: dict, day: date_type, slot_id: UUID | None, amount: float) -> NutritionEntry:
+    """Store a diary entry with a nutrient snapshot of the catalog food (caller checks completeness)."""
+    per_100 = {field: (None if food.get(field) is None else round(float(food[field]), 4)) for field in CORE_FIELDS}
+    entry = NutritionEntry(
+        user_id=user_id, slot_id=slot_id, date=day, source=food["source"], source_id=food["source_id"],
+        name=food["name"][:300], brand=(food.get("brand") or None), unit=food.get("unit") or "g",
+        per_100=per_100, nutrients_per_100=food.get("nutrients") or None,
+    )
+    _apply_amount(entry, round(amount, 1))
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
 
 
 def _totals(entries: list[NutritionEntry]) -> dict:
@@ -265,19 +301,46 @@ def create_entry(data: EntryCreate, current_user: User = Depends(get_current_use
         raise _catalog_error(exc) from exc
     if food is None:
         raise HTTPException(status_code=404, detail="Lebensmittel nicht gefunden.")
-    if None in (food.get("kcal"), food.get("protein"), food.get("carbs"), food.get("fat")):
+    if not _is_complete(food):
         raise HTTPException(status_code=422, detail="Für dieses Produkt fehlen Nährwerte.")
-    per_100 = {field: (None if food.get(field) is None else round(float(food[field]), 4)) for field in CORE_FIELDS}
-    entry = NutritionEntry(
-        user_id=current_user.id, slot_id=data.slot_id, date=data.date, source=food["source"], source_id=food["source_id"],
-        name=food["name"][:300], brand=(food.get("brand") or None), unit=food.get("unit") or "g",
-        per_100=per_100, nutrients_per_100=food.get("nutrients") or None,
-    )
-    _apply_amount(entry, round(data.amount, 1))
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    entry = _track_food(db, current_user.id, food, data.date, data.slot_id, data.amount)
     return _serialize_entry(entry)
+
+
+@router.post("/smart-track")
+async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Free text -> several diary entries. Streams ``parsed``, one ``item`` per food and ``done`` as SSE."""
+    if data.slot_id is not None:
+        _owned_slot(db, current_user, data.slot_id)
+    user_id = current_user.id
+
+    async def event_stream():
+        # The request's session is closed once the response starts, so the stream owns its own.
+        session = SessionLocal()
+        try:
+            history = _history(session, user_id)
+            recency = _recency(session, user_id)
+
+            def store(candidate: dict, amount: float) -> dict:
+                try:
+                    food = food_catalog.get_food(candidate["source"], candidate["source_id"])
+                    if food is None or not _is_complete(food):
+                        raise ValueError("Food missing or incomplete")
+                    return _serialize_entry(_track_food(session, user_id, food, data.date, data.slot_id, amount))
+                except Exception:
+                    session.rollback()
+                    raise
+
+            async for event in food_smart_track.smart_track_events(data.text, history, recency, store):
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        finally:
+            session.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.patch("/entries/{entry_id}")
@@ -309,7 +372,7 @@ def recent_foods(limit: int = Query(100, ge=1, le=100), current_user: User = Dep
     """The last distinct products the user tracked, newest first, served from diary snapshots."""
     entries = db.query(NutritionEntry).filter(NutritionEntry.user_id == current_user.id).order_by(
         NutritionEntry.logged_at.desc()).limit(1500).all()
-    history = _history(db, current_user)
+    history = _history(db, current_user.id)
     seen: set[tuple[str, str]] = set()
     items = []
     for entry in entries:
@@ -331,7 +394,7 @@ def recent_foods(limit: int = Query(100, ge=1, le=100), current_user: User = Dep
 @router.get("/search")
 def search_foods(q: str = Query("", max_length=120), limit: int = Query(30, ge=1, le=50),
                  current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    history = _history(db, current_user)
+    history = _history(db, current_user.id)
     try:
         items = food_catalog.search(q, limit=limit, history=history)
     except CatalogUnavailable as exc:
@@ -363,7 +426,7 @@ def get_food(source: Literal["bls", "off"], source_id: str, current_user: User =
 
 
 def _detail_response(db: Session, user: User, food: dict) -> dict:
-    history = _history(db, user)
+    history = _history(db, user.id)
     detail = food_catalog.detail(food, history)
     last = _last_amounts(db, user, [(detail["source"], detail["source_id"])])
     complete = None not in (detail["kcal"], detail["protein"], detail["carbs"], detail["fat"])

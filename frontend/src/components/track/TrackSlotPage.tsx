@@ -8,6 +8,7 @@ import {
 import { haptic, useGoBack } from '../navigation';
 import FoodSearchPanel from './FoodSearchPanel';
 import BarcodeScannerSheet from './BarcodeScannerSheet';
+import SmartTrackSheet from './SmartTrackSheet';
 import EntryEditSheet from './EntryEditSheet';
 import { MacroPills, SlotIcon } from './shared';
 import {
@@ -52,6 +53,7 @@ export default function TrackSlotPage() {
   const [entries, setEntries] = useState<TrackEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
+  const [textOpen, setTextOpen] = useState(false);
   const [editing, setEditing] = useState<TrackEntry | null>(null);
   // An entry added on the product page arrives via the flash store for instant feedback.
   const [addedOnProduct] = useState(peekTrackFlash);
@@ -147,7 +149,7 @@ export default function TrackSlotPage() {
     if (key === 'search') searchRef.current?.focus();
     else if (key === 'barcode') setScanOpen(true);
     else if (key === 'camera') setSoon('Foto-Erkennung kommt in einer späteren Version.');
-    else setSoon('Tracken per Sprache oder Freitext kommt in einer späteren Version.');
+    else setTextOpen(true);
   };
 
   const totals = sum(entries ?? []);
@@ -155,7 +157,7 @@ export default function TrackSlotPage() {
     { key: 'search', icon: <Search size={19} />, label: 'Suche', active: true, disabled: false },
     { key: 'barcode', icon: <ScanBarcode size={19} />, label: 'Barcode', active: false, disabled: false },
     { key: 'camera', icon: <Camera size={19} />, label: 'Kamera', active: false, disabled: true },
-    { key: 'voice', icon: <MessageSquareText size={19} />, label: 'Text', active: false, disabled: true },
+    { key: 'voice', icon: <MessageSquareText size={19} />, label: 'Text', active: false, disabled: false },
   ];
 
   return <div className="space-y-4 pb-10">
@@ -229,6 +231,14 @@ export default function TrackSlotPage() {
       onFound={(food: FoodDetail) => { setScanOpen(false); openFood(food.source, food.source_id, { state: { food }, replace: true }); }}
       onOpenSearch={() => { setScanOpen(false); window.setTimeout(() => searchRef.current?.focus(), 320); }}
       onClose={() => setScanOpen(false)}
+    />}
+    {textOpen && <SmartTrackSheet
+      date={date}
+      slotId={realSlotId}
+      onTracked={(entry) => { setEntries((current) => [...(current ?? []), entry]); markFresh(entry.id); }}
+      onRemoved={(id) => setEntries((current) => (current ?? []).filter((item) => item.id !== id))}
+      onSearch={(value) => { setQuery(value); window.setTimeout(() => searchRef.current?.focus(), 320); }}
+      onClose={() => setTextOpen(false)}
     />}
     {editing && <EntryEditSheet
       entry={editing}

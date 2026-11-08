@@ -338,8 +338,12 @@ export const streamChatMessage = async (
     throw new Error(apiErrorMessage(payload, `Error ${response.status}`));
   }
   if (!response.body) throw new Error('Der Chat-Stream ist nicht verfügbar.');
+  await readEventStream(response.body, onEvent);
+};
 
-  const reader = response.body.getReader();
+/** Parses a server-sent-events body (`data: {json}` blocks) and hands each event to `onEvent`. */
+async function readEventStream<T>(body: ReadableStream<Uint8Array>, onEvent: (event: T) => void): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   const consume = (block: string) => {
@@ -348,7 +352,7 @@ export const streamChatMessage = async (
       .map(line => line.slice(6))
       .join('');
     if (!data) return;
-    onEvent(JSON.parse(data) as ChatStreamEvent);
+    onEvent(JSON.parse(data) as T);
   };
 
   while (true) {
@@ -360,7 +364,7 @@ export const streamChatMessage = async (
     if (done) break;
   }
   if (buffer.trim()) consume(buffer);
-};
+}
 
 
 /* ── Weight History ─────────────────────────────────────── */
@@ -537,6 +541,44 @@ export const deleteTrackEntry = (id: string) =>
   apiRequest<void>(`/api/nutrition/entries/${id}`, { method: 'DELETE' });
 
 export const getRecentFoods = () => apiRequest<{ items: FoodSummary[] }>('/api/nutrition/recent');
+
+/* ── Free-text tracking ("100g Hähnchen von Lidl, 200g Kartoffeln") ── */
+
+export interface SmartTrackItem {
+  index: number;
+  name: string;
+  brand: string | null;
+  amount: number;
+  unit: FoodUnit;
+  /** The amount was guessed by the model ("eine Banane", "bisschen Öl"). */
+  estimated: boolean;
+}
+
+/** A catalog product offered as choice; same fields as the search result. */
+export type SmartTrackOption = Pick<FoodSummary, 'source' | 'source_id' | 'name' | 'brand' | 'unit' | 'kcal' | 'protein' | 'carbs' | 'fat'>;
+
+export type SmartTrackEvent =
+  | { type: 'parsed'; items: SmartTrackItem[] }
+  | { type: 'item'; index: number; status: 'tracked' | 'ambiguous' | 'not_found' | 'error'; entry: TrackEntry | null; alternatives: SmartTrackOption[] }
+  | { type: 'done' }
+  | { type: 'error'; message: string };
+
+export const streamSmartTrack = async (
+  data: { text: string; date: string; slot_id: string | null },
+  onEvent: (event: SmartTrackEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> => {
+  const token = getToken();
+  const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${API_URL}/api/nutrition/smart-track`, { method: 'POST', headers, body: JSON.stringify(data), signal });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw new Error(apiErrorMessage(payload, `Error ${response.status}`));
+  }
+  if (!response.body) throw new Error('Der Stream ist nicht verfügbar.');
+  await readEventStream(response.body, onEvent);
+};
 export const searchFoods = (query: string, signal?: AbortSignal) =>
   apiRequest<{ query: string; items: FoodSummary[] }>(`/api/nutrition/search?q=${encodeURIComponent(query)}`, { signal });
 export const lookupBarcode = (code: string) =>
