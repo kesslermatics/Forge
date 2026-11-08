@@ -24,7 +24,7 @@ from sqlalchemy.engine import Engine
 
 from app.config import settings
 from app.database import _normalise_db_url
-from app.services.food_catalog_rows import ROW_COLUMNS, off_row_from_product
+from app.services.food_catalog_rows import ROW_COLUMNS, clean_ingredients, off_row_from_product
 
 logger = logging.getLogger(__name__)
 
@@ -359,7 +359,7 @@ def detail(food: dict[str, Any], history: dict[tuple[str, str], int] | None = No
         "nutrients": nutrients if isinstance(nutrients, list) else [],
         "package_g": _round(food.get("package_g")),
         "quantity_label": food.get("quantity_label"),
-        "ingredients": food.get("ingredients"),
+        "ingredients": clean_ingredients(food.get("ingredients")),
         "allergens": [tag.split(":", 1)[-1].replace("-", " ") for tag in (food.get("allergens") or "").split(",") if tag],
         "quality": food.get("quality"),
         "servings": servings(food),

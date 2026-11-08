@@ -6,6 +6,7 @@ tools/food_catalog_import.py, whose heavy dependencies (DuckDB, pandas) the back
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import math
 import os
@@ -73,6 +74,13 @@ def clean_text(value: Any, limit: int | None = None) -> str | None:
     if not text:
         return None
     return text[:limit] if limit else text
+
+
+def clean_ingredients(value: Any, limit: int | None = None) -> str | None:
+    """Open Food Facts wraps allergens in <span class="allergen">...</span>; keep the plain text only."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    return clean_text(html.unescape(re.sub(r"<[^>]+>", "", str(value))), limit)
 
 
 def clean_brand(value: Any) -> str | None:
@@ -161,7 +169,7 @@ def build_off_row(*, code: str, name_de: str | None, name_main: str | None, bran
         "serving_label": serving_label,
         "package_g": package if package and 0 < package <= 10000 else None,
         "quantity_label": quantity_label,
-        "ingredients": clean_text(ingredients, 3000),
+        "ingredients": clean_ingredients(ingredients, 3000),
         "allergens": clean_text(allergens, 500),
         "scans": int(finite(scans) or 0),
         "completeness": finite(completeness),
