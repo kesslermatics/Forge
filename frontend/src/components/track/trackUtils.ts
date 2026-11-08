@@ -44,6 +44,23 @@ export const fmt = (value: number | null | undefined, digits = 0) =>
 
 export const fmtAmount = (value: number) => value.toLocaleString('de-DE', { maximumFractionDigits: 1 });
 
+/** Phone photos are several MB; the model needs far less. Returns a JPEG data URL with the long side at most `maxSide`. */
+export async function photoToDataUrl(file: File, maxSide = 1280): Promise<string> {
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  try {
+    const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
+    canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Das Foto konnte nicht verarbeitet werden.');
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.82);
+  } finally {
+    bitmap.close();
+  }
+}
+
 export function scaled(per100: number | null | undefined, amount: number): number | null {
   return per100 == null ? null : (per100 * amount) / 100;
 }

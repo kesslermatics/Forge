@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Undo2, X } from 'lucide-react';
 import {
@@ -12,7 +12,7 @@ import SmartTrackSheet from './SmartTrackSheet';
 import EntryEditSheet from './EntryEditSheet';
 import { MacroPills, SlotIcon } from './shared';
 import {
-  BORDER, DIM, FAINT, SAND, TEXT, berlinToday, clearTrackFlash, fmt, fmtAmount, isValidIsoDate, peekTrackFlash, shortDate,
+  BORDER, DIM, FAINT, SAND, TEXT, berlinToday, clearTrackFlash, fmt, fmtAmount, isValidIsoDate, peekTrackFlash, photoToDataUrl, shortDate,
 } from './trackUtils';
 
 const EMPTY: TrackMacros = { kcal: 0, protein: 0, carbs: 0, fat: 0, sugar: 0, fiber: 0, saturated: 0, salt: 0 };
@@ -54,12 +54,13 @@ export default function TrackSlotPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState<TrackEntry | null>(null);
   // An entry added on the product page arrives via the flash store for instant feedback.
   const [addedOnProduct] = useState(peekTrackFlash);
   const [fresh, setFresh] = useState<Set<string>>(() => new Set(addedOnProduct ? [addedOnProduct.id] : []));
   const [undo, setUndo] = useState<Undo | null>(() => addedOnProduct ? { kind: 'added', entry: addedOnProduct, label: addedLabel(addedOnProduct) } : null);
-  const [soon, setSoon] = useState<string | null>(null);
   const undoTimer = useRef<number>(0);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -148,15 +149,23 @@ export default function TrackSlotPage() {
     haptic('tap');
     if (key === 'search') searchRef.current?.focus();
     else if (key === 'barcode') setScanOpen(true);
-    else if (key === 'camera') setSoon('Foto-Erkennung kommt in einer späteren Version.');
+    else if (key === 'camera') cameraRef.current?.click();
     else setTextOpen(true);
+  };
+
+  const onPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try { setPhoto(await photoToDataUrl(file)); }
+    catch { setError('Das Foto konnte nicht gelesen werden.'); }
   };
 
   const totals = sum(entries ?? []);
   const tiles = [
     { key: 'search', icon: <Search size={19} />, label: 'Suche', active: true, disabled: false },
     { key: 'barcode', icon: <ScanBarcode size={19} />, label: 'Barcode', active: false, disabled: false },
-    { key: 'camera', icon: <Camera size={19} />, label: 'Kamera', active: false, disabled: true },
+    { key: 'camera', icon: <Camera size={19} />, label: 'Kamera', active: false, disabled: false },
     { key: 'voice', icon: <MessageSquareText size={19} />, label: 'Text', active: false, disabled: false },
   ];
 
@@ -209,7 +218,7 @@ export default function TrackSlotPage() {
         {tile.disabled && <span className="absolute right-1.5 top-1.5 rounded-full px-1.5 py-px text-[8px] font-semibold uppercase tracking-wider" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}>Bald</span>}
       </button>)}
     </section>
-    {soon && <p className="forge-msg-in -mt-1 rounded-2xl px-4 py-3 text-[12px]" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}>{soon}</p>}
+    <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => void onPhoto(event)} aria-hidden="true" tabIndex={-1} />
 
     {slot && <FoodSearchPanel
       inputRef={searchRef}
@@ -232,13 +241,14 @@ export default function TrackSlotPage() {
       onOpenSearch={() => { setScanOpen(false); window.setTimeout(() => searchRef.current?.focus(), 320); }}
       onClose={() => setScanOpen(false)}
     />}
-    {textOpen && <SmartTrackSheet
+    {(textOpen || photo) && <SmartTrackSheet
+      photo={photo ?? undefined}
       date={date}
       slotId={realSlotId}
       onTracked={(entry) => { setEntries((current) => [...(current ?? []), entry]); markFresh(entry.id); }}
       onRemoved={(id) => setEntries((current) => (current ?? []).filter((item) => item.id !== id))}
       onSearch={(value) => { setQuery(value); window.setTimeout(() => searchRef.current?.focus(), 320); }}
-      onClose={() => setTextOpen(false)}
+      onClose={() => { setTextOpen(false); setPhoto(null); }}
     />}
     {editing && <EntryEditSheet
       entry={editing}

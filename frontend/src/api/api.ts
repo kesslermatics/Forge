@@ -564,7 +564,7 @@ export type SmartTrackEvent =
   | { type: 'error'; message: string };
 
 export const streamSmartTrack = async (
-  data: { text: string; date: string; slot_id: string | null },
+  data: { text?: string; image?: string; date: string; slot_id: string | null },
   onEvent: (event: SmartTrackEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> => {

@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -59,9 +59,17 @@ class EntryCreate(BaseModel):
 
 
 class SmartTrackRequest(BaseModel):
-    text: str = Field(min_length=2)
+    """Either free text or a meal photo (``data:image/...;base64,`` URL, downscaled by the client)."""
+    text: str | None = Field(default=None, min_length=2)
+    image: str | None = Field(default=None, pattern=r"^data:image/(jpeg|png|webp);base64,")
     date: date_type
     slot_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _needs_input(self):
+        if not self.text and not self.image:
+            raise ValueError("text or image is required")
+        return self
 
 
 class EntryUpdate(BaseModel):
@@ -331,7 +339,7 @@ async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_
                     session.rollback()
                     raise
 
-            async for event in food_smart_track.smart_track_events(data.text, history, recency, store):
+            async for event in food_smart_track.smart_track_events(data.text, data.image, history, recency, store):
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         finally:
             session.close()

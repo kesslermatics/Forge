@@ -13,7 +13,7 @@ import type {
     WeightHistoryData, WeightHistoryEntry, TrackDay, ConsistencyData, ForgeSession, ForgeToday,
 } from '../api/api';
 import {
-    Loader2, Flame, Plus, ChevronRight,
+    Loader2, Flame, Plus,
     Dumbbell, Scale, Target,
 } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
@@ -295,9 +295,9 @@ export default function Dashboard() {
                     <div className="grid grid-cols-2 gap-2 mt-4"><button onClick={() => navigate(`/forge/session/${activeForgeSession.id}`)} className="btn-forge flex items-center justify-center gap-2"><Dumbbell size={15} />Fortsetzen</button><button onClick={() => setDiscardDialogOpen(true)} disabled={startingSession} className="tap rounded-xl text-[12px] font-medium cursor-pointer disabled:opacity-50" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Verwerfen</button></div>
                 </section>;
             })() : canStartForgeTraining && (
-                <section className={`card-forge relative overflow-hidden forge-anim forge-d1 ${homeRoutine?.has_image ? 'flex gap-2 p-2' : 'p-5'}`} style={{ borderColor: `${SAND}2c` }}>
-                    {homeRoutine?.has_image && <ForgePlanImagePreview plan={homeRoutine} className="mx-1 w-24 self-stretch rounded-xl sm:w-32" />}
-                    <div className={homeRoutine?.has_image ? 'min-w-0 flex-1 py-3 pr-3 pl-0' : 'relative'}>
+                <section className={`card-forge relative overflow-hidden forge-anim forge-d1 ${homeRoutine?.has_image ? 'flex gap-2 p-1.5' : 'p-5'}`} style={{ borderColor: `${SAND}2c` }}>
+                    {homeRoutine?.has_image && <ForgePlanImagePreview plan={homeRoutine} className="mx-1 w-20 self-stretch rounded-xl sm:w-28" />}
+                    <div className={homeRoutine?.has_image ? 'min-w-0 flex-1 py-2 pr-3 pl-0' : 'relative'}>
                         <div className="flex items-start justify-between gap-4">
                             <div>
                                 <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{homeRoutine ? forgeToday?.mode === 'rotation' ? 'Als Nächstes' : 'Heute dran' : 'Ruhetag'}</p>
@@ -307,8 +307,8 @@ export default function Dashboard() {
                             </div>
                             <Dumbbell size={22} style={{ color: SAND }} />
                         </div>
-                        {homeRoutine && <button onClick={() => void handleStartRoutine(homeRoutine)} disabled={startingSession} className="btn-forge mt-4 flex w-full min-w-0 items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Kurs als erledigt markieren' : 'Training starten'}</button>}
-                        <button onClick={() => setAlternativePickerOpen(true)} disabled={startingSession} className="tap mt-2 w-full rounded-xl py-2.5 text-[11px] font-medium" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Alternatives Training starten</button>
+                        {homeRoutine && <button onClick={() => void handleStartRoutine(homeRoutine)} disabled={startingSession} className="btn-forge mt-3 flex w-full min-w-0 items-center justify-center gap-2">{startingSession ? <Loader2 size={15} className="animate-spin" /> : <Dumbbell size={15} />}{homeRoutine.plan_type === 'course' ? 'Kurs als erledigt markieren' : 'Training starten'}</button>}
+                        <button onClick={() => setAlternativePickerOpen(true)} disabled={startingSession} className="tap mt-1.5 w-full rounded-xl py-2 text-[11px] font-medium" style={{ color: TEXT_DIM, border: `1px solid ${CARD_BORDER}` }}>Alternatives Training starten</button>
                     </div>
                 </section>
             )}
@@ -322,10 +322,8 @@ export default function Dashboard() {
                 {trackDay ? (
                     <section className="card-forge p-5 forge-anim forge-d1" aria-label="Ernährung heute">
                         <div className="flex items-center justify-between mb-4">
-                            <button type="button" onClick={() => navigate('/nutrition/track')} className="tap flex items-center gap-2 text-[12px]" style={{ color: TEXT_DIM }}>
-                                <Flame size={13} style={{ color: SAND }} />
-                                Ernährung heute
-                                <ChevronRight size={12} />
+                            <button type="button" onClick={() => navigate('/settings#ziele')} className="tap flex h-9 items-center gap-1.5 rounded-full px-3 text-[12px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
+                                {goals ? <><Target size={11} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : <><Target size={11} />Ziele festlegen</>}
                             </button>
                             <button type="button" onClick={() => navigate('/nutrition/track')} className="tap flex h-9 items-center gap-1.5 rounded-full pl-2.5 pr-3.5 text-[12px] font-semibold" style={{ color: '#16130f', background: SAND }}>
                                 <Plus size={15} />Tracken
@@ -339,9 +337,6 @@ export default function Dashboard() {
                             <span className="text-[15px]" style={{ color: TEXT_DIM }}>
                                 {goals ? `/ ${goals.kcal.toLocaleString('de-DE')} kcal` : 'kcal'}
                             </span>
-                            <button type="button" onClick={() => navigate('/settings#ziele')} className="tap ml-auto flex h-8 items-center gap-1.5 self-center rounded-full px-2.5 text-[11px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
-                                {goals ? <><Target size={10} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : 'Ziele festlegen'}
-                            </button>
                         </div>
 
                         {goals ? <>

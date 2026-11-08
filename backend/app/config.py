@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     food_embedding_dimensions: int = int(os.getenv("FOOD_EMBEDDING_DIMENSIONS", "768"))
     # Small, cheap model for free-text food tracking (splitting text into items, picking a catalog match).
     food_parse_model: str = os.getenv("FOOD_PARSE_MODEL", "google/gemini-2.5-flash-lite")
+    # Reads a meal photo (one call per photo); portion estimates benefit from a stronger model than text parsing.
+    food_vision_model: str = os.getenv("FOOD_VISION_MODEL", "google/gemini-3.8-flash")
 
     # Private object storage (S3-compatible, e.g. Cloudflare R2) for progress photos and plan images.
     # Empty by default so uploads never silently fall back to ephemeral container storage.

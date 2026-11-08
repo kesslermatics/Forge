@@ -11,6 +11,8 @@ import { BORDER, DIM, FAINT, SAND, TEXT, fmt, fmtAmount } from './trackUtils';
 interface Props {
     date: string;
     slotId: string | null;
+    /** JPEG data URL of a meal photo; the analysis starts right away instead of asking for text. */
+    photo?: string;
     onTracked: (entry: TrackEntry) => void;
     onRemoved: (entryId: string) => void;
     /** Close the sheet and search for this item by hand. */
@@ -38,9 +40,9 @@ const PLACEHOLDER = 'z. B. 100 g Hähnchen von Lidl, 200 g Kartoffeln und bissch
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 const errorText = (caught: unknown, fallback: string) => caught instanceof Error ? caught.message : fallback;
 
-/** Free-text tracking: the text is split into foods, each one is found and tracked, one after another. */
-export default function SmartTrackSheet({ date, slotId, onTracked, onRemoved, onSearch, onClose }: Props) {
-    const [phase, setPhase] = useState<Phase>('input');
+/** Free-text or photo tracking: the input is split into foods, each one is found and tracked, one after another. */
+export default function SmartTrackSheet({ photo, date, slotId, onTracked, onRemoved, onSearch, onClose }: Props) {
+    const [phase, setPhase] = useState<Phase>(photo ? 'running' : 'input');
     const [text, setText] = useState('');
     const [cards, setCards] = useState<Card[]>([]);
     const [error, setError] = useState<string | null>(null);
@@ -53,7 +55,13 @@ export default function SmartTrackSheet({ date, slotId, onTracked, onRemoved, on
     const onTrackedRef = useRef(onTracked);
     useEffect(() => { onTrackedRef.current = onTracked; }, [onTracked]);
 
-    useEffect(() => () => { closedRef.current = true; controllerRef.current?.abort(); }, []);
+    // A photo starts on open. The cleanup also runs once in StrictMode, so the flag is reset on every mount.
+    useEffect(() => {
+        closedRef.current = false;
+        if (photo) void start();
+        return () => { closedRef.current = true; controllerRef.current?.abort(); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const patch = (index: number, changes: Partial<Card>) =>
         setCards((current) => current.map((card, position) => position === index ? { ...card, ...changes } : card));
@@ -88,7 +96,7 @@ export default function SmartTrackSheet({ date, slotId, onTracked, onRemoved, on
 
     const start = async () => {
         const value = text.trim();
-        if (value.length < 2 || phase === 'running') return;
+        if (!photo && (value.length < 2 || phase === 'running')) return;
         const controller = new AbortController();
         controllerRef.current = controller;
         queueRef.current = [];
@@ -96,7 +104,7 @@ export default function SmartTrackSheet({ date, slotId, onTracked, onRemoved, on
         setCards([]); setError(null); setPhase('running');
         haptic('tap');
         try {
-            await streamSmartTrack({ text: value, date, slot_id: slotId }, (event) => { queueRef.current.push(event); void pump(); }, controller.signal);
+            await streamSmartTrack(photo ? { image: photo, date, slot_id: slotId } : { text: value, date, slot_id: slotId }, (event) => { queueRef.current.push(event); void pump(); }, controller.signal);
         } catch (caught: unknown) {
             if (controller.signal.aborted) return;
             setError(errorText(caught, 'Tracken fehlgeschlagen.'));
@@ -229,17 +237,23 @@ export default function SmartTrackSheet({ date, slotId, onTracked, onRemoved, on
     };
 
     const running = phase === 'running';
-    return <ForgeSheet label="Mit Text tracken" onClose={onClose}>
+    return <ForgeSheet label={photo ? 'Mit Foto tracken' : 'Mit Text tracken'} onClose={onClose}>
         <div className="p-1">
             <div className="flex items-start justify-between gap-3">
                 <div>
-                    <h2 className="flex items-center gap-2 text-[18px] font-semibold leading-snug" style={{ color: TEXT }}><Sparkles size={17} style={{ color: SAND }} />Mit Text tracken</h2>
-                    <p className="mt-0.5 text-[12px]" style={{ color: DIM }}>Schreib, was du gegessen hast. Mengen darfst du schätzen lassen.</p>
+                    <h2 className="flex items-center gap-2 text-[18px] font-semibold leading-snug" style={{ color: TEXT }}><Sparkles size={17} style={{ color: SAND }} />{photo ? 'Mit Foto tracken' : 'Mit Text tracken'}</h2>
+                    <p className="mt-0.5 text-[12px]" style={{ color: DIM }}>{photo ? 'Mengen schätze ich aus dem Foto, du kannst sie danach korrigieren.' : 'Schreib, was du gegessen hast. Mengen darfst du schätzen lassen.'}</p>
                 </div>
                 <button type="button" onClick={onClose} aria-label="Schließen" className="tap flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><X size={18} /></button>
             </div>
+            {photo && <img src={photo} alt="Dein Foto" className="mt-4 h-36 w-full rounded-2xl object-cover" style={{ border: `1px solid ${BORDER}` }} />}
 
-            {phase === 'input' && <div className="mt-4">
+            {phase === 'input' && photo && <div className="mt-3">
+                {error && <p className="rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>}
+                <button type="button" onClick={() => void start()} className="btn-forge mt-3 h-12 w-full text-[14px]"><Sparkles size={16} />Nochmal versuchen</button>
+            </div>}
+
+            {phase === 'input' && !photo && <div className="mt-4">
                 <textarea value={text} onChange={(event) => setText(event.target.value)} rows={4} autoFocus placeholder={PLACEHOLDER} aria-label="Was hast du gegessen?"
                     onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void start(); } }}
                     className="w-full resize-none rounded-2xl p-3.5 text-[16px] leading-snug outline-none"
@@ -250,7 +264,7 @@ export default function SmartTrackSheet({ date, slotId, onTracked, onRemoved, on
 
             {phase !== 'input' && <>
                 <div className="mt-4 flex items-baseline justify-between px-1">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: DIM }}>{running && cards.length === 0 ? 'Ich lese deinen Text…' : running ? 'Wird getrackt' : 'Fertig'}</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: DIM }}>{running && cards.length === 0 ? (photo ? 'Ich schaue mir das Foto an…' : 'Ich lese deinen Text…') : running ? 'Wird getrackt' : 'Fertig'}</p>
                     {trackedCards.length > 0 && <p key={Math.round(totalKcal)} className="track-number text-[20px] font-semibold tabular-nums" style={{ color: TEXT }}>{fmt(totalKcal)}<span className="ml-1 text-[11px] font-normal" style={{ color: DIM }}>kcal</span></p>}
                 </div>
                 {running && cards.length === 0 && <div className="mt-2 space-y-2">{[0, 1, 2].map((item) => <div key={item} className="forge-skeleton h-[62px] rounded-2xl" />)}</div>}

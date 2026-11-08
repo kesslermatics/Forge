@@ -2,6 +2,7 @@
 
 Pipeline (small model, see settings.food_parse_model):
   1. One call splits the text into items with an amount in g/ml (vague amounts are estimated).
+     For a photo, a vision call (settings.food_vision_model) produces the same items instead.
   2. Per item the hybrid catalog search collects candidates (with and without the brand).
   3. Per item one small call picks the best candidate and says whether it is confident.
 Searches and picks of all items run in parallel; results are emitted in the order of the text so the
@@ -41,6 +42,18 @@ Regeln:
 - Jedes Lebensmittel ist ein eigener Eintrag. Bei Zubereitungen den Zustand im Namen lassen (z. B. "Reis gekocht").
 - Alles, was kein Lebensmittel oder Getränk ist, weglassen."""
 
+PHOTO_PROMPT = """Du siehst ein Foto von Essen oder Getränken und erstellst daraus die Einträge für ein Ernährungstagebuch.
+Antworte ausschließlich mit JSON: {"items":[{"name":string,"brand":string|null,"amount":number,"unit":"g"|"ml","estimated":boolean}]}
+
+Regeln:
+- Jedes erkennbare Lebensmittel ist ein eigener Eintrag (z. B. auf einem Teller Reis, Hähnchen und Brokkoli einzeln). Nur aufnehmen, was zu sehen ist; nichts dazuerfinden.
+- name: gängiger deutscher Produktname ohne Marke und Menge, bei Zubereitungen mit Zustand ("Reis gekocht", "Hähnchenbrust gebraten").
+- brand: nur wenn der Markenname auf einer Verpackung lesbar ist, sonst null.
+- amount: Gewicht in Gramm (unit "g") bzw. Milliliter (unit "ml", nur Getränke und Flüssigkeiten) der sichtbaren Portion. Schätze es aus der Größe im Vergleich zu Teller, Besteck, Hand oder Verpackung.
+- Steht eine Mengenangabe lesbar auf der Verpackung und wird offensichtlich die ganze Packung gegessen, nimm sie mit estimated=false. Alles andere ist geschätzt: estimated=true.
+- Verpackte Produkte als konkretes Produkt benennen (z. B. "Magerquark", "Haferdrink"), nicht nur als "Verpackung".
+- Ist kein Lebensmittel zu sehen, antworte mit {"items":[]}."""
+
 PICK_PROMPT = """Du wählst für ein Ernährungstagebuch das passende Produkt aus einer Kandidatenliste.
 Antworte ausschließlich mit JSON: {"choice":number|null,"confident":boolean}
 
@@ -72,9 +85,9 @@ def _loads(raw: str) -> dict[str, Any]:
     return data
 
 
-async def _complete(system: str, user: str, max_tokens: int) -> dict[str, Any]:
+async def _complete(system: str, user: Any, max_tokens: int, model: str | None = None) -> dict[str, Any]:
     response = await _client().chat.completions.create(
-        model=settings.food_parse_model,
+        model=model or settings.food_parse_model,
         temperature=0,
         max_tokens=max_tokens,
         response_format={"type": "json_object"},
@@ -105,6 +118,17 @@ def _clean_item(raw: Any) -> dict[str, Any] | None:
 
 async def parse_text(text: str) -> list[dict[str, Any]]:
     data = await _complete(PARSE_PROMPT, text, max_tokens=1200)
+    items = [_clean_item(raw) for raw in data.get("items") or []]
+    return [item for item in items if item]
+
+
+async def parse_image(image: str) -> list[dict[str, Any]]:
+    """``image`` is a ``data:image/...;base64,`` URL."""
+    user = [
+        {"type": "text", "text": "Welche Lebensmittel sind auf dem Foto?"},
+        {"type": "image_url", "image_url": {"url": image}},
+    ]
+    data = await _complete(PHOTO_PROMPT, user, max_tokens=1200, model=settings.food_vision_model)
     items = [_clean_item(raw) for raw in data.get("items") or []]
     return [item for item in items if item]
 
@@ -185,7 +209,8 @@ def _option(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def smart_track_events(
-    text: str,
+    text: str | None,
+    image: str | None,
     history: dict[tuple[str, str], int],
     recency: dict[tuple[str, str], int],
     store: Callable[[dict[str, Any], float], dict[str, Any]],
@@ -195,13 +220,13 @@ async def smart_track_events(
     ``store(candidate, amount)`` writes the diary entry and returns its serialised form.
     """
     try:
-        items = await parse_text(text)
+        items = await (parse_image(image) if image else parse_text(text or ""))
     except Exception:
-        logger.exception("Parsing food text failed")
-        yield {"type": "error", "message": "Der Text konnte nicht verarbeitet werden."}
+        logger.exception("Parsing food %s failed", "photo" if image else "text")
+        yield {"type": "error", "message": "Das Foto konnte nicht verarbeitet werden." if image else "Der Text konnte nicht verarbeitet werden."}
         return
     if not items:
-        yield {"type": "error", "message": "Ich habe darin kein Lebensmittel erkannt."}
+        yield {"type": "error", "message": "Auf dem Foto habe ich kein Lebensmittel erkannt." if image else "Ich habe darin kein Lebensmittel erkannt."}
         return
 
     yield {"type": "parsed", "items": [{"index": index, **item} for index, item in enumerate(items)]}
