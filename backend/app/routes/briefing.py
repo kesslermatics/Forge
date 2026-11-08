@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 
+from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, NutritionEntry, ProfileGoal, User, WeightEntry
+from app.models import ChatConversation, ChatMessage, ForgeWorkoutSession, NutritionEntry, ProfileGoal, User, WeightClothingItem, WeightEntry
 from app.services import profile_goals
 from app.services.chat_agent import refresh_chat_summary, run_chat_agent
 from app.services.forge_session_adapter import completed_forge_workouts
@@ -45,6 +46,30 @@ class WeightUpsert(BaseModel):
     @classmethod
     def one_decimal(cls, value: float) -> float:
         return round(value, 1)
+
+
+ClothingIcon = Literal["shirt", "pants", "shorts", "phone", "shoes", "watch", "wallet", "keys", "glasses", "backpack", "headphones"]
+MAX_CLOTHING_ITEMS = 6
+DEFAULT_CLOTHING = [("Shorts", 200, "shorts"), ("Hose", 600, "pants"), ("Hemd", 200, "shirt"), ("Handy", 200, "phone")]
+
+
+class ClothingItemIn(BaseModel):
+    id: UUID | None = None  # existing items keep their id so the client's selection stays valid
+    name: str = Field(min_length=1, max_length=24)
+    weight_g: int = Field(ge=1, le=5000)
+    icon: ClothingIcon
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Der Name darf nicht leer sein.")
+        return value
+
+
+class ClothingUpdate(BaseModel):
+    items: list[ClothingItemIn] = Field(min_length=1, max_length=MAX_CLOTHING_ITEMS)
 
 
 
@@ -343,6 +368,55 @@ def save_weight(
     except GoalError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/weight-clothing")
+def get_weight_clothing(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The user's fixed list of things to subtract from the scale reading (defaults on first use)."""
+    items = _clothing_rows(db, current_user.id)
+    if not items:
+        for position, (name, weight_g, icon) in enumerate(DEFAULT_CLOTHING):
+            db.add(WeightClothingItem(user_id=current_user.id, name=name, weight_g=weight_g, icon=icon, position=position))
+        db.commit()
+        items = _clothing_rows(db, current_user.id)
+    return {"items": [_serialize_clothing(item) for item in items]}
+
+
+@router.put("/weight-clothing")
+def save_weight_clothing(
+    data: ClothingUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Replace the whole list; items sent with a known id are updated in place."""
+    existing = {item.id: item for item in _clothing_rows(db, current_user.id)}
+    kept: set = set()
+    for position, payload in enumerate(data.items):
+        row = existing.get(payload.id) if payload.id else None
+        if row is None:
+            row = WeightClothingItem(user_id=current_user.id)
+            db.add(row)
+        elif row.id in kept:
+            raise HTTPException(status_code=422, detail="Ein Eintrag wurde doppelt gesendet.")
+        row.name, row.weight_g, row.icon, row.position = payload.name, payload.weight_g, payload.icon, position
+        if row.id is not None:
+            kept.add(row.id)
+    for item_id, row in existing.items():
+        if item_id not in kept:
+            db.delete(row)
+    db.commit()
+    return {"items": [_serialize_clothing(item) for item in _clothing_rows(db, current_user.id)]}
+
+
+def _clothing_rows(db: Session, user_id) -> list[WeightClothingItem]:
+    return db.query(WeightClothingItem).filter(WeightClothingItem.user_id == user_id).order_by(WeightClothingItem.position).all()
+
+
+def _serialize_clothing(item: WeightClothingItem) -> dict:
+    return {"id": str(item.id), "name": item.name, "weight_g": item.weight_g, "icon": item.icon}
 
 
 @router.get("/weight-history")

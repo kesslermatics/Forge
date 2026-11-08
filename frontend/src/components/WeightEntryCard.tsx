@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Loader2, Minus, Plus, Scale } from 'lucide-react';
-import { saveWeight, type WeightHistoryEntry } from '../api/api';
+import { Check, Loader2, Minus, Pencil, Plus, Scale } from 'lucide-react';
+import { getWeightClothing, saveWeight, type ClothingItem, type WeightHistoryEntry } from '../api/api';
 import { haptic } from './navigation';
 import { berlinToday } from './track/trackUtils';
+import ClothingIcon from './ClothingIcon';
+import ClothingEditorSheet from './ClothingEditorSheet';
 
 const SAND = '#e8c58a';
 const TEXT = '#f2ece0';
@@ -32,6 +34,10 @@ const format = (value: number) => value.toLocaleString('de-DE', { minimumFractio
 
 type Status = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 
+// One request per page load, also under StrictMode's double effects; updated after editing.
+let clothingRequest: Promise<{ items: ClothingItem[] }> | null = null;
+const loadClothing = () => clothingRequest ??= getWeightClothing().catch((caught: unknown) => { clothingRequest = null; throw caught; });
+
 interface Props {
   /** Newest stored weight (any day), or null when nothing was ever entered. */
   latest: WeightHistoryEntry | null;
@@ -45,6 +51,9 @@ interface Props {
  * background or the page closes (keepalive request survives that) and when the dashboard is left.
  * The pending value additionally sits in localStorage and is sent on the next start, so a killed
  * app or a failed request loses nothing.
+ *
+ * Below the stepper sit the user's clothing tiles (shorts, phone, ...). Once a weight was entered, a
+ * tap subtracts that item from the value, a second tap adds it back; after saving all reset.
  */
 export default function WeightEntryCard({ latest, onSaved }: Props) {
   const today = berlinToday();
@@ -54,9 +63,15 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
   const [text, setText] = useState<string | null>(null); // raw text while the field is being edited
   const [status, setStatus] = useState<Status>('idle');
   const [changeCount, setChangeCount] = useState(0);
+  const [clothing, setClothing] = useState<ClothingItem[] | null>(null);
+  const [clothingFailed, setClothingFailed] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [editorOpen, setEditorOpen] = useState(false);
   const value = draft ?? latest?.weight_kg ?? FALLBACK_KG;
 
   const draftRef = useRef<number | null>(null);
+  // Unrounded value, so adding an item back (e.g. 250 g) restores exactly what was there before.
+  const rawRef = useRef<number | null>(null);
   const latestRef = useRef(latest);
   const timerRef = useRef(0);
   const savingRef = useRef(false);
@@ -83,7 +98,7 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
       const saved = await saveWeight(payload.weight_kg, payload.date, keepalive);
       onSavedRef.current(saved);
       // Only clean when the value did not change while the request was running.
-      if (draftRef.current === payload.weight_kg) { draftRef.current = null; setDraft(null); writePending(null); }
+      if (draftRef.current === payload.weight_kg) { draftRef.current = null; rawRef.current = null; setDraft(null); setSelected(new Set()); writePending(null); }
       setStatus(draftRef.current === null ? 'saved' : 'dirty');
       if (!keepalive) haptic('success');
     } catch {
@@ -102,9 +117,8 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
     scheduleRef.current = schedule;
   });
 
-  function change(next: number) {
-    const clamped = Math.min(400, Math.max(20, round1(next)));
-    if (clamped === currentValue()) return;
+  function commit(clamped: number, raw = clamped) {
+    rawRef.current = raw;
     draftRef.current = clamped;
     setDraft(clamped);
     setStatus('dirty');
@@ -112,6 +126,27 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
     writePending({ date: berlinToday(), weight_kg: clamped });
     schedule();
   }
+
+  function change(next: number) {
+    const clamped = Math.min(400, Math.max(20, round1(next)));
+    if (clamped === currentValue()) return;
+    commit(clamped);
+  }
+
+  function toggleClothing(item: ClothingItem) {
+    if (draftRef.current === null) return;
+    const on = !selected.has(item.id);
+    const raw = (rawRef.current ?? draftRef.current) + (on ? -1 : 1) * item.weight_g / 1000;
+    commit(Math.min(400, Math.max(20, round1(raw))), raw);
+    setSelected((current) => { const next = new Set(current); if (on) next.add(item.id); else next.delete(item.id); return next; });
+    haptic('tap');
+  }
+
+  useEffect(() => {
+    let active = true;
+    loadClothing().then((result) => { if (active) setClothing(result.items); }).catch(() => { if (active) setClothingFailed(true); });
+    return () => { active = false; };
+  }, []);
 
   // A previous session may have ended before saving: send what is still pending.
   useEffect(() => {
@@ -188,10 +223,13 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
     </button>
   );
 
+  const offsetKg = (clothing ?? []).filter((item) => selected.has(item.id)).reduce((sum, item) => sum + item.weight_g, 0) / 1000;
+  const canPick = draft !== null;
+
   const hint = (() => {
     if (status === 'saving') return <><Loader2 size={11} className="animate-spin" />Speichert…</>;
     if (status === 'error') return <span style={{ color: '#fca5a5' }}>Nicht gespeichert · neuer Versuch folgt</span>;
-    if (status === 'dirty') return <>Speichert automatisch</>;
+    if (status === 'dirty') return <>Speichert automatisch{offsetKg > 0 ? ` · −${offsetKg.toLocaleString('de-DE', { maximumFractionDigits: 2 })} kg Kleidung` : ''}</>;
     if (status === 'saved' || savedToday) return <><Check size={11} style={{ color: '#4ade80' }} />Heute gespeichert</>;
     if (latest) {
       const label = new Date(`${latest.date}T12:00:00`).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
@@ -226,9 +264,34 @@ export default function WeightEntryCard({ latest, onSaved }: Props) {
           </div>
           {stepButton(1)}
         </div>
+        {!clothingFailed && <div className="mt-2.5 flex items-center gap-1.5">
+          {clothing === null ? <div className="forge-skeleton h-11 flex-1 rounded-xl" aria-hidden="true" /> : <>
+            <div className="flex min-w-0 flex-1 gap-1.5" role="group" aria-label="Kleidung abziehen">
+              {clothing.map((item) => {
+                const active = selected.has(item.id);
+                return <button key={item.id} type="button" onClick={() => toggleClothing(item)} disabled={!canPick} aria-pressed={active}
+                  aria-label={`${item.name}, ${item.weight_g} g abziehen`} title={`${item.name} · ${item.weight_g} g`}
+                  className="tap flex h-11 min-w-0 flex-1 items-center justify-center rounded-xl disabled:opacity-35"
+                  style={active ? { color: '#16130f', background: SAND } : { color: SAND, background: 'rgba(232,197,138,0.08)', border: `1px solid ${BORDER}` }}>
+                  <ClothingIcon icon={item.icon} size={19} />
+                </button>;
+              })}
+            </div>
+            <button type="button" onClick={() => setEditorOpen(true)} aria-label="Kleidung bearbeiten" className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-xl" style={{ color: DIM }}><Pencil size={16} /></button>
+          </>}
+        </div>}
         {/* Countdown to the automatic save; restarts with every change. */}
         {status === 'dirty' && <span key={changeCount} className="weight-countdown absolute bottom-0 left-0 h-[2px]" style={{ background: SAND, animationDuration: `${AUTOSAVE_MS}ms` }} aria-hidden="true" />}
       </div>
+      {editorOpen && clothing && <ClothingEditorSheet
+        items={clothing}
+        onSaved={(items) => {
+          clothingRequest = Promise.resolve({ items });
+          setClothing(items);
+          setSelected((current) => new Set(items.filter((item) => current.has(item.id)).map((item) => item.id)));
+        }}
+        onClose={() => setEditorOpen(false)}
+      />}
     </section>
   );
 }

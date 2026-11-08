@@ -50,6 +50,7 @@ class User(Base):
     nutrition_goals = relationship("NutritionGoal", back_populates="user", cascade="all, delete-orphan")
     profile_goal = relationship("ProfileGoal", back_populates="user", cascade="all, delete-orphan", uselist=False)
     day_notes = relationship("DayNote", back_populates="user", cascade="all, delete-orphan")
+    weight_clothing_items = relationship("WeightClothingItem", back_populates="user", cascade="all, delete-orphan")
     forge_exercises = relationship("ForgeExercise", back_populates="user", cascade="all, delete-orphan")
     forge_machine_profiles = relationship("ForgeMachineProfile", back_populates="user", cascade="all, delete-orphan")
     forge_plans = relationship("ForgeTrainingPlan", back_populates="user", cascade="all, delete-orphan")
@@ -263,6 +264,21 @@ class ProfileGoal(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", back_populates="profile_goal")
+
+
+class WeightClothingItem(Base):
+    """Something worn while weighing (shorts, phone, ...). The weight card subtracts it on tap."""
+
+    __tablename__ = "weight_clothing_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(24), nullable=False)
+    weight_g = Column(Integer, nullable=False)
+    icon = Column(String(16), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    user = relationship("User", back_populates="weight_clothing_items")
 
 
 class DayNote(Base):

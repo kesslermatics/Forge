@@ -393,6 +393,14 @@ export const saveWeight = (weightKg: number, date: string, keepalive = false) =>
     keepalive,
   });
 
+export interface ClothingItem { id: string; name: string; weight_g: number; icon: string }
+export type ClothingItemInput = Omit<ClothingItem, 'id'> & { id?: string };
+
+/** Things worn while weighing; the list is fixed per user and subtracted on tap. */
+export const getWeightClothing = () => apiRequest<{ items: ClothingItem[] }>('/api/briefing/weight-clothing');
+export const saveWeightClothing = (items: ClothingItemInput[]) =>
+  apiRequest<{ items: ClothingItem[] }>('/api/briefing/weight-clothing', { method: 'PUT', body: JSON.stringify({ items }) });
+
 export const getWeightHistory = (startDate: string | null = null, days = 90) => {
   const params = startDate
     ? `start_date=${encodeURIComponent(startDate)}`
