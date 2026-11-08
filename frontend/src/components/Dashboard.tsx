@@ -318,20 +318,6 @@ export default function Dashboard() {
 
 
             <>
-                {/* ── Food tracking entry point ── */}
-                <button type="button" onClick={() => navigate('/nutrition/track')} className="card-forge tap forge-anim forge-d1 flex w-full items-center gap-3 p-3.5 text-left" style={{ borderColor: `${SAND}33` }}>
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl" style={{ color: '#16130f', background: SAND }}><Plus size={20} /></span>
-                    <span className="min-w-0 flex-1">
-                        <span className="block text-[15px] font-semibold" style={{ color: '#f2ece0' }}>Essen tracken</span>
-                        <span className="mt-0.5 block truncate text-[12px] tabular-nums" style={{ color: TEXT_DIM }}>
-                            {trackDay && trackDay.entry_count > 0
-                                ? `Heute ${Math.round(trackDay.totals.kcal).toLocaleString('de-DE')} kcal · ${Math.round(trackDay.totals.protein)} g Protein`
-                                : 'Suche, Barcode oder zuletzt getrackt'}
-                        </span>
-                    </span>
-                    <ChevronRight size={17} className="shrink-0" style={{ color: SAND }} />
-                </button>
-
                 {/* ── Ernährung heute (eigenes Tracking) ── */}
                 {trackDay ? (
                     <section className="card-forge p-5 forge-anim forge-d1" aria-label="Ernährung heute">
@@ -341,8 +327,8 @@ export default function Dashboard() {
                                 Ernährung heute
                                 <ChevronRight size={12} />
                             </button>
-                            <button type="button" onClick={() => navigate('/settings#ziele')} className="tap flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
-                                {goals ? <><Target size={10} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : 'Ziele festlegen'}
+                            <button type="button" onClick={() => navigate('/nutrition/track')} className="tap flex h-9 items-center gap-1.5 rounded-full pl-2.5 pr-3.5 text-[12px] font-semibold" style={{ color: '#16130f', background: SAND }}>
+                                <Plus size={15} />Tracken
                             </button>
                         </div>
 
@@ -353,6 +339,9 @@ export default function Dashboard() {
                             <span className="text-[15px]" style={{ color: TEXT_DIM }}>
                                 {goals ? `/ ${goals.kcal.toLocaleString('de-DE')} kcal` : 'kcal'}
                             </span>
+                            <button type="button" onClick={() => navigate('/settings#ziele')} className="tap ml-auto flex h-8 items-center gap-1.5 self-center rounded-full px-2.5 text-[11px]" style={{ color: goals ? TEXT_DIM : SAND, background: 'rgba(232,197,138,0.08)' }}>
+                                {goals ? <><Target size={10} />{kcalLeft >= 0 ? `${kcalLeft.toLocaleString('de-DE')} kcal übrig` : `${(-kcalLeft).toLocaleString('de-DE')} kcal drüber`}</> : 'Ziele festlegen'}
+                            </button>
                         </div>
 
                         {goals ? <>
