@@ -8,7 +8,7 @@ import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction, completeForgeSession,
   deleteForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, dismissForgeSessionAction,
   generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
-  getForgeExercises, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, reorderForgeSessionExercises,
+  getForgeExercises, getForgeExerciseHistory, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, reorderForgeSessionExercises,
   replaceForgeSessionExercise, sendForgeSessionChat, streamForgeSessionStartCoaching, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
 import { applyCoachingEvent, initialCoachingProgress } from './forgeSession/coachingProgress';
@@ -25,7 +25,7 @@ import SessionCoachSheet from './forgeSession/SessionCoachSheet';
 import ExerciseOverviewSheet from './forgeSession/ExerciseOverviewSheet';
 import CompletionSummary from './forgeSession/CompletionSummary';
 import {
-  BORDER, DIM, SAND, SET_ROW_COLUMNS, TEXT, coachDecisionFor, errorMessage, exerciseDone, formatClock, haptic, isTempId,
+  BORDER, DIM, SAND, SET_ROW_COLUMNS, TEXT, coachDecisionFor, epley, errorMessage, exerciseDone, formatClock, haptic, isTempId,
   needsCoaching, parseWeightInput, toUpdateInput,
 } from './forgeSession/shared';
 
@@ -56,6 +56,9 @@ export default function ForgeSessionPage() {
   const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({});
   const [activeSetId, setActiveSetId] = useState<string | null>(null);
   const [justCheckedId, setJustCheckedId] = useState<string | null>(null);
+  const [prSetId, setPrSetId] = useState<string | null>(null);
+  // Best estimated 1RM from completed sessions per exercise and machine profile; 0 = no history yet.
+  const [priorBest, setPriorBest] = useState<Record<string, number>>({});
   const [undo, setUndo] = useState<{ setId: string } | null>(null);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -321,6 +324,28 @@ export default function ForgeSessionPage() {
 
   // ── derived ────────────────────────────────────────────────────
   const activeExercise = session?.exercises[activeIndex] ?? null;
+
+  // History of the shown exercise, loaded once, so a new record can be recognised the moment a set is checked.
+  const priorRequested = useRef<Set<string>>(new Set());
+  const historyExerciseId = activeExercise?.source_exercise_id ?? null;
+  const historyProfileId = activeExercise?.machine_profile_id ?? null;
+  useEffect(() => {
+    if (!historyExerciseId) return;
+    const key = `${historyExerciseId}:${historyProfileId ?? ''}`;
+    if (priorRequested.current.has(key)) return;
+    priorRequested.current.add(key);
+    getForgeExerciseHistory(historyExerciseId, historyProfileId).then((history) => {
+      let best = 0;
+      for (const past of history.sessions) {
+        for (const set of past.sets) {
+          if (set.set_type === 'working' && set.completed && set.actual_weight_kg && set.actual_weight_kg > 0 && set.actual_reps && set.actual_reps > 0) {
+            best = Math.max(best, Math.round(epley(set.actual_weight_kg, set.actual_reps) * 10) / 10);
+          }
+        }
+      }
+      setPriorBest((current) => ({ ...current, [key]: best }));
+    }).catch(() => { priorRequested.current.delete(key); });
+  }, [historyExerciseId, historyProfileId]);
   const activeLibraryExercise = useMemo(() => library.find((item) => item.id === activeExercise?.source_exercise_id) ?? null, [library, activeExercise?.source_exercise_id]);
   const expandedSetId = useMemo(() => {
     if (!activeExercise) return null;
@@ -381,6 +406,22 @@ export default function ForgeSessionPage() {
       haptic(12);
       setJustCheckedId(live.id);
       setTimeout(() => setJustCheckedId((current) => (current === live.id ? null : current)), 650);
+
+      // Personal record: a working set whose estimated 1RM beats every earlier session and every earlier set today.
+      // The very first session of an exercise has nothing to beat, so it never counts.
+      const priorKey = exercise.source_exercise_id ? `${exercise.source_exercise_id}:${exercise.machine_profile_id ?? ''}` : null;
+      const before = priorKey ? priorBest[priorKey] : undefined;
+      if (before && before > 0 && live.set_type === 'working' && weight && weight > 0 && reps && reps > 0) {
+        const estimate = Math.round(epley(weight, reps) * 10) / 10;
+        const earlierToday = exercise.sets
+          .filter((item) => item.id !== live.id && item.completed && item.set_type === 'working' && item.actual_weight_kg && item.actual_reps)
+          .map((item) => Math.round(epley(item.actual_weight_kg!, item.actual_reps!) * 10) / 10);
+        if (estimate > Math.max(before, ...earlierToday)) {
+          setPrSetId(live.id);
+          haptic([12, 50, 22]);
+          setTimeout(() => setPrSetId((current) => (current === live.id ? null : current)), 1200);
+        }
+      }
       const remaining = exercise.sets.filter((item) => !item.completed && item.id !== live.id);
       setActiveSetId(remaining[0]?.id ?? null);
       if (!remaining.length) setTimeout(() => haptic([15, 70, 30]), 120);
@@ -714,6 +755,7 @@ export default function ForgeSessionPage() {
               readOnly={!active || exerciseBusy}
               pending={isTempId(set.id)}
               justChecked={justCheckedId === set.id}
+              celebrate={prSetId === set.id}
               weightDraft={weightDrafts[set.id]}
               onActivate={() => setActiveSetId(set.id)}
               onWeightInput={(raw) => onWeightInput(set, raw)}

@@ -5,6 +5,20 @@ import { BORDER, DIM, SAND, SET_ROW_COLUMNS, TEXT, formatKg, haptic, stepWeight 
 
 const SWIPE_DELETE_THRESHOLD = 96;
 
+// Fixed burst pattern (no randomness during render): mostly left and up/down, since the button sits at the row's edge.
+const FLAKES = [
+  { x: -30, y: -20, r: 200, c: '#e8c58a', d: 0 },
+  { x: -38, y: -4, r: -160, c: '#83d6ad', d: 0.02 },
+  { x: -26, y: 17, r: 240, c: '#f2ece0', d: 0.04 },
+  { x: -12, y: -26, r: -120, c: '#83d6ad', d: 0.01 },
+  { x: -48, y: -14, r: 280, c: '#e8c58a', d: 0.05 },
+  { x: -44, y: 12, r: -220, c: '#e8c58a', d: 0.03 },
+  { x: -16, y: 24, r: 150, c: '#83d6ad', d: 0.06 },
+  { x: -58, y: 0, r: -300, c: '#f2ece0', d: 0.07 },
+  { x: -4, y: -24, r: 100, c: '#f2ece0', d: 0.02 },
+  { x: -34, y: 26, r: -90, c: '#e8c58a', d: 0.08 },
+];
+
 interface Props {
   set: ForgeSessionSet;
   label: string;
@@ -13,6 +27,8 @@ interface Props {
   readOnly: boolean;
   pending: boolean;
   justChecked: boolean;
+  /** Set was just checked off and beat the best estimated 1RM: show a small confetti burst. */
+  celebrate: boolean;
   weightDraft: string | undefined;
   onActivate: () => void;
   onWeightInput: (raw: string) => void;
@@ -40,7 +56,7 @@ function StepButton({ label, disabled, onClick, children }: { label: string; dis
  * so checking an untouched set logs exactly the target.
  */
 export default function SetRow({
-  set, label, exercise, active, readOnly, pending, justChecked, weightDraft,
+  set, label, exercise, active, readOnly, pending, justChecked, celebrate, weightDraft,
   onActivate, onWeightInput, onWeightPick, onWeightBlur, onReps, onToggle, onDelete, onToggleType,
 }: Props) {
   const [dx, setDx] = useState(0);
@@ -168,16 +184,21 @@ export default function SetRow({
           <StepButton label="Eine Wiederholung mehr" disabled={locked || (currentReps ?? 0) >= 200} onClick={() => onReps(Math.min(200, (currentReps ?? 0) + 1))}><Plus size={14} /></StepButton>
         </div>
 
-        <button
-          type="button"
-          data-noswipe
-          disabled={locked}
-          onClick={(event) => { event.stopPropagation(); onToggle(); }}
-          aria-pressed={set.completed}
-          aria-label={set.completed ? 'Satz wieder öffnen' : 'Satz abhaken'}
-          className="tap flex h-11 w-11 items-center justify-center justify-self-end rounded-xl disabled:opacity-50"
-          style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM, border: `1px solid ${set.completed ? SAND : 'rgba(255,247,235,0.1)'}` }}
-        ><Check size={20} strokeWidth={2.6} /></button>
+        <div className="relative justify-self-end">
+          <button
+            type="button"
+            data-noswipe
+            disabled={locked}
+            onClick={(event) => { event.stopPropagation(); onToggle(); }}
+            aria-pressed={set.completed}
+            aria-label={set.completed ? 'Satz wieder öffnen' : 'Satz abhaken'}
+            className="tap flex h-11 w-11 items-center justify-center rounded-xl disabled:opacity-50"
+            style={{ background: set.completed ? SAND : 'rgba(255,247,235,0.06)', color: set.completed ? '#16130f' : DIM, border: `1px solid ${set.completed ? SAND : 'rgba(255,247,235,0.1)'}` }}
+          ><Check size={20} strokeWidth={2.6} /></button>
+          {celebrate && <span aria-hidden="true" className="pointer-events-none absolute inset-0">
+            {FLAKES.map((flake, index) => <span key={index} className="forge-confetti" style={{ background: flake.c, ['--x' as string]: `${flake.x}px`, ['--y' as string]: `${flake.y}px`, ['--r' as string]: `${flake.r}deg`, ['--d' as string]: `${flake.d}s` }} />)}
+          </span>}
+        </div>
       </div>
       {pending && <span className="sr-only">Wird gespeichert</span>}
     </div>

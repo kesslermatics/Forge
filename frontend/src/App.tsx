@@ -19,11 +19,15 @@ import PreviewShowcase from './preview/PreviewShowcase';
 import TrackDayPage from './components/track/TrackDayPage';
 import TrackSlotPage from './components/track/TrackSlotPage';
 import FoodDetailPage from './components/track/FoodDetailPage';
+import { isAuthenticated } from './api/api';
+
+// The installed app opens at "/": with a stored token that goes straight to the app, not to the login.
+const GuestOnly = ({ children }: { children: React.ReactElement }) => isAuthenticated() ? <Navigate to="/dashboard" replace /> : children;
 
 function App() {
   return <BrowserRouter><Routes>
-    <Route path="/login" element={<LoginForm />} />
-    <Route path="/register" element={<RegisterForm />} />
+    <Route path="/login" element={<GuestOnly><LoginForm /></GuestOnly>} />
+    <Route path="/register" element={<GuestOnly><RegisterForm /></GuestOnly>} />
     <Route path="/preview" element={<PreviewShowcase />} />
     <Route element={<AppLayout />}>
       <Route path="/dashboard" element={<Dashboard />} />
@@ -46,7 +50,7 @@ function App() {
       <Route path="/forge/exercises/:exerciseId/history" element={<ForgeExerciseHistoryPage />} />
       <Route path="/settings" element={<SettingsPage />} />
     </Route>
-    <Route path="*" element={<Navigate to="/login" replace />} />
+    <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes></BrowserRouter>;
 }
 
