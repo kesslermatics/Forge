@@ -135,17 +135,13 @@ export default function ChatPage() {
 
     if (initializing) return <div className="h-[60vh] flex items-center justify-center"><Loader2 className="animate-spin" style={{ color: SAND }} /></div>;
 
-    return <div className="forge-anim flex h-[calc(100dvh-10rem)] min-h-0 flex-col gap-4 overflow-hidden">
-        <header className="shrink-0">
-            <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: SAND }}>Forge Coach</p>
-            <h1 className="text-[26px] font-semibold tracking-tight mt-1" style={{ color: TEXT }}>Dein persönlicher Chat</h1>
-            <p className="text-[12px] mt-1" style={{ color: DIM }}>Training, Ernährung und Fortschritt — mit deinen aktuellen Daten.</p>
-        </header>
-
+    // Fills exactly the space between header (3.5rem), top padding (1.5rem) and tab bar (4rem). The layout
+    // reserves 7rem at the bottom for the tab bar, 3rem of it is taken back so the page itself never scrolls.
+    return <div className="forge-anim -mb-12 flex h-[calc(100dvh-9.5rem)] min-h-0 flex-col gap-3 overflow-hidden">
         {error && <div role="alert" className="shrink-0 rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.18)' }}>{error}</div>}
 
         <section className="min-h-0 flex-1 flex flex-col overflow-hidden">
-            <div className="flex shrink-0 items-center justify-between gap-3 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
+            <div className="flex shrink-0 items-center justify-between gap-3 pb-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
                 <div className="flex items-center gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ color: SAND, background: `${SAND}14`, border: `1px solid ${SAND}30` }}><MessageSquare size={17} /></div>
                     <div className="min-w-0"><h2 className="truncate text-[14px] font-medium" style={{ color: TEXT }}>Coach Chat</h2><p className="text-[10px]" style={{ color: DIM }}>Dieses Gespräch beginnt bei jedem Start neu.</p></div>
