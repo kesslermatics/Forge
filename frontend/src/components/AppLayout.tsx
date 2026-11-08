@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate, useNavigationType, NavLink } from 'react-router-dom';
-import { getMe, logoutUser, isAuthenticated } from '../api/api';
+import { getMe, logoutUser, isAuthenticated, ApiError } from '../api/api';
 import type { UserInfo } from '../api/api';
 import { Loader2, Home, UtensilsCrossed, Camera, Dumbbell, MessageSquare } from 'lucide-react';
 import { LanguageContext } from '../i18n';
@@ -77,6 +77,8 @@ export default function AppLayout() {
     const navigate = useNavigate();
     const [user, setUser] = useState<UserInfo | null>(null);
     const [loading, setLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [attempt, setAttempt] = useState(0);
     const [lang, setLang] = useState<Lang>('de');
     const keyboardOpen = useKeyboardInset();
 
@@ -90,10 +92,19 @@ export default function AppLayout() {
     useEffect(() => {
         if (!isAuthenticated()) { navigate('/login'); return; }
         refreshUser()
-            .then(u => { setUser(u); })
-            .catch(() => { logoutUser(); navigate('/login'); })
+            .then(u => { setUser(u); setLoadFailed(false); })
+            .catch((error: unknown) => {
+                // Nur bei ungültigem/abgelaufenem Token ausloggen, nicht bei Netzwerk-/Serverfehlern.
+                if (error instanceof ApiError && error.status === 401) { logoutUser(); navigate('/login'); }
+                else setLoadFailed(true);
+            })
             .finally(() => setLoading(false));
-    }, []); // eslint-disable-line
+    }, [attempt]); // eslint-disable-line
+
+    if (loadFailed && !user) return <div className="min-h-dvh flex flex-col items-center justify-center gap-4 px-6 text-center" style={{ background: '#16130f' }}>
+        <p className="text-sm" style={{ color: 'rgba(255,247,235,0.6)' }}>Verbindung zum Server fehlgeschlagen.</p>
+        <button className="tap px-5 py-2.5 rounded-xl text-sm font-semibold" style={{ background: SAND, color: '#16130f' }} onClick={() => { setLoadFailed(false); setLoading(true); setAttempt(a => a + 1); }}>Erneut versuchen</button>
+    </div>;
 
     if (loading) return <div className="min-h-dvh flex items-center justify-center" style={{ background: '#16130f' }}><Loader2 className="w-7 h-7 animate-spin" style={{ color: SAND }} /></div>;
 

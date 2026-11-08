@@ -28,6 +28,14 @@ function apiErrorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
@@ -39,7 +47,7 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
   const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
   if (!res.ok) {
     const payload: unknown = await res.json().catch(() => null);
-    throw new Error(apiErrorMessage(payload, `Error ${res.status}`));
+    throw new ApiError(apiErrorMessage(payload, `Error ${res.status}`), res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

@@ -131,7 +131,7 @@ Optional configuration:
 
 ```dotenv
 JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=10080  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES=129600  # 90 days
 
 # Required only when progress-photo uploads are enabled.
 # Private S3-compatible bucket (e.g. Cloudflare R2). Endpoint without bucket name.
