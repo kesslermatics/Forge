@@ -43,7 +43,6 @@ export default function ClothingEditorSheet({ items, onSaved, onClose }: Props) 
 
   const save = async () => {
     const payload = rows.map((row) => ({ id: row.id, name: row.name.trim(), weight_g: Number(row.weight.replace(',', '.')), icon: row.icon }));
-    if (!payload.length) { setError('Mindestens ein Eintrag wird gebraucht.'); return; }
     if (payload.some((item) => !item.name)) { setError('Jeder Eintrag braucht einen Namen.'); return; }
     if (payload.some((item) => !Number.isFinite(item.weight_g) || item.weight_g < 1 || item.weight_g > 5000)) { setError('Das Gewicht muss zwischen 1 und 5000 g liegen.'); return; }
     setSaving(true); setError(null);
@@ -82,8 +81,8 @@ export default function ClothingEditorSheet({ items, onSaved, onClose }: Props) 
               className="h-11 w-[84px] rounded-xl pl-3 pr-7 text-right text-[16px] tabular-nums outline-none" style={fieldStyle} />
             <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: DIM }}>g</span>
           </div>
-          <button type="button" onClick={() => remove(row.key)} disabled={rows.length <= 1} aria-label={`${row.name || 'Eintrag'} löschen`}
-            className="tap flex h-11 w-9 shrink-0 items-center justify-center rounded-xl disabled:opacity-30" style={{ color: DIM }}><Trash2 size={16} /></button>
+          <button type="button" onClick={() => remove(row.key)} aria-label={`${row.name || 'Eintrag'} löschen`}
+            className="tap flex h-11 w-9 shrink-0 items-center justify-center rounded-xl" style={{ color: DIM }}><Trash2 size={16} /></button>
         </div>
         {openIcon === row.key && <div className="forge-expand mt-2 grid grid-cols-6 gap-1.5" role="listbox" aria-label="Icon">
           {CLOTHING_ICON_KEYS.map((key) => <button key={key} type="button" role="option" aria-selected={row.icon === key} aria-label={CLOTHING_ICONS[key].label} title={CLOTHING_ICONS[key].label}

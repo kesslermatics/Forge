@@ -2833,6 +2833,15 @@ async def add_session_set(session_id: UUID, session_exercise_id: UUID, data: For
     return _serialize_session(session)
 
 
+def _renumber_positions(db: Session, rows: list) -> None:
+    """Close gaps to 0..n-1. Unique (parent, position) is checked per row, so park rows on negatives first."""
+    for temporary_position, row in enumerate(rows, start=1):
+        row.position = -temporary_position
+    db.flush()
+    for position, row in enumerate(rows):
+        row.position = position
+
+
 @router.delete("/sessions/{session_id}/sets/{set_id}", response_model=ForgeSessionResponse)
 async def delete_session_set(session_id: UUID, set_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
@@ -2850,8 +2859,7 @@ async def delete_session_set(session_id: UUID, set_id: UUID, current_user: User 
     remaining_sets = db.query(ForgeSessionSet).filter(
         ForgeSessionSet.session_exercise_id == exercise_id,
     ).order_by(ForgeSessionSet.position).all()
-    for position, remaining in enumerate(remaining_sets):
-        remaining.position = position
+    _renumber_positions(db, remaining_sets)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -2870,8 +2878,7 @@ async def delete_session_exercise(session_id: UUID, session_exercise_id: UUID, c
     remaining_exercises = db.query(ForgeSessionExercise).filter(
         ForgeSessionExercise.session_id == session.id,
     ).order_by(ForgeSessionExercise.position).all()
-    for position, remaining in enumerate(remaining_exercises):
-        remaining.position = position
+    _renumber_positions(db, remaining_exercises)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)

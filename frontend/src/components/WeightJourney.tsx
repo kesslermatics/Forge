@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
 import type { WeightHistoryData, WeightHistoryEntry, WeightMeasurement } from '../api/api';
-import { SAND, TEXT, berlinToday } from './track/trackUtils';
+import { SAND, TEXT } from './track/trackUtils';
 import { shortDay } from './nutrition/overviewUtils';
 
 const W = 320;
@@ -11,7 +11,6 @@ const TOP = 26;
 const BOTTOM = 22;
 const GREEN = '#4ade80';
 const DAY = 86_400_000;
-const MIN_SPAN_DAYS = 14;
 const MIN_SPAN_KG = 2;
 
 const time = (iso: string) => Date.parse(`${iso}T12:00:00Z`);
@@ -49,7 +48,8 @@ export default function WeightJourney({ entries, goal, latest }: { entries: Weig
   });
 
   const t0 = Math.min(time(goal?.start_date ?? entries[0].date), times[0]);
-  const t1 = Math.max(time(berlinToday()), times[times.length - 1], t0 + MIN_SPAN_DAYS * DAY);
+  // The last weigh-in always sits at the right edge, so the chart fills up and compresses as time passes.
+  const t1 = Math.max(times[times.length - 1], t0 + DAY);
   const x = (t: number) => PAD_X + ((t - t0) / (t1 - t0)) * (W - PAD_X * 2);
 
   const values = [...line, ...entries.map((entry) => entry.weight_kg), startKg, ...(targetKg !== null ? [targetKg] : [])];

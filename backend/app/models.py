@@ -39,6 +39,7 @@ class User(Base):
     first_name = Column(String(100), nullable=True)          # User-managed profile data
     height_cm = Column(Float, nullable=True)                 # User-managed profile data
     language = Column(String(5), nullable=False, server_default="de")  # "de" or "en"
+    weight_clothing_seeded = Column(Boolean, nullable=False, server_default="false")  # default clothing list was created once
     training_plan = Column(JSON, nullable=True)                          # List of workout names in current plan
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

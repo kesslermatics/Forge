@@ -69,7 +69,7 @@ class ClothingItemIn(BaseModel):
 
 
 class ClothingUpdate(BaseModel):
-    items: list[ClothingItemIn] = Field(min_length=1, max_length=MAX_CLOTHING_ITEMS)
+    items: list[ClothingItemIn] = Field(max_length=MAX_CLOTHING_ITEMS)
 
 
 
@@ -387,9 +387,12 @@ def get_weight_clothing(
 ):
     """The user's fixed list of things to subtract from the scale reading (defaults on first use)."""
     items = _clothing_rows(db, current_user.id)
-    if not items:
-        for position, (name, weight_g, icon) in enumerate(DEFAULT_CLOTHING):
-            db.add(WeightClothingItem(user_id=current_user.id, name=name, weight_g=weight_g, icon=icon, position=position))
+    # Defaults only once: an intentionally emptied list must stay empty.
+    if not current_user.weight_clothing_seeded:
+        if not items:
+            for position, (name, weight_g, icon) in enumerate(DEFAULT_CLOTHING):
+                db.add(WeightClothingItem(user_id=current_user.id, name=name, weight_g=weight_g, icon=icon, position=position))
+        current_user.weight_clothing_seeded = True
         db.commit()
         items = _clothing_rows(db, current_user.id)
     return {"items": [_serialize_clothing(item) for item in items]}
@@ -417,6 +420,7 @@ def save_weight_clothing(
     for item_id, row in existing.items():
         if item_id not in kept:
             db.delete(row)
+    current_user.weight_clothing_seeded = True
     db.commit()
     return {"items": [_serialize_clothing(item) for item in _clothing_rows(db, current_user.id)]}
 
