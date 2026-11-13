@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, History, Leaf, Loader2, Plus, Search, X } from 'lucide-react';
 import { getRecentFoods, searchFoods, type FoodSummary } from '../../api/api';
 import { haptic } from '../navigation';
-import { ATTRIBUTION, BORDER, DIM, FAINT, SAND, TEXT, cacheSearch, cachedSearch, fmt, fmtAmount, foodKey } from './trackUtils';
+import { ATTRIBUTION, BORDER, DIM, FAINT, SAND, TEXT, cacheSearch, cachedSearch, fmt, fmtAmount, foodKey, scaled } from './trackUtils';
 
 interface Props {
   query: string;
@@ -75,30 +75,35 @@ export default function FoodSearchPanel({ query, onQueryChange, onQuickAdd, onOp
   const row = (item: FoodSummary) => {
     const key = foodKey(item);
     const state = added[key];
-    return <li key={key} className={`flex items-center gap-1 rounded-2xl ${state === 'done' ? 'track-row-flash' : ''}`}>
-      <button type="button" onClick={() => { haptic('tap'); onOpenFood(item); }} className="tap flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 py-2.5 text-left">
+    // Values refer to the amount that the + button tracks, not to 100 g.
+    const kcal = scaled(item.kcal, item.default_amount);
+    const protein = scaled(item.protein, item.default_amount);
+    return <li key={key} className={`flex items-center rounded-2xl ${state === 'done' ? 'track-row-flash' : ''}`}>
+      <button type="button" onClick={() => { haptic('tap'); onOpenFood(item); }} className="tap flex min-w-0 flex-1 items-center gap-3 rounded-2xl py-3 pl-3 pr-2 text-left">
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="truncate text-[14px] font-medium" style={{ color: TEXT }}>{item.name}</span>
-            {item.source === 'bls' && <Leaf size={12} className="shrink-0" style={{ color: '#83d6ad' }} aria-label="Grundnahrungsmittel" />}
+            {item.tracked_count > 0 && <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full" style={{ background: 'rgba(232,197,138,0.14)', color: SAND }} role="img" aria-label="Schon getrackt"><History size={11} /></span>}
+            <span className="truncate text-[16px] font-medium leading-snug" style={{ color: TEXT }}>{item.name}</span>
+            {item.source === 'bls' && <Leaf size={13} className="shrink-0" style={{ color: '#83d6ad' }} aria-label="Grundnahrungsmittel" />}
           </span>
-          <span className="mt-0.5 block truncate text-[11.5px]" style={{ color: DIM }}>
-            {[item.brand, `${fmt(item.kcal)} kcal`, item.protein != null ? `${fmt(item.protein)} g Protein` : null].filter(Boolean).join(' · ')}
-            <span style={{ color: FAINT }}> / 100 {item.unit}</span>
-          </span>
+          {item.brand && <span className="block truncate text-[13px] leading-snug" style={{ color: DIM }}>{item.brand}</span>}
+          <span className="block truncate text-[13px] leading-snug tabular-nums" style={{ color: FAINT }}>{fmtAmount(item.default_amount)} {item.unit}</span>
+        </span>
+        <span className="shrink-0 text-right tabular-nums">
+          <span className="block text-[16px] font-semibold leading-snug" style={{ color: TEXT }}>{fmt(kcal)}<span className="ml-0.5 text-[11px] font-normal" style={{ color: DIM }}>kcal</span></span>
+          {protein != null && <span className="block text-[12px] leading-snug" style={{ color: FAINT }}>{fmt(protein, 1)} g P</span>}
         </span>
       </button>
       <button
         type="button"
         onClick={() => void quickAdd(item)}
         aria-label={`${item.name} mit ${fmtAmount(item.default_amount)} ${item.unit} hinzufügen`}
-        className={`tap mr-1 flex h-11 shrink-0 items-center gap-1 rounded-full pl-2.5 pr-3 text-[11px] font-semibold tabular-nums ${state === 'done' ? 'track-add-pop' : ''}`}
+        className={`tap mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${state === 'done' ? 'track-add-pop' : ''}`}
         style={state === 'done'
           ? { color: '#16130f', background: SAND }
           : { color: state === 'error' ? '#fca5a5' : SAND, background: 'rgba(232,197,138,0.1)', border: `1px solid ${state === 'error' ? 'rgba(248,113,113,0.4)' : `${SAND}40`}` }}
       >
-        {state === 'busy' ? <Loader2 size={15} className="animate-spin" /> : state === 'done' ? <Check size={15} /> : <Plus size={15} />}
-        {fmtAmount(item.default_amount)}{item.unit}
+        {state === 'busy' ? <Loader2 size={18} className="animate-spin" /> : state === 'done' ? <Check size={18} /> : <Plus size={20} />}
       </button>
     </li>;
   };

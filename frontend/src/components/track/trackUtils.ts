@@ -87,6 +87,7 @@ export function clearTrackFlash() { flash = null; }
 /** Recent search results, so going back to a meal page shows the list instantly. */
 const searchCache = new Map<string, FoodSummary[]>();
 export function cachedSearch(query: string): FoodSummary[] | undefined { return searchCache.get(query.toLowerCase()); }
+export function clearSearchCache() { searchCache.clear(); }
 export function cacheSearch(query: string, items: FoodSummary[]) {
   searchCache.set(query.toLowerCase(), items);
   if (searchCache.size > 40) searchCache.delete(searchCache.keys().next().value!);

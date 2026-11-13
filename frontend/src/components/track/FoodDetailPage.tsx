@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Check, ChevronDown, Leaf, Loader2, Plus } from 'lucide-react';
-import { createTrackEntry, getFoodDetail, getMealSlots, type FoodDetail, type FoodNutrient, type FoodSource, type MealSlot } from '../../api/api';
+import { AlertTriangle, ArrowLeft, Check, ChevronDown, Leaf, Loader2, Pencil, Plus, X } from 'lucide-react';
+import { createTrackEntry, getFoodDetail, getMealSlots, updateFoodNames, type FoodDetail, type FoodNutrient, type FoodSource, type MealSlot } from '../../api/api';
 import { canGoBack, haptic, useGoBack } from '../navigation';
 import {
-  BORDER, CARBS, DIM, FAINT, FAT, PROTEIN, SAND, TEXT, berlinToday, fmt, fmtAmount, isValidIsoDate, parseAmount, scaled, setTrackFlash, toAmountInput,
+  BORDER, CARBS, DIM, FAINT, FAT, PROTEIN, SAND, TEXT, berlinToday, clearSearchCache, fmt, fmtAmount, isValidIsoDate, parseAmount, scaled, setTrackFlash, toAmountInput,
 } from './trackUtils';
 
 const GROUP_ORDER = ['Makronährstoffe', 'Fette', 'Kohlenhydrate', 'Ballaststoffe', 'Vitamine', 'Fettlösliche Vitamine', 'Wasserlösliche Vitamine', 'Mineralstoffe', 'Elemente'];
@@ -50,6 +50,10 @@ export default function FoodDetailPage() {
   const [showIngredients, setShowIngredients] = useState(false);
   const [unitOpen, setUnitOpen] = useState(false);
   const amountBarRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ name: '', brand: '' });
+  const [savingNames, setSavingNames] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   // The unit list opens above the amount bar; a tap outside or Escape closes it.
   useEffect(() => {
@@ -95,6 +99,31 @@ export default function FoodDetailPage() {
     setUnitOpen(false);
     // Servings start at 1; back to grams keeps the current weight.
     setAmount({ unitId, value: next.id === 'base' ? toAmountInput(qty || 100) : '1' });
+  };
+
+  const startEditing = () => {
+    if (!food) return;
+    haptic('tap');
+    setDraft({ name: food.name, brand: food.brand ?? '' });
+    setNameError(null);
+    setEditing(true);
+  };
+
+  const saveNames = async () => {
+    if (!food || savingNames || !draft.name.trim()) return;
+    setSavingNames(true); setNameError(null);
+    try {
+      const updated = await updateFoodNames(food.source, food.source_id, { name: draft.name, brand: draft.brand.trim() || null });
+      setFood((current) => (current ? { ...current, name: updated.name, brand: updated.brand } : current));
+      clearSearchCache();
+      haptic('success');
+      setEditing(false);
+    } catch (caught: unknown) {
+      haptic('warning');
+      setNameError(caught instanceof Error ? caught.message : 'Speichern fehlgeschlagen.');
+    } finally {
+      setSavingNames(false);
+    }
   };
 
   const add = async () => {
@@ -144,9 +173,25 @@ export default function FoodDetailPage() {
     <header className="forge-anim flex items-start gap-3">
       <button type="button" onClick={goBack} aria-label="Zurück" className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
       <div className="min-w-0 flex-1 pt-0.5">
-        <h1 className="text-[22px] font-semibold leading-tight tracking-tight" style={{ color: TEXT }}>{food.name}</h1>
+        {editing ? <form onSubmit={(event) => { event.preventDefault(); void saveNames(); }} className="space-y-2">
+          <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} autoFocus maxLength={300}
+            aria-label="Produktname" placeholder="Produktname" className="h-11 w-full rounded-xl px-3 text-[17px] font-semibold outline-none"
+            style={{ color: TEXT, background: 'rgba(255,247,235,0.06)', border: `1px solid ${SAND}55` }} />
+          <input value={draft.brand} onChange={(event) => setDraft((current) => ({ ...current, brand: event.target.value }))} maxLength={120}
+            aria-label="Marke" placeholder="Marke (optional)" className="h-10 w-full rounded-xl px-3 text-[14px] outline-none"
+            style={{ color: SAND, background: 'rgba(255,247,235,0.06)', border: `1px solid ${BORDER}` }} />
+          <div className="flex gap-2">
+            <button type="submit" disabled={!draft.name.trim() || savingNames} className="tap flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl text-[13px] font-semibold disabled:opacity-40"
+              style={{ color: '#16130f', background: SAND }}>{savingNames ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}Speichern</button>
+            <button type="button" onClick={() => setEditing(false)} disabled={savingNames} className="tap flex h-10 items-center justify-center gap-1.5 rounded-xl px-4 text-[13px]"
+              style={{ color: TEXT, background: 'rgba(255,247,235,0.06)' }}><X size={15} />Abbrechen</button>
+          </div>
+        </form> : <button type="button" onClick={startEditing} aria-label="Name und Marke bearbeiten" className="tap block w-full text-left">
+          <h1 className="text-[22px] font-semibold leading-tight tracking-tight" style={{ color: TEXT }}>{food.name}<Pencil size={13} className="ml-2 inline-block align-baseline" style={{ color: FAINT }} aria-hidden="true" /></h1>
+          <span className="mt-1 block text-[12px]" style={{ color: food.brand ? SAND : FAINT }}>{food.brand ?? 'Marke hinzufügen'}</span>
+        </button>}
+        {nameError && <p className="mt-2 text-[12px]" style={{ color: '#fca5a5' }}>{nameError}</p>}
         <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]" style={{ color: DIM }}>
-          {food.brand && <span style={{ color: SAND }}>{food.brand}</span>}
           {food.quantity_label && <span>{food.quantity_label}</span>}
           {food.source === 'bls' && <span className="flex items-center gap-1" style={{ color: '#83d6ad' }}><Leaf size={11} />Grundnahrungsmittel</span>}
         </p>

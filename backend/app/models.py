@@ -217,6 +217,27 @@ class NutritionEntry(Base):
     slot = relationship("NutritionMealSlot")
 
 
+class NutritionFoodOverride(Base):
+    """User-edited name and brand of a catalog food.
+
+    The catalog is rebuilt and delta-synced from Open Food Facts, so edits live here and are
+    applied on top of the catalog rows; a sync can never overwrite them.
+    """
+
+    __tablename__ = "nutrition_food_overrides"
+    __table_args__ = (
+        UniqueConstraint("user_id", "source", "source_id", name="uq_nutrition_food_override"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    source = Column(String(16), nullable=False)
+    source_id = Column(String(64), nullable=False)
+    name = Column(String(300), nullable=False)
+    brand = Column(String(120), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class NutritionGoal(Base):
     """Daily calorie, macro, sugar and salt targets, valid from a date until the next entry.
 

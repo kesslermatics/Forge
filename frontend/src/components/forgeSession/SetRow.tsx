@@ -62,7 +62,9 @@ export default function SetRow({
   const weightUp = stepWeight(exercise, currentWeight, 1);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!canSwipe || (event.target as HTMLElement).closest('[data-noswipe]')) return;
+    // Swipes may start anywhere on the row (also on fields and steppers); taps are unaffected
+    // because a swipe only begins after a clear horizontal movement.
+    if (!canSwipe) return;
     start.current = { x: event.clientX, y: event.clientY };
     swiping.current = false;
   };

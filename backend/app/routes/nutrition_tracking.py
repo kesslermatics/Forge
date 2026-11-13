@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
-from app.models import NutritionEntry, NutritionMealSlot, User
+from app.models import NutritionEntry, NutritionFoodOverride, NutritionMealSlot, User
 from app.services import food_catalog, food_smart_track, nutrition_native, nutrition_overview
 from app.services.food_catalog import CatalogUnavailable
 
@@ -150,6 +150,43 @@ def _recency(db: Session, user_id: UUID) -> dict[tuple[str, str], int]:
     ).group_by(NutritionEntry.source, NutritionEntry.source_id).all()
     today = date_type.today()
     return {(source, source_id): max((today - last).days, 0) for source, source_id, last in rows if last}
+
+
+def _overrides(db: Session, user_id: UUID) -> dict[tuple[str, str], NutritionFoodOverride]:
+    rows = db.query(NutritionFoodOverride).filter(NutritionFoodOverride.user_id == user_id).all()
+    return {(row.source, row.source_id): row for row in rows}
+
+
+def _with_override(item: dict, overrides: dict[tuple[str, str], NutritionFoodOverride]) -> dict:
+    """The user's own name/brand wins over the catalog (and over later catalog syncs)."""
+    override = overrides.get((item["source"], item["source_id"]))
+    if override is None:
+        return item
+    return {**item, "name": override.name, "brand": override.brand}
+
+
+def _recent_item(entry: NutritionEntry, history: dict[tuple[str, str], int]) -> dict:
+    per_100 = entry.per_100 or {}
+    return {
+        "source": entry.source, "source_id": entry.source_id, "name": entry.name, "brand": entry.brand, "unit": entry.unit,
+        "kcal": per_100.get("kcal"), "protein": per_100.get("protein"), "carbs": per_100.get("carbs"), "fat": per_100.get("fat"),
+        "serving_g": None, "serving_label": None, "tracked_count": history.get((entry.source, entry.source_id), 0),
+        "default_amount": round(entry.amount, 1),
+    }
+
+
+def _distinct_recent(db: Session, user_id: UUID) -> list[NutritionEntry]:
+    """The newest diary entry of every distinct food, newest first."""
+    entries = db.query(NutritionEntry).filter(NutritionEntry.user_id == user_id).order_by(
+        NutritionEntry.logged_at.desc()).limit(1500).all()
+    seen: set[tuple[str, str]] = set()
+    result = []
+    for entry in entries:
+        key = (entry.source, entry.source_id)
+        if key not in seen:
+            seen.add(key)
+            result.append(entry)
+    return result
 
 
 def _last_amounts(db: Session, user: User, keys: list[tuple[str, str]]) -> dict[tuple[str, str], float]:
@@ -317,6 +354,7 @@ def create_entry(data: EntryCreate, current_user: User = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Lebensmittel nicht gefunden.")
     if not _is_complete(food):
         raise HTTPException(status_code=422, detail="Für dieses Produkt fehlen Nährwerte.")
+    food = _with_override(food, _overrides(db, current_user.id))
     entry = _track_food(db, current_user.id, food, data.date, data.slot_id, data.amount)
     return _serialize_entry(entry)
 
@@ -340,6 +378,7 @@ async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_
                     food = food_catalog.get_food(candidate["source"], candidate["source_id"])
                     if food is None or not _is_complete(food):
                         raise ValueError("Food missing or incomplete")
+                    food = _with_override(food, _overrides(session, user_id))
                     return _serialize_entry(_track_food(session, user_id, food, data.date, data.slot_id, amount))
                 except Exception:
                     session.rollback()
@@ -413,8 +452,50 @@ def search_foods(q: str = Query("", max_length=120), limit: int = Query(30, ge=1
         items = food_catalog.search(q, limit=limit, history=history)
     except CatalogUnavailable as exc:
         raise _catalog_error(exc) from exc
-    last = _last_amounts(db, current_user, [(item["source"], item["source_id"]) for item in items])
-    return {"query": q, "items": [{**item, "default_amount": _default_amount(item, last)} for item in items]}
+    overrides = _overrides(db, current_user.id)
+    items = [_with_override(item, overrides) for item in items]
+
+    # Foods the user already tracked and that match the query come first (most recent first),
+    # even when the catalog ranking left them out. Everything else keeps the catalog order.
+    words = food_catalog._fold(" ".join(q.split())).split()
+    by_key = {(item["source"], item["source_id"]): item for item in items}
+    tracked: list[dict] = []
+    used: set[tuple[str, str]] = set()
+    if words and len(" ".join(words)) >= 2:
+        for entry in _distinct_recent(db, current_user.id):
+            key = (entry.source, entry.source_id)
+            snapshot = _with_override(_recent_item(entry, history), overrides)
+            item = by_key.get(key) or (snapshot if _is_complete(snapshot) else None)
+            if item is None:
+                continue
+            haystack = food_catalog._fold(f"{item['name']} {item['brand'] or ''}")
+            if all(word in haystack for word in words):
+                tracked.append(item)
+                used.add(key)
+    rest = [item for item in items if (item["source"], item["source_id"]) not in used]
+    merged = (tracked + rest)[:limit]
+
+    last = _last_amounts(db, current_user, [(item["source"], item["source_id"]) for item in merged])
+    return {"query": q, "items": [{**item, "tracked_count": history.get((item["source"], item["source_id"]), 0),
+                                   "default_amount": _default_amount(item, last)} for item in merged]}
+
+
+class FoodOverrideUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    brand: str | None = Field(default=None, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Der Name darf nicht leer sein.")
+        return value
+
+    @field_validator("brand")
+    @classmethod
+    def clean_brand(cls, value: str | None) -> str | None:
+        return " ".join(value.split()) or None if value else None
 
 
 @router.get("/barcode/{code}")
@@ -439,9 +520,36 @@ def get_food(source: Literal["bls", "off"], source_id: str, current_user: User =
     return _detail_response(db, current_user, food)
 
 
+@router.put("/foods/{source}/{source_id}")
+def update_food(source: Literal["bls", "off"], source_id: str, data: FoodOverrideUpdate,
+                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Store the user's own name/brand for a food (kept in the Forge DB, so catalog syncs never touch it)."""
+    try:
+        food = food_catalog.get_food(source, source_id)
+    except CatalogUnavailable as exc:
+        raise _catalog_error(exc) from exc
+    if food is None:
+        raise HTTPException(status_code=404, detail="Lebensmittel nicht gefunden.")
+    override = db.query(NutritionFoodOverride).filter(
+        NutritionFoodOverride.user_id == current_user.id, NutritionFoodOverride.source == source,
+        NutritionFoodOverride.source_id == source_id,
+    ).first()
+    if override is None:
+        override = NutritionFoodOverride(user_id=current_user.id, source=source, source_id=source_id, name=data.name, brand=data.brand)
+        db.add(override)
+    else:
+        override.name, override.brand = data.name, data.brand
+    # Past diary entries follow the rename so the diary and the recent list stay consistent.
+    db.query(NutritionEntry).filter(
+        NutritionEntry.user_id == current_user.id, NutritionEntry.source == source, NutritionEntry.source_id == source_id,
+    ).update({NutritionEntry.name: data.name[:300], NutritionEntry.brand: data.brand}, synchronize_session=False)
+    db.commit()
+    return _detail_response(db, current_user, food)
+
+
 def _detail_response(db: Session, user: User, food: dict) -> dict:
     history = _history(db, user.id)
-    detail = food_catalog.detail(food, history)
+    detail = _with_override(food_catalog.detail(food, history), _overrides(db, user.id))
     last = _last_amounts(db, user, [(detail["source"], detail["source_id"])])
     complete = None not in (detail["kcal"], detail["protein"], detail["carbs"], detail["fat"])
     return {**detail, "default_amount": _default_amount(detail, last), "trackable": complete}

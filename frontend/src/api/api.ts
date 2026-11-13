@@ -636,6 +636,9 @@ export const lookupBarcode = (code: string) =>
   apiRequest<FoodDetail>(`/api/nutrition/barcode/${encodeURIComponent(code)}`);
 export const getFoodDetail = (source: FoodSource, sourceId: string) =>
   apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}`);
+/** Saves the user's own name and brand for a catalog food (permanent, survives catalog syncs). */
+export const updateFoodNames = (source: FoodSource, sourceId: string, data: { name: string; brand: string | null }) =>
+  apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}`, { method: 'PUT', body: JSON.stringify(data) });
 
 /* ── Native Forge planning ─────────────────────────────── */
 
