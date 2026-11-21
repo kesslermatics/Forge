@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Undo2, X } from 'lucide-react';
 import {
@@ -63,6 +63,11 @@ export default function TrackSlotPage() {
   const [undo, setUndo] = useState<Undo | null>(() => addedOnProduct ? { kind: 'added', entry: addedOnProduct, label: addedLabel(addedOnProduct) } : null);
   const undoTimer = useRef<number>(0);
   const searchRef = useRef<HTMLInputElement>(null);
+  // The tracked list sits above the search panel: when it grows or shrinks, scroll by the same amount
+  // so the food list (and its + buttons) stays put under the finger for repeated adds.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelTop = useRef<number | null>(null);
+  const holdPanel = () => { panelTop.current = panelRef.current?.getBoundingClientRect().top ?? null; };
 
   const applyLoaded = useCallback((result: Awaited<ReturnType<typeof fetchSlot>>) => {
     if ('error' in result) { setError(result.error); setEntries((current) => current ?? []); return; }
@@ -76,6 +81,14 @@ export default function TrackSlotPage() {
     fetchSlot(date, realSlotId).then((result) => { if (active) applyLoaded(result); });
     return () => { active = false; };
   }, [date, realSlotId, applyLoaded]);
+
+  useLayoutEffect(() => {
+    const before = panelTop.current;
+    panelTop.current = null;
+    const after = panelRef.current?.getBoundingClientRect().top;
+    if (before == null || after == null || Math.abs(after - before) < 1) return;
+    window.scrollBy({ top: after - before, behavior: 'instant' });
+  }, [entries]);
 
   const markFresh = useCallback((id: string) => {
     setFresh((current) => new Set(current).add(id));
@@ -107,6 +120,7 @@ export default function TrackSlotPage() {
 
   const addEntry = async (source: TrackEntry['source'], sourceId: string, amount: number) => {
     const entry = await createTrackEntry({ date, slot_id: realSlotId, source, source_id: sourceId, amount });
+    holdPanel();
     setEntries((current) => [...(current ?? []), entry]);
     markFresh(entry.id);
     return entry;
@@ -119,6 +133,7 @@ export default function TrackSlotPage() {
 
   const removeEntry = async (entry: TrackEntry, offerUndo: boolean) => {
     setEditing(null);
+    holdPanel();
     setEntries((current) => (current ?? []).filter((item) => item.id !== entry.id));
     try {
       await deleteTrackEntry(entry.id);
@@ -169,7 +184,8 @@ export default function TrackSlotPage() {
     { key: 'voice', icon: <MessageSquareText size={19} />, label: 'Text', active: false, disabled: false },
   ];
 
-  return <div className="space-y-4 pb-10">
+  // Native scroll anchoring is off here; the layout effect above does it consistently (incl. iOS Safari).
+  return <div className="space-y-4 pb-10" style={{ overflowAnchor: 'none' }}>
     <header className="forge-anim flex items-center gap-3">
       <button type="button" onClick={goBack} aria-label="Zurück zur Tagesübersicht" className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
       <div className="min-w-0 flex-1">
@@ -220,13 +236,15 @@ export default function TrackSlotPage() {
     </section>
     <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => void onPhoto(event)} aria-hidden="true" tabIndex={-1} />
 
-    {slot && <FoodSearchPanel
-      inputRef={searchRef}
-      query={query}
-      onQueryChange={setQuery}
-      onQuickAdd={quickAdd}
-      onOpenFood={(item) => openFood(item.source, item.source_id)}
-    />}
+    <div ref={panelRef}>
+      {slot && <FoodSearchPanel
+        inputRef={searchRef}
+        query={query}
+        onQueryChange={setQuery}
+        onQuickAdd={quickAdd}
+        onOpenFood={(item) => openFood(item.source, item.source_id)}
+      />}
+    </div>
 
     {undo && <div className="pointer-events-none fixed inset-x-0 z-[60] flex justify-center px-4" style={{ bottom: 'calc(var(--forge-nav-h, 64px) + 20px)', transition: 'bottom 0.2s' }}>
       <div role="status" className="forge-toast pointer-events-auto flex max-w-md items-center gap-2 rounded-2xl py-2 pl-4 pr-2 text-[13px] shadow-2xl" style={{ color: TEXT, background: '#2a2318', border: `1px solid ${SAND}44` }}>
