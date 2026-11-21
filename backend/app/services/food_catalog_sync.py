@@ -29,7 +29,10 @@ from psycopg2.extras import execute_values
 
 from app.config import settings
 from app.services import food_catalog
-from app.services.food_catalog_rows import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, ROW_COLUMNS, is_german, off_row_from_product
+from app.services.food_catalog_rows import (
+    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, FOOD_WORDS_SQL, QUALITY_VERSION, ROW_COLUMNS, is_german, off_row_from_product,
+    quality_from_extras,
+)
 
 log = logging.getLogger("food_catalog_sync")
 
@@ -148,6 +151,44 @@ def _apply_file(conn, client: httpx.Client, name: str, run_id: int) -> dict[str,
     return stats
 
 
+QUALITY_KEY = "quality_version"
+
+
+def requalify(conn) -> int | None:
+    """Re-rate every OFF row once after quality_for() changed. Returns the number of changed rows."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM catalog_meta WHERE key = %s", (QUALITY_KEY,))
+        row = cur.fetchone()
+    if row and row[0] == QUALITY_VERSION:
+        return None
+    changes: list[tuple[int, str]] = []
+    with conn.cursor(name="food_requalify") as cur:
+        cur.itersize = 20_000
+        cur.execute("SELECT id, kcal, protein, carbs, fat, fiber, nutrients, quality FROM foods WHERE source = 'off'")
+        for row_id, kcal, protein, carbs, fat, fiber, nutrients, quality in cur:
+            values = {"kcal": kcal, "protein": protein, "carbs": carbs, "fat": fat, "fiber": fiber}
+            extras = nutrients if isinstance(nutrients, list) else json.loads(nutrients or "[]")
+            new = quality_from_extras(values, extras)
+            if new != quality:
+                changes.append((row_id, new))
+    with conn.cursor() as cur:
+        for start in range(0, len(changes), 5_000):
+            execute_values(cur, "UPDATE foods f SET quality = v.q, updated_at = now() FROM (VALUES %s) AS v(id, q) WHERE f.id = v.id",
+                           changes[start:start + 5_000], template="(%s::bigint, %s)")
+        cur.execute("""INSERT INTO catalog_meta (key, value) VALUES (%s, %s)
+                       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", (QUALITY_KEY, QUALITY_VERSION))
+    conn.commit()
+    log.info("re-rated OFF quality (version %s): %d row(s) changed", QUALITY_VERSION, len(changes))
+    return len(changes)
+
+
+def refresh_food_words(conn) -> None:
+    with conn.cursor() as cur:
+        for statement in FOOD_WORDS_SQL:
+            cur.execute(statement)
+    conn.commit()
+
+
 def _vector_literal(values: list[float]) -> str:
     norm = math.sqrt(sum(value * value for value in values)) or 1.0
     return "[" + ",".join(f"{value / norm:.6f}" for value in values) + "]"
@@ -230,7 +271,9 @@ def run(max_files: int | None = None) -> dict[str, Any]:
                     conn.commit()
                     details["files"].append({"name": name, **stats, "seconds": round(time.time() - started, 1)})
                     log.info("%s: %s", name, stats)
+            details["requalified"] = requalify(conn)
             details["embedded"] = embed_pending(conn)
+            refresh_food_words(conn)
             with conn.cursor() as cur:
                 cur.execute("ANALYZE foods")
                 cur.execute("UPDATE import_runs SET finished_at = clock_timestamp(), status = 'done', details = %s WHERE id = %s",

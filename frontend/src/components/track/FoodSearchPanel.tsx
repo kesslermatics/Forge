@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, History, Leaf, Loader2, Plus, Search, X } from 'lucide-react';
-import { getRecentFoods, searchFoods, type FoodSummary } from '../../api/api';
+import { Check, Clock3, History, Leaf, Loader2, Plus, Search, Sparkles, X } from 'lucide-react';
+import { getRecentFoods, searchFoods, type FoodSummary, type RecentFoods, type TrackContext } from '../../api/api';
 import { haptic } from '../navigation';
 import { ATTRIBUTION, BORDER, DIM, FAINT, SAND, TEXT, cacheSearch, cachedSearch, fmt, fmtAmount, foodKey, scaled } from './trackUtils';
 
@@ -11,78 +11,92 @@ interface Props {
   onQuickAdd: (item: FoodSummary) => Promise<void>;
   onOpenFood: (item: FoodSummary) => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  /** Meal and day being tracked: suggestions, order and default amounts depend on them. */
+  context: TrackContext;
+  slotName: string;
 }
 
-type AddState = 'busy' | 'done' | 'error';
-let recentCache: FoodSummary[] | null = null;
+/** A burst of quick adds of one food: the button confirms each tap at once and counts them. */
+interface AddState { status: 'done' | 'error'; count: number }
+/** The confirmation stays this long after the last tap, then the button is a "+" again. */
+const CONFIRM_MS = 900;
 
-/** Inline live search: recent foods while empty, hybrid catalog search while typing. */
-export default function FoodSearchPanel({ query, onQueryChange, onQuickAdd, onOpenFood, inputRef }: Props) {
+const recentCache = new Map<string, RecentFoods>();
+const scopeOf = (context: TrackContext) => `${context.slotId ?? 'unassigned'}|${context.date}`;
+
+/** Inline live search: this meal's habits and recent foods while empty, hybrid catalog search while typing. */
+export default function FoodSearchPanel({ query, onQueryChange, onQuickAdd, onOpenFood, inputRef, context, slotName }: Props) {
   const trimmed = query.trim();
   const searchable = trimmed.length >= 2;
+  const scope = scopeOf(context);
   const [fetched, setFetched] = useState<{ q: string; items?: FoodSummary[]; error?: string } | null>(null);
-  const [recent, setRecent] = useState<FoodSummary[] | null>(recentCache);
+  const [recent, setRecent] = useState<RecentFoods | null>(() => recentCache.get(scope) ?? null);
   const [added, setAdded] = useState<Record<string, AddState>>({});
+  const timers = useRef<Record<string, number>>({});
   const sectionRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    getRecentFoods().then((data) => { recentCache = data.items; setRecent(data.items); }).catch(() => setRecent((current) => current ?? []));
-  }, []);
+    let active = true;
+    getRecentFoods(context)
+      .then((data) => { recentCache.set(scope, data); if (active) setRecent(data); })
+      .catch(() => { if (active) setRecent((current) => current ?? { items: [], basis: null }); });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope]);
+
+  useEffect(() => () => Object.values(timers.current).forEach((timer) => window.clearTimeout(timer)), []);
 
   // Results are derived: cache hit → instant; otherwise the previous list stays (dimmed) until the new one arrives.
-  const cached = searchable ? cachedSearch(trimmed) : undefined;
+  const cached = searchable ? cachedSearch(scope, trimmed) : undefined;
   const current = fetched?.q === trimmed ? fetched : null;
   const results = cached ?? current?.items ?? (searchable ? fetched?.items ?? null : null);
   const error = current?.error ?? null;
   const searching = searchable && !cached && !current;
 
   useEffect(() => {
-    if (!searchable || cachedSearch(trimmed)) return;
+    if (!searchable || cachedSearch(scope, trimmed)) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      searchFoods(trimmed, controller.signal)
-        .then((data) => { cacheSearch(trimmed, data.items); setFetched({ q: trimmed, items: data.items }); })
+      searchFoods(trimmed, context, controller.signal)
+        .then((data) => { cacheSearch(scope, trimmed, data.items); setFetched({ q: trimmed, items: data.items }); })
         .catch((caught: unknown) => {
           if (controller.signal.aborted) return;
           setFetched((previous) => ({ q: trimmed, items: previous?.items, error: caught instanceof Error ? caught.message : 'Suche fehlgeschlagen.' }));
         });
     }, 220);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [trimmed, searchable]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trimmed, searchable, scope]);
 
-  const quickAdd = async (item: FoodSummary) => {
+  // Confirmed on tap (the request runs in the background), so a second "+" never has to wait.
+  const quickAdd = (item: FoodSummary) => {
     const key = foodKey(item);
-    if (added[key] === 'busy') return;
-    haptic('tap');
-    setAdded((current) => ({ ...current, [key]: 'busy' }));
-    try {
-      await onQuickAdd(item);
-      haptic('success');
-      setAdded((current) => ({ ...current, [key]: 'done' }));
-      // Back to "+" after a moment, so the same food can be added again.
-      window.setTimeout(() => setAdded((current) => { const next = { ...current }; delete next[key]; return next; }), 1800);
-    } catch {
+    haptic('success');
+    setAdded((state) => ({ ...state, [key]: { status: 'done', count: state[key]?.status === 'done' ? state[key].count + 1 : 1 } }));
+    window.clearTimeout(timers.current[key]);
+    timers.current[key] = window.setTimeout(() => setAdded((state) => { const next = { ...state }; delete next[key]; return next; }), CONFIRM_MS);
+    onQuickAdd(item).catch(() => {
       haptic('warning');
-      setAdded((current) => ({ ...current, [key]: 'error' }));
-    }
+      window.clearTimeout(timers.current[key]);
+      setAdded((state) => ({ ...state, [key]: { status: 'error', count: 0 } }));
+    });
   };
 
   // Lift the field to the top on focus, so the list stays visible above the keyboard.
   const liftIntoView = () => window.setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 260);
 
-  const list = searchable ? results : recent;
-
   const row = (item: FoodSummary) => {
     const key = foodKey(item);
     const state = added[key];
+    const done = state?.status === 'done';
     // Values refer to the amount that the + button tracks, not to 100 g.
     const kcal = scaled(item.kcal, item.default_amount);
     const protein = scaled(item.protein, item.default_amount);
-    return <li key={key} className={`flex items-center rounded-2xl ${state === 'done' ? 'track-row-flash' : ''}`}>
+    return <li key={key} className={`flex items-center rounded-2xl ${done ? 'track-row-flash' : ''}`}>
       <button type="button" onClick={() => { haptic('tap'); onOpenFood(item); }} className="tap flex min-w-0 flex-1 items-center gap-3 rounded-2xl py-3 pl-3 pr-2 text-left">
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            {item.tracked_count > 0 && <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full" style={{ background: 'rgba(232,197,138,0.14)', color: SAND }} role="img" aria-label="Schon getrackt"><History size={11} /></span>}
+            {item.tracked_count > 0 && !item.suggested && <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full" style={{ background: 'rgba(232,197,138,0.14)', color: SAND }} role="img" aria-label="Schon getrackt"><History size={11} /></span>}
             <span className="truncate text-[16px] font-medium leading-snug" style={{ color: TEXT }}>{item.name}</span>
             {item.source === 'bls' && <Leaf size={13} className="shrink-0" style={{ color: '#83d6ad' }} aria-label="Grundnahrungsmittel" />}
           </span>
@@ -96,16 +110,46 @@ export default function FoodSearchPanel({ query, onQueryChange, onQuickAdd, onOp
       </button>
       <button
         type="button"
-        onClick={() => void quickAdd(item)}
+        onClick={() => quickAdd(item)}
         aria-label={`${item.name} mit ${fmtAmount(item.default_amount)} ${item.unit} hinzufügen`}
-        className={`tap mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${state === 'done' ? 'track-add-pop' : ''}`}
-        style={state === 'done'
-          ? { color: '#16130f', background: SAND }
-          : { color: state === 'error' ? '#fca5a5' : SAND, background: 'rgba(232,197,138,0.1)', border: `1px solid ${state === 'error' ? 'rgba(248,113,113,0.4)' : `${SAND}40`}` }}
+        className="tap relative mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
+        style={done
+          ? { color: '#16130f', background: SAND, transition: 'background-color 0.12s' }
+          : { color: state?.status === 'error' ? '#fca5a5' : SAND, background: 'rgba(232,197,138,0.1)', border: `1px solid ${state?.status === 'error' ? 'rgba(248,113,113,0.4)' : `${SAND}40`}`, transition: 'background-color 0.12s' }}
       >
-        {state === 'busy' ? <Loader2 size={18} className="animate-spin" /> : state === 'done' ? <Check size={18} /> : <Plus size={20} />}
+        {/* Keyed by the tap count, so every tap replays the pop. */}
+        <span key={done ? state.count : 'idle'} className={done ? 'track-add-pop flex' : 'flex'}>{done ? <Check size={18} /> : <Plus size={20} />}</span>
+        {done && state.count > 1 && <span key={`n${state.count}`} className="track-count-bump absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums"
+          style={{ color: SAND, background: '#2a2318', border: `1px solid ${SAND}66` }} aria-hidden="true">{state.count}×</span>}
       </button>
     </li>;
+  };
+
+  const heading = (icon: React.ReactNode, label: string) =>
+    <h3 className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: SAND }}>{icon}{label}</h3>;
+
+  const empty = (title: string, text: string) => <div className="px-6 py-10 text-center">
+    <p className="text-[14px] font-medium" style={{ color: TEXT }}>{title}</p>
+    <p className="mt-1 text-[12px]" style={{ color: DIM }}>{text}</p>
+  </div>;
+
+  const skeleton = <div className="space-y-2">{[0, 1, 2, 3].map((item) => <div key={item} className="forge-skeleton h-14 rounded-2xl" />)}</div>;
+
+  const idle = () => {
+    if (recent == null) return skeleton;
+    if (!recent.items.length) return empty('Noch nichts getrackt', 'Was du trackst, erscheint hier für den schnellen Zugriff.');
+    const habits = recent.items.filter((item) => item.suggested);
+    const others = recent.items.filter((item) => !item.suggested);
+    return <div className="space-y-4">
+      {habits.length > 0 && <div>
+        {heading(recent.basis === 'time' ? <Clock3 size={12} /> : <Sparkles size={12} />, recent.basis === 'time' ? 'Typisch um diese Zeit' : `Typisch für ${slotName}`)}
+        <ul className="-mx-2 space-y-0.5">{habits.map(row)}</ul>
+      </div>}
+      {others.length > 0 && <div>
+        {heading(<History size={12} />, 'Zuletzt getrackt')}
+        <ul className="-mx-2 space-y-0.5">{others.map(row)}</ul>
+      </div>}
+    </div>;
   };
 
   return <section ref={sectionRef} className="forge-anim forge-d3 scroll-mt-[68px]" aria-label="Lebensmittel suchen">
@@ -117,18 +161,14 @@ export default function FoodSearchPanel({ query, onQueryChange, onQuickAdd, onOp
       {query && <button type="button" onClick={() => { onQueryChange(''); inputRef.current?.focus(); }} aria-label="Suche leeren" className="tap -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.06)' }}><X size={15} /></button>}
     </label>
 
-    <div className="pt-3">
-      {!searchable && <h3 className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: SAND }}><History size={12} />Zuletzt getrackt</h3>}
+    <div className="pt-3" aria-live="polite">
       {error && <p className="my-2 rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>}
-      {list == null
-        ? <div className="space-y-2">{[0, 1, 2, 3].map((item) => <div key={item} className="forge-skeleton h-14 rounded-2xl" />)}</div>
-        : list.length
-          ? <ul className={`-mx-2 space-y-0.5 transition-opacity duration-200 ${searching ? 'opacity-55' : 'opacity-100'}`} aria-live="polite">{list.map(row)}</ul>
-          : <div className="px-6 py-10 text-center">
-            <p className="text-[14px] font-medium" style={{ color: TEXT }}>{searchable ? 'Nichts gefunden' : 'Noch nichts getrackt'}</p>
-            <p className="mt-1 text-[12px]" style={{ color: DIM }}>{searchable ? 'Versuch einen anderen Begriff oder scanne den Barcode.' : 'Was du trackst, erscheint hier für den schnellen Zugriff.'}</p>
-          </div>}
-      {searchable && list && list.length > 0 && <p className="px-4 pt-4 text-center text-[10px] leading-relaxed" style={{ color: FAINT }}>{ATTRIBUTION}</p>}
+      {!searchable ? idle()
+        : results == null ? skeleton
+          : results.length
+            ? <ul className={`-mx-2 space-y-0.5 transition-opacity duration-200 ${searching ? 'opacity-55' : 'opacity-100'}`}>{results.map(row)}</ul>
+            : empty('Nichts gefunden', 'Versuch einen anderen Begriff oder scanne den Barcode.')}
+      {searchable && results && results.length > 0 && <p className="px-4 pt-4 text-center text-[10px] leading-relaxed" style={{ color: FAINT }}>{ATTRIBUTION}</p>}
     </div>
   </section>;
 }

@@ -118,14 +118,52 @@ def finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def quality_for(kcal, protein, carbs, fat) -> str:
+# Vocabulary of the words in searchable food names (folded like the search does). The search uses it
+# to split German compounds the catalog spells differently ("Frischkäsebrezel" -> "frischkase brezel").
+FOOD_WORDS_SQL = [
+    """CREATE MATERIALIZED VIEW IF NOT EXISTS food_words AS
+       SELECT word, count(*)::int AS n
+       FROM (SELECT regexp_split_to_table(lower(f_unaccent(name)), '[^a-z0-9]+') AS word
+             FROM foods WHERE quality = 'ok') words
+       WHERE length(word) BETWEEN 3 AND 40
+       GROUP BY word HAVING count(*) >= 2
+       WITH NO DATA""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS food_words_word ON food_words (word)",
+    "REFRESH MATERIALIZED VIEW food_words",
+]
+
+# Bump when quality_for changes; the daily sync then re-rates every OFF row once.
+QUALITY_VERSION = "2"
+# Open Food Facts stores alcohol in % vol; ethanol weighs 0.789 g/ml and has 7 kcal/g.
+KCAL_PER_VOL_PERCENT = 0.789 * 7
+
+
+def quality_for(kcal, protein, carbs, fat, fiber=None, polyols=None, alcohol_vol=None) -> str:
+    """'ok', 'incomplete' or 'suspect' (hidden from search) for one product per 100 g/ml.
+
+    The energy check allows for everything EU labels legitimately leave out of 4/4/9: fibre
+    (2 kcal/g, listed outside carbs), polyols (0-2.4 kcal/g, counted inside carbs, erythritol is 0)
+    and alcohol. Only energy no label could explain flags a row, e.g. kJ entered as kcal.
+    """
     if None in (kcal, protein, carbs, fat):
         return "incomplete"
     if min(kcal, protein, carbs, fat) < 0 or protein + carbs + fat > 100.5 or kcal > 900:
         return "suspect"
-    if kcal > 20 and abs(kcal - (4 * protein + 4 * carbs + 9 * fat)) > 0.25 * kcal:
+    fiber = max(fiber or 0.0, 0.0)
+    polyols = min(max(polyols or 0.0, 0.0), carbs)
+    alcohol = KCAL_PER_VOL_PERCENT * alcohol_vol if alcohol_vol and 0 < alcohol_vol <= 100 else 0.0
+    lowest = 4 * protein + 4 * (carbs - polyols) + 9 * fat + alcohol
+    highest = 4 * protein + 4 * carbs + 9 * fat + 2 * fiber + alcohol
+    if kcal < 0.75 * lowest - 10 or kcal > 1.25 * highest + 10:
         return "suspect"
     return "ok"
+
+
+def quality_from_extras(values: dict[str, Any], extras: list[dict[str, Any]]) -> str:
+    """quality_for() for a row whose polyols/alcohol live in the extra nutrient list."""
+    extra = {item.get("k"): finite(item.get("v")) for item in extras if isinstance(item, dict)}
+    return quality_for(values.get("kcal"), values.get("protein"), values.get("carbs"), values.get("fat"),
+                       values.get("fiber"), extra.get("polyols"), extra.get("alcohol"))
 
 
 def off_extras(pairs) -> list[dict[str, Any]]:
@@ -173,7 +211,7 @@ def build_off_row(*, code: str, name_de: str | None, name_main: str | None, bran
         "allergens": clean_text(allergens, 500),
         "scans": int(finite(scans) or 0),
         "completeness": finite(completeness),
-        "quality": quality_for(values["kcal"], values["protein"], values["carbs"], values["fat"]),
+        "quality": quality_from_extras(values, extras),
         "countries": clean_text(countries, 300),
         "embed_text": text, "embed_hash": text_hash(text),
     }

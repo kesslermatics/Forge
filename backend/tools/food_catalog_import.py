@@ -50,7 +50,7 @@ from pgvector.utils import HalfVector
 # Row mapping is shared with the backend (daily delta sync, live barcode lookup).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.food_catalog_rows import (  # noqa: E402
-    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, OFF_EXTRA, ROW_COLUMNS as STAGE_COLUMNS, build_off_row, clean_text,
+    EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, FOOD_WORDS_SQL, OFF_EXTRA, ROW_COLUMNS as STAGE_COLUMNS, build_off_row, clean_text,
     embed_text_for, off_extras, text_hash,
 )
 
@@ -462,7 +462,7 @@ def main() -> int:
                 # Parallel index builds allocate dynamic shared memory, which exceeds Docker's
                 # default 64 MB /dev/shm; a serial build uses process-local memory instead.
                 cur.execute("SET max_parallel_maintenance_workers = 0")
-                for statement in INDEX_SQL:
+                for statement in INDEX_SQL + FOOD_WORDS_SQL:
                     cur.execute(statement)
                 cur.execute("ANALYZE foods")
                 cur.execute("SELECT source, quality, count(*), count(embedding) FROM foods GROUP BY 1, 2 ORDER BY 1, 2")

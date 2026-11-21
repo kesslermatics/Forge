@@ -508,6 +508,8 @@ export interface FoodSummary {
   serving_label: string | null;
   tracked_count: number;
   default_amount: number;
+  /** A habit of this meal (or of this time of day); only set by getRecentFoods. */
+  suggested?: boolean;
 }
 
 export interface FoodNutrient { k: string; l: string; u: string; v: number; g: string }
@@ -591,7 +593,18 @@ export const updateTrackEntry = (id: string, amount: number) =>
 export const deleteTrackEntry = (id: string) =>
   apiRequest<void>(`/api/nutrition/entries/${id}`, { method: 'DELETE' });
 
-export const getRecentFoods = () => apiRequest<{ items: FoodSummary[] }>('/api/nutrition/recent');
+/** Where the user is tracking: the meal (null = "Ohne Mahlzeit") and the day. Drives habit suggestions and default amounts. */
+export interface TrackContext { slotId: string | null; date: string }
+const contextQuery = (context?: TrackContext) => {
+  const params = new URLSearchParams();
+  if (context?.slotId) params.set('slot_id', context.slotId);
+  if (context?.date) params.set('date', context.date);
+  return params.toString();
+};
+export const getRecentFoods = (context?: TrackContext) =>
+  apiRequest<RecentFoods>(`/api/nutrition/recent?${contextQuery(context)}`);
+/** `basis`: suggestions come from this meal's history ("meal") or, without any, from the time of day ("time"). */
+export interface RecentFoods { items: FoodSummary[]; basis: 'meal' | 'time' | null }
 
 /* ── Free-text tracking ("100g Hähnchen von Lidl, 200g Kartoffeln") ── */
 
@@ -630,12 +643,13 @@ export const streamSmartTrack = async (
   if (!response.body) throw new Error('Der Stream ist nicht verfügbar.');
   await readEventStream(response.body, onEvent);
 };
-export const searchFoods = (query: string, signal?: AbortSignal) =>
-  apiRequest<{ query: string; items: FoodSummary[] }>(`/api/nutrition/search?q=${encodeURIComponent(query)}`, { signal });
-export const lookupBarcode = (code: string) =>
-  apiRequest<FoodDetail>(`/api/nutrition/barcode/${encodeURIComponent(code)}`);
-export const getFoodDetail = (source: FoodSource, sourceId: string) =>
-  apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}`);
+export const searchFoods = (query: string, context?: TrackContext, signal?: AbortSignal) =>
+  apiRequest<{ query: string; items: FoodSummary[] }>(`/api/nutrition/search?q=${encodeURIComponent(query)}&${contextQuery(context)}`, { signal });
+const slotQuery = (slotId?: string | null) => (slotId ? `?slot_id=${encodeURIComponent(slotId)}` : '');
+export const lookupBarcode = (code: string, slotId?: string | null) =>
+  apiRequest<FoodDetail>(`/api/nutrition/barcode/${encodeURIComponent(code)}${slotQuery(slotId)}`);
+export const getFoodDetail = (source: FoodSource, sourceId: string, slotId?: string | null) =>
+  apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}${slotQuery(slotId)}`);
 /** Saves the user's own name and brand for a catalog food (permanent, survives catalog syncs). */
 export const updateFoodNames = (source: FoodSource, sourceId: string, data: { name: string; brand: string | null }) =>
   apiRequest<FoodDetail>(`/api/nutrition/foods/${source}/${encodeURIComponent(sourceId)}`, { method: 'PUT', body: JSON.stringify(data) });

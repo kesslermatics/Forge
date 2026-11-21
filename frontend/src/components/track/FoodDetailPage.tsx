@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, Check, ChevronDown, Leaf, Loader2, Pencil, Plus, X } from 'lucide-react';
-import { createTrackEntry, getFoodDetail, getMealSlots, updateFoodNames, type FoodDetail, type FoodNutrient, type FoodSource, type MealSlot } from '../../api/api';
+import { createTrackEntry, getFoodDetail, getMealSlots, getTrackDay, updateFoodNames, type FoodDetail, type FoodNutrient, type FoodSource, type MealSlot, type NutritionGoals } from '../../api/api';
 import { canGoBack, haptic, useGoBack } from '../navigation';
 import {
-  BORDER, CARBS, DIM, FAINT, FAT, PROTEIN, SAND, TEXT, berlinToday, clearSearchCache, fmt, fmtAmount, isValidIsoDate, parseAmount, scaled, setTrackFlash, toAmountInput,
+  BORDER, CARBS, DIM, FAINT, FAT, PROTEIN, SAND, TEXT, afterAdding, berlinToday, clearSearchCache, fmt, fmtAmount, isValidIsoDate, parseAmount, scaled, setTrackFlash, toAmountInput,
 } from './trackUtils';
+import { OVER } from '../nutrition/overviewUtils';
 
 const GROUP_ORDER = ['Makronährstoffe', 'Fette', 'Kohlenhydrate', 'Ballaststoffe', 'Vitamine', 'Fettlösliche Vitamine', 'Wasserlösliche Vitamine', 'Mineralstoffe', 'Elemente'];
 
@@ -45,6 +46,7 @@ export default function FoodDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState(() => (initial ? initialAmount(initial) : { unitId: 'base', value: '' }));
   const [slot, setSlot] = useState<MealSlot | null>(null);
+  const [day, setDay] = useState<{ kcal: number; goals: NutritionGoals | null } | null>(null);
   const [saving, setSaving] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [showIngredients, setShowIngredients] = useState(false);
@@ -72,8 +74,9 @@ export default function FoodDetailPage() {
 
   useEffect(() => {
     if (slotId) getMealSlots().then((data) => setSlot(data.items.find((item) => item.id === slotId) ?? null)).catch(() => undefined);
+    getTrackDay(date).then((data) => setDay({ kcal: data.totals.kcal, goals: data.goals })).catch(() => undefined);
     if (initial && initial.source_id === sourceId) return;
-    getFoodDetail(source as FoodSource, sourceId)
+    getFoodDetail(source as FoodSource, sourceId, slotId)
       .then((data) => { setFood(data); setAmount(initialAmount(data)); })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Produkt konnte nicht geladen werden.'));
   }, [source, sourceId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -151,6 +154,7 @@ export default function FoodDetailPage() {
 
   const base = food.unit;
   const kcal = scaled(food.kcal, qty);
+  const after = day ? afterAdding(day.kcal, day.goals, kcal) : null;
   const amountLabel = unit.id === 'base' ? `${fmt(qty, 1)} ${base}` : `${fmtAmount(count)} × ${unit.short} · ${fmt(qty, 1)} ${base}`;
   const rows: { label: string; per100: number | null; sub?: boolean; unit?: string; digits?: number }[] = [
     { label: 'Energie', per100: food.kcal, unit: 'kcal' },
@@ -263,6 +267,7 @@ export default function FoodDetailPage() {
         style={{ background: 'linear-gradient(180deg, rgba(22,19,15,0) 0%, rgba(22,19,15,0.97) 28%)' }}>
         <p className="truncate px-1 pb-2 text-[11px]" style={{ color: DIM }}>
           {slot ? <>Zu <span style={{ color: SAND }}>{slot.name}</span> · </> : null}<span className="tabular-nums" style={{ color: TEXT }}>{fmt(kcal)} kcal</span>{unit.id !== 'base' && <span className="tabular-nums"> · {fmt(qty, 1)} {base}</span>}
+          {after && <span className="tabular-nums" style={after.over ? { color: OVER } : undefined}> · {after.text}</span>}
         </p>
         <div ref={amountBarRef} className="relative flex items-stretch gap-2 rounded-[20px] p-1.5" style={{ background: '#211c14', border: `1px solid ${SAND}33`, boxShadow: '0 18px 40px -20px rgba(0,0,0,0.9)' }}>
           {unitOpen && <ul role="listbox" aria-label="Einheit oder Portion" className="forge-pop-up absolute inset-x-0 bottom-full z-10 mb-2 max-h-[min(46dvh,320px)] overflow-y-auto overscroll-contain rounded-[20px] p-1.5"

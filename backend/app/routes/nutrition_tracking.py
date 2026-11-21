@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import date as date_type
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import NutritionEntry, NutritionFoodOverride, NutritionMealSlot, User
-from app.services import food_catalog, food_smart_track, nutrition_native, nutrition_overview
+from app.services import food_catalog, food_smart_track, food_suggestions, nutrition_native, nutrition_overview
 from app.services.food_catalog import CatalogUnavailable
 
 router = APIRouter(prefix="/api/nutrition", tags=["Nutrition tracking"])
@@ -148,7 +149,7 @@ def _recency(db: Session, user_id: UUID) -> dict[tuple[str, str], int]:
     rows = db.query(NutritionEntry.source, NutritionEntry.source_id, func.max(NutritionEntry.date)).filter(
         NutritionEntry.user_id == user_id,
     ).group_by(NutritionEntry.source, NutritionEntry.source_id).all()
-    today = date_type.today()
+    today = nutrition_native.berlin_today()
     return {(source, source_id): max((today - last).days, 0) for source, source_id, last in rows if last}
 
 
@@ -165,48 +166,30 @@ def _with_override(item: dict, overrides: dict[tuple[str, str], NutritionFoodOve
     return {**item, "name": override.name, "brand": override.brand}
 
 
-def _recent_item(entry: NutritionEntry, history: dict[tuple[str, str], int]) -> dict:
+def _recent_item(entry: NutritionEntry, history: dict[tuple[str, str], int], default_amount: float) -> dict:
     per_100 = entry.per_100 or {}
     return {
         "source": entry.source, "source_id": entry.source_id, "name": entry.name, "brand": entry.brand, "unit": entry.unit,
         "kcal": per_100.get("kcal"), "protein": per_100.get("protein"), "carbs": per_100.get("carbs"), "fat": per_100.get("fat"),
         "serving_g": None, "serving_label": None, "tracked_count": history.get((entry.source, entry.source_id), 0),
-        "default_amount": round(entry.amount, 1),
+        "default_amount": default_amount,
     }
 
 
-def _distinct_recent(db: Session, user_id: UUID) -> list[NutritionEntry]:
-    """The newest diary entry of every distinct food, newest first."""
+def _usage(db: Session, user_id: UUID, slot_id: UUID | None, day: date_type | None) -> dict[tuple[str, str], food_suggestions.FoodUsage]:
+    """How the user used each food lately, seen from one meal on one day (see food_suggestions)."""
     entries = db.query(NutritionEntry).filter(NutritionEntry.user_id == user_id).order_by(
         NutritionEntry.logged_at.desc()).limit(1500).all()
-    seen: set[tuple[str, str]] = set()
-    result = []
-    for entry in entries:
-        key = (entry.source, entry.source_id)
-        if key not in seen:
-            seen.add(key)
-            result.append(entry)
-    return result
+    today = nutrition_native.berlin_today()
+    return food_suggestions.food_usage(entries, slot_id=slot_id, day=day or today, today=today,
+                                       now=datetime.now(food_suggestions.BERLIN))
 
 
-def _last_amounts(db: Session, user: User, keys: list[tuple[str, str]]) -> dict[tuple[str, str], float]:
-    if not keys:
-        return {}
-    ids = list({source_id for _, source_id in keys})
-    rows = db.query(NutritionEntry.source, NutritionEntry.source_id, NutritionEntry.amount, NutritionEntry.logged_at).filter(
-        NutritionEntry.user_id == user.id, NutritionEntry.source_id.in_(ids),
-    ).order_by(NutritionEntry.logged_at.desc()).all()
-    result: dict[tuple[str, str], float] = {}
-    for source, source_id, amount, _ in rows:
-        result.setdefault((source, source_id), amount)
-    return result
-
-
-def _default_amount(item: dict, last: dict[tuple[str, str], float]) -> float:
-    """Last amount the user tracked, else one portion, else 100 g/ml."""
-    previous = last.get((item["source"], item["source_id"]))
-    if previous:
-        return round(previous, 1)
+def _default_amount(item: dict, usage: dict[tuple[str, str], food_suggestions.FoodUsage]) -> float:
+    """Last amount in this meal, else the last amount at all, else one portion, else 100 g/ml."""
+    known = usage.get((item["source"], item["source_id"]))
+    if known is not None:
+        return known.default_amount
     serving = item.get("serving_g")
     return round(serving, 1) if serving and 0 < serving <= 2000 else 100.0
 
@@ -421,32 +404,38 @@ def delete_entry(entry_id: UUID, current_user: User = Depends(get_current_user),
 # ── catalog ──────────────────────────────────────────────────────────────────────
 
 @router.get("/recent")
-def recent_foods(limit: int = Query(100, ge=1, le=100), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """The last distinct products the user tracked, newest first, served from diary snapshots."""
-    entries = db.query(NutritionEntry).filter(NutritionEntry.user_id == current_user.id).order_by(
-        NutritionEntry.logged_at.desc()).limit(1500).all()
+def recent_foods(
+    limit: int = Query(100, ge=1, le=100),
+    slot_id: UUID | None = Query(None),
+    date: date_type | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Foods for an empty search on a meal page, served from diary snapshots.
+
+    ``suggested`` marks the habits of this meal (or of this time of day), which come first;
+    the rest follows newest first.
+    """
+    usage = _usage(db, current_user.id, slot_id, date)
     history = _history(db, current_user.id)
-    seen: set[tuple[str, str]] = set()
-    items = []
-    for entry in entries:
-        key = (entry.source, entry.source_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        per_100 = entry.per_100 or {}
-        items.append({
-            "source": entry.source, "source_id": entry.source_id, "name": entry.name, "brand": entry.brand, "unit": entry.unit,
-            "kcal": per_100.get("kcal"), "protein": per_100.get("protein"), "carbs": per_100.get("carbs"), "fat": per_100.get("fat"),
-            "serving_g": None, "serving_label": None, "tracked_count": history.get(key, 0), "default_amount": round(entry.amount, 1),
-        })
-        if len(items) >= limit:
-            break
-    return {"items": items}
+    suggested, rest = food_suggestions.suggestion_order(usage)
+    marked = set(suggested)
+    items = [{**_recent_item(usage[key].latest, history, usage[key].default_amount), "suggested": key in marked}
+             for key in (suggested + rest)[:limit]]
+    # "meal": habits of this meal; "time": nothing tracked in it yet, so what is usual at this time of day.
+    in_meal = slot_id is not None and any(item.meal_amount is not None for item in usage.values())
+    return {"items": items, "basis": ("meal" if in_meal else "time") if suggested else None}
 
 
 @router.get("/search")
-def search_foods(q: str = Query("", max_length=120), limit: int = Query(30, ge=1, le=50),
-                 current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def search_foods(
+    q: str = Query("", max_length=120),
+    limit: int = Query(30, ge=1, le=50),
+    slot_id: UUID | None = Query(None),
+    date: date_type | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     history = _history(db, current_user.id)
     try:
         items = food_catalog.search(q, limit=limit, history=history)
@@ -455,29 +444,25 @@ def search_foods(q: str = Query("", max_length=120), limit: int = Query(30, ge=1
     overrides = _overrides(db, current_user.id)
     items = [_with_override(item, overrides) for item in items]
 
-    # Foods the user already tracked and that match the query come first (most recent first),
-    # even when the catalog ranking left them out. Everything else keeps the catalog order.
-    words = food_catalog._fold(" ".join(q.split())).split()
+    # Foods the user already tracked and that match the query come first, the habits of this meal
+    # before the rest, even when the catalog ranking left them out. Everything else keeps the catalog order.
+    usage = _usage(db, current_user.id, slot_id, date)
     by_key = {(item["source"], item["source_id"]): item for item in items}
     tracked: list[dict] = []
-    used: set[tuple[str, str]] = set()
-    if words and len(" ".join(words)) >= 2:
-        for entry in _distinct_recent(db, current_user.id):
-            key = (entry.source, entry.source_id)
-            snapshot = _with_override(_recent_item(entry, history), overrides)
+    if len(" ".join(q.split())) >= 2:
+        terms = food_catalog.query_terms(q)
+        order = sorted(usage, key=lambda key: (-usage[key].score, usage[key].order))
+        for key in order:
+            known = usage[key]
+            snapshot = _with_override(_recent_item(known.latest, history, known.default_amount), overrides)
             item = by_key.get(key) or (snapshot if _is_complete(snapshot) else None)
-            if item is None:
-                continue
-            haystack = food_catalog._fold(f"{item['name']} {item['brand'] or ''}")
-            if all(word in haystack for word in words):
+            if item is not None and food_catalog.matches_terms(terms, f"{item['name']} {item['brand'] or ''}"):
                 tracked.append(item)
-                used.add(key)
+    used = {(item["source"], item["source_id"]) for item in tracked}
     rest = [item for item in items if (item["source"], item["source_id"]) not in used]
     merged = (tracked + rest)[:limit]
-
-    last = _last_amounts(db, current_user, [(item["source"], item["source_id"]) for item in merged])
     return {"query": q, "items": [{**item, "tracked_count": history.get((item["source"], item["source_id"]), 0),
-                                   "default_amount": _default_amount(item, last)} for item in merged]}
+                                   "default_amount": _default_amount(item, usage)} for item in merged]}
 
 
 class FoodOverrideUpdate(BaseModel):
@@ -499,25 +484,27 @@ class FoodOverrideUpdate(BaseModel):
 
 
 @router.get("/barcode/{code}")
-def lookup_barcode(code: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def lookup_barcode(code: str, slot_id: UUID | None = Query(None), current_user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
     try:
         food = food_catalog.lookup_barcode(code)
     except CatalogUnavailable as exc:
         raise _catalog_error(exc) from exc
     if food is None:
         raise HTTPException(status_code=404, detail="Zu diesem Barcode gibt es noch kein Produkt.")
-    return _detail_response(db, current_user, food)
+    return _detail_response(db, current_user, food, slot_id)
 
 
 @router.get("/foods/{source}/{source_id}")
-def get_food(source: Literal["bls", "off"], source_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_food(source: Literal["bls", "off"], source_id: str, slot_id: UUID | None = Query(None),
+             current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         food = food_catalog.get_food(source, source_id)
     except CatalogUnavailable as exc:
         raise _catalog_error(exc) from exc
     if food is None:
         raise HTTPException(status_code=404, detail="Lebensmittel nicht gefunden.")
-    return _detail_response(db, current_user, food)
+    return _detail_response(db, current_user, food, slot_id)
 
 
 @router.put("/foods/{source}/{source_id}")
@@ -547,9 +534,19 @@ def update_food(source: Literal["bls", "off"], source_id: str, data: FoodOverrid
     return _detail_response(db, current_user, food)
 
 
-def _detail_response(db: Session, user: User, food: dict) -> dict:
+def _detail_response(db: Session, user: User, food: dict, slot_id: UUID | None = None) -> dict:
     history = _history(db, user.id)
     detail = _with_override(food_catalog.detail(food, history), _overrides(db, user.id))
-    last = _last_amounts(db, user, [(detail["source"], detail["source_id"])])
     complete = None not in (detail["kcal"], detail["protein"], detail["carbs"], detail["fat"])
-    return {**detail, "default_amount": _default_amount(detail, last), "trackable": complete}
+    return {**detail, "default_amount": _food_default_amount(db, user.id, detail, slot_id), "trackable": complete}
+
+
+def _food_default_amount(db: Session, user_id: UUID, food: dict, slot_id: UUID | None) -> float:
+    """Last amount of this food in this meal, else anywhere, else one portion or 100 g/ml."""
+    base = db.query(NutritionEntry.amount).filter(
+        NutritionEntry.user_id == user_id, NutritionEntry.source == food["source"], NutritionEntry.source_id == food["source_id"],
+    ).order_by(NutritionEntry.logged_at.desc())
+    amount = (base.filter(NutritionEntry.slot_id == slot_id).first() if slot_id else None) or base.first()
+    if amount:
+        return round(amount[0], 1)
+    return _default_amount(food, {})

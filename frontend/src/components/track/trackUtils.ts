@@ -1,4 +1,4 @@
-import type { FoodSummary, TrackEntry, UserInfo } from '../../api/api';
+import type { FoodSummary, NutritionGoals, TrackEntry, UserInfo } from '../../api/api';
 
 export const SAND = '#e8c58a';
 export const TEXT = '#f2ece0';
@@ -84,12 +84,13 @@ export function setTrackFlash(entry: TrackEntry) { flash = { entry, at: Date.now
 export function peekTrackFlash(): TrackEntry | null { return flash && Date.now() - flash.at < 8000 ? flash.entry : null; }
 export function clearTrackFlash() { flash = null; }
 
-/** Recent search results, so going back to a meal page shows the list instantly. */
+/** Recent search results per meal and day (order and amounts depend on both), so going back to a meal page shows the list instantly. */
 const searchCache = new Map<string, FoodSummary[]>();
-export function cachedSearch(query: string): FoodSummary[] | undefined { return searchCache.get(query.toLowerCase()); }
+const searchKey = (scope: string, query: string) => `${scope}|${query.toLowerCase()}`;
+export function cachedSearch(scope: string, query: string): FoodSummary[] | undefined { return searchCache.get(searchKey(scope, query)); }
 export function clearSearchCache() { searchCache.clear(); }
-export function cacheSearch(query: string, items: FoodSummary[]) {
-  searchCache.set(query.toLowerCase(), items);
+export function cacheSearch(scope: string, query: string, items: FoodSummary[]) {
+  searchCache.set(searchKey(scope, query), items);
   if (searchCache.size > 40) searchCache.delete(searchCache.keys().next().value!);
 }
 
@@ -99,3 +100,10 @@ export function timeLabel(iso: string | null): string {
 }
 
 export const ATTRIBUTION = 'Produktdaten: Open Food Facts (ODbL) · Grundnahrungsmittel: Max Rubner-Institut, BLS 4.0 (CC BY 4.0)';
+
+/** "danach noch 390 kcal" for the product page: what is left today once this amount is added. */
+export function afterAdding(dayKcal: number, goals: NutritionGoals | null, addKcal: number | null): { text: string; over: boolean } | null {
+  if (!goals || addKcal == null) return null;
+  const left = Math.round(goals.kcal - dayKcal - addKcal);
+  return left >= 0 ? { text: `danach ${left.toLocaleString('de-DE')} übrig`, over: false } : { text: `danach ${Math.abs(left).toLocaleString('de-DE')} drüber`, over: true };
+}

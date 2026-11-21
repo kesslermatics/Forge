@@ -8,6 +8,7 @@ import {
 import { haptic, useGoBack } from '../navigation';
 import MealSlotsSheet from './MealSlotsSheet';
 import EntryEditSheet from './EntryEditSheet';
+import { DayBudgetCard } from './Budget';
 import { MacroPills, SlotIcon } from './shared';
 import {
   BORDER, CARBS, DIM, FAINT, FAT, PROTEIN, SAND, SLOT_SUGGESTIONS, TEXT, berlinToday, clearTrackFlash, dayLabel, fmt, fmtAmount,
@@ -117,14 +118,7 @@ export default function TrackDayPage() {
       <div className="forge-skeleton h-[132px] rounded-3xl" />
       {[0, 1, 2].map((item) => <div key={item} className="forge-skeleton h-[72px] rounded-2xl" />)}
     </div> : <>
-      <section className="card-forge forge-anim forge-d1 p-5" style={{ borderColor: `${SAND}24` }}>
-        <div className="flex items-baseline justify-between gap-3">
-          <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: DIM }}>Tagessumme</p>
-          <p className="text-[11px]" style={{ color: DIM }}>{day.entry_count} {day.entry_count === 1 ? 'Eintrag' : 'Einträge'}</p>
-        </div>
-        <p className="track-number mt-1 text-[40px] font-light leading-none tabular-nums" key={day.totals.kcal} style={{ color: TEXT }}>{fmt(day.totals.kcal)}<span className="ml-1.5 text-[15px]" style={{ color: DIM }}>kcal</span></p>
-        <div className="mt-4"><MacroPills totals={day.totals} /></div>
-      </section>
+      <DayBudgetCard totals={day.totals} goals={day.goals} entryCount={day.entry_count} />
 
       {slots.length > 0 ? <section className="space-y-2">
         {daySlots.map((slot, index) => <button key={slot.id} type="button" onClick={() => openSlot(slot.id)} className="card-forge tap forge-anim flex w-full items-center gap-3 p-3.5 text-left" style={{ animationDelay: `${0.08 + index * 0.04}s` }}>

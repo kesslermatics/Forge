@@ -6,6 +6,8 @@ import { haptic, useBackDismiss } from '../navigation';
 import { DIM, SAND, TEXT } from './trackUtils';
 
 interface Props {
+  /** Meal being tracked, so the product opens with the amount last used in it. */
+  slotId?: string | null;
   onFound: (food: FoodDetail) => void;
   onOpenSearch: () => void;
   onClose: () => void;
@@ -18,7 +20,7 @@ type DetectorCtor = new (options: { formats: string[] }) => DetectorLike;
 const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
 
 /** Full-screen camera scanner. Uses the native BarcodeDetector where available, ZXing otherwise (iOS Safari). */
-export default function BarcodeScannerSheet({ onFound, onOpenSearch, onClose }: Props) {
+export default function BarcodeScannerSheet({ slotId = null, onFound, onOpenSearch, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const stopRef = useRef<() => void>(() => undefined);
@@ -50,14 +52,14 @@ export default function BarcodeScannerSheet({ onFound, onOpenSearch, onClose }: 
     setLastCode(code); setPhase('looking'); setMessage(null);
     haptic('success');
     try {
-      const food = await lookupBarcode(code);
+      const food = await lookupBarcode(code, slotId);
       stopCamera();
       onFoundRef.current(food);
     } catch (caught: unknown) {
       setMessage(caught instanceof Error ? caught.message : 'Produkt nicht gefunden.');
       setPhase('not-found');
     } finally { busyRef.current = false; }
-  }, [stopCamera]);
+  }, [stopCamera, slotId]);
 
   const startCamera = useCallback(async () => {
     stopCamera();

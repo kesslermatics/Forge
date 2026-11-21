@@ -13,7 +13,9 @@ import logging
 import math
 import re
 import threading
+import time
 from collections import OrderedDict
+from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Any
 
@@ -128,6 +130,139 @@ def _normalise_query(query: str) -> str:
     return re.sub(r"\s+", " ", query).strip()
 
 
+# ── query understanding (no hand-written synonyms: everything comes from the catalog itself) ──
+
+_WORDS_TTL = 6 * 3600
+_words: set[str] = set()
+_words_loaded_at: float | None = None  # monotonic time of the last load attempt
+_words_loading = threading.Lock()
+
+
+def _load_words() -> None:
+    global _words, _words_loaded_at
+    if not _words_loading.acquire(blocking=False):
+        return
+    try:
+        rows = _rows("SELECT word FROM food_words", {})
+        _words = {row["word"] for row in rows}
+        logger.info("Loaded %d catalog words for compound splitting", len(_words))
+        _words_loaded_at = time.monotonic()
+    except CatalogUnavailable:
+        logger.warning("food_words is not available yet (created by the catalog sync); retrying in 10 minutes")
+        _words_loaded_at = time.monotonic() - _WORDS_TTL + 600
+    finally:
+        _words_loading.release()
+
+
+def _vocabulary() -> set[str]:
+    """Catalog words, refreshed in the background so a search never waits for the load."""
+    if _words_loaded_at is None or time.monotonic() - _words_loaded_at > _WORDS_TTL:
+        _pool.submit(_load_words)
+    return _words
+
+
+# Linking elements between the parts of German compounds ("Schweinsbraten", "Hähnchenbrust", "Tomatensoße").
+_FUGEN = ("", "s", "n", "en", "es", "er", "e")
+
+
+def _known_base(part: str, words: set[str]) -> str | None:
+    """The catalog word inside ``part``, without a linking element ("tomaten" -> "tomate")."""
+    for fuge in _FUGEN:
+        base = part[:len(part) - len(fuge)] if fuge else part
+        if part.endswith(fuge) and len(base) >= 3 and base in words:
+            return base
+    return None
+
+
+def split_compound(word: str, words: set[str]) -> list[str] | None:
+    """Split a compound into catalog words: "frischkasebretzel" -> ["frischkase", "bretzel"].
+
+    Prefers few, long, known parts. One unknown part of at least four letters is allowed (a typo or
+    a spelling the catalog lacks, e.g. "bretzel"); the trigram search resolves it afterwards.
+    Linking elements are dropped ("schweinsbraten" -> ["schwein", "braten"]).
+    Returns None when the word is itself known or cannot be split sensibly.
+    """
+    if len(word) < 7 or len(word) > 40 or not words or word in words:
+        return None
+    n = len(word)
+    # best[i] = (score, parts, unknown parts, known letters) for word[i:]
+    best: list[tuple[float, list[str], int, int] | None] = [None] * (n + 1)
+    best[n] = (0.0, [], 0, 0)
+    for start in range(n - 3, -1, -1):
+        for end in range(start + 3, n + 1):
+            rest = best[end]
+            if rest is None:
+                continue
+            part = word[start:end]
+            base = _known_base(part, words)
+            if base is None and (len(part) < 4 or rest[2] >= 1):
+                continue
+            # Long known words score quadratically; a linking element counts a little less than a real letter.
+            gain = (len(base) ** 2 + 0.5 * (len(part) - len(base))) if base else len(part)
+            candidate = (rest[0] + gain - 4, [base or part, *rest[1]], rest[2] + (0 if base else 1), rest[3] + (len(part) if base else 0))
+            if best[start] is None or candidate[0] > best[start][0]:
+                best[start] = candidate
+    result = best[0]
+    # Known words must carry most of the compound, otherwise the split is a guess.
+    if result is None or len(result[1]) < 2 or result[3] < 0.5 * n:
+        return None
+    return result[1]
+
+
+_UMLAUT_SPELLING = re.compile(r"(?<=[a-z])(ae|oe|ue)")
+
+
+def query_terms(query: str) -> list[list[str]]:
+    """Folded word lists a food name may match: as typed, with ae/oe/ue read as umlauts and with
+    compounds split. The first list is always the query as typed."""
+    folded = _fold(_normalise_query(query))
+    variants = [folded.split()]
+    plain = _UMLAUT_SPELLING.sub(lambda match: match.group(1)[0], folded)
+    if plain != folded:
+        variants.append(plain.split())
+    words = _vocabulary()
+    for base in list(variants):
+        split: list[str] = []
+        changed = False
+        for term in base:
+            parts = split_compound(term, words)
+            split.extend(parts or [term])
+            changed |= bool(parts)
+        if changed and split not in variants:
+            variants.append(split)
+    return variants
+
+
+@lru_cache(maxsize=4096)
+def _trigrams(value: str) -> frozenset[str]:
+    return frozenset(value[index:index + 3] for index in range(len(value) - 2))
+
+
+def fuzzy_contains(word: str, text: str) -> bool:
+    """``word`` appears in ``text``, allowing one typo for words of five letters or more."""
+    if word in text:
+        return True
+    if len(word) < 5:
+        return False
+    # One typo destroys at most three trigrams; with fewer shared ones a window cannot reach 0.85.
+    grams = _trigrams(word)
+    if len(grams & _trigrams(text)) < len(grams) - 3:
+        return False
+    matcher = SequenceMatcher(None, "", word, autojunk=False)  # the word is seq2, which SequenceMatcher caches
+    for size in (len(word) - 1, len(word), len(word) + 1):
+        for start in range(0, len(text) - size + 1):
+            matcher.set_seq1(text[start:start + size])
+            if matcher.quick_ratio() >= 0.85 and matcher.ratio() >= 0.85:
+                return True
+    return False
+
+
+def matches_terms(terms: list[list[str]], text: str) -> bool:
+    """True when every word of at least one query variant appears in ``text`` (folded)."""
+    folded = _fold(text)
+    return any(variant and all(fuzzy_contains(word, folded) for word in variant) for variant in terms)
+
+
 def search(query: str, *, limit: int = 30, history: dict[tuple[str, str], int] | None = None) -> list[dict[str, Any]]:
     """Hybrid search. ``history`` maps (source, source_id) to how often the user tracked it."""
     query = _normalise_query(query)[:120]
@@ -135,12 +270,25 @@ def search(query: str, *, limit: int = 30, history: dict[tuple[str, str], int] |
         return []
     history = history or {}
     embedding_future = _pool.submit(_query_embedding, query) if len(query) >= 3 else None
+    terms = query_terms(query) if len(query) >= 3 else [_fold(query).split()]
 
     if len(query) >= 3:
         # BLS gets its own candidate pool: it has no scan counts, so in a shared top-N it would be
         # crowded out by hundreds of equally similar OFF products ("Banane roh" vs. every banana).
-        bls_future = _pool.submit(_lexical, query, "bls", 30)
-        lexical = _lexical(query, "off", 120) + bls_future.result()
+        # (future, weight): a hit for one part of a compound is worth less than a hit for all of it.
+        futures = [(_pool.submit(_lexical, query, "bls", 30), 1.0)]
+        for variant in terms[1:]:
+            futures.append((_pool.submit(_lexical, " ".join(variant), "off", 60), 1.0))
+            futures.append((_pool.submit(_lexical, " ".join(variant), "bls", 20), 1.0))
+        # Each part of a split compound on its own, so the basic foods it is made of show up too
+        # ("Frischkäsebrezel" -> Laugenbrezel, Frischkäse) when no product carries the whole name.
+        parts = [word for word in terms[-1] if len(word) >= 4] if len(terms[-1]) > len(terms[0]) else []
+        for part in parts[:3]:
+            futures.append((_pool.submit(_lexical, part, "bls", 6), PART_WEIGHT))
+            futures.append((_pool.submit(_lexical, part, "off", 15), PART_WEIGHT))
+        lexical = _lexical(query, "off", 120)
+        for future, weight in futures:
+            lexical += [{**row, "sim": float(row["sim"]) * weight} for row in future.result()]
     else:
         lexical = _rows(f"""
             SELECT {SUMMARY_COLUMNS}, 0.6 AS sim
@@ -156,23 +304,24 @@ def search(query: str, *, limit: int = 30, history: dict[tuple[str, str], int] |
             SELECT {SUMMARY_COLUMNS},
                    1 - (embedding <=> CAST(:v AS halfvec)) AS cos
             FROM foods
-            WHERE embedding IS NOT NULL
+            WHERE embedding IS NOT NULL AND quality = 'ok'
             ORDER BY embedding <=> CAST(:v AS halfvec)
             LIMIT 80
         """, {"v": _vector_literal(vector)}, setup=("SET LOCAL hnsw.ef_search = 100",))
 
     candidates: dict[int, dict[str, Any]] = {}
     for row in lexical:
-        candidates[row["id"]] = {**row, "cos": None}
+        existing = candidates.get(row["id"])
+        if existing is None or float(row["sim"]) > float(existing["sim"]):
+            candidates[row["id"]] = {**row, "cos": None}
     for row in semantic:
         if row["id"] in candidates:
             candidates[row["id"]]["cos"] = row["cos"]
-        else:
+        elif float(row["cos"]) >= SEMANTIC_ONLY_MIN_COS:
             candidates[row["id"]] = {**row, "sim": None}
 
-    folded = _fold(query)
     for row in candidates.values():
-        row["score"] = _score(row, folded, history)
+        row["score"] = _score(row, terms, history)
 
     # Collapse duplicates and keep the strongest row: same name and brand (different barcodes), or
     # same name with identical macros (one product listed under several brand spellings).
@@ -197,33 +346,52 @@ def _fold(value: str) -> str:
 
 
 _RAW_SUFFIX = re.compile(r"[,\s]+(roh|frisch)$")
+# Cosine of short food names clusters around 0.5: a row found only by embedding needs a bit more.
+SEMANTIC_ONLY_MIN_COS = 0.56
+# Trigram similarity of a hit for a single compound part ("frischkase") counts this much.
+PART_WEIGHT = 0.55
 
 
-def _score(row: dict[str, Any], folded_query: str, history: dict[tuple[str, str], int]) -> float:
+def _name_bonus(name: str, bare: str, phrase: str) -> float:
+    # BLS names carry the preparation state ("Banane roh"); the raw/fresh item is the exact hit.
+    if name == phrase or bare == phrase:
+        return 0.6
+    if re.match(rf"^{re.escape(phrase)}\b", name):
+        return 0.3
+    if name.startswith(phrase):
+        return 0.15
+    return 0.0
+
+
+def _score(row: dict[str, Any], terms: list[list[str]], history: dict[tuple[str, str], int]) -> float:
     name = _fold(row["name"])
+    bare = _RAW_SUFFIX.sub("", name) if row["source"] == "bls" else name
+    typed = " ".join(terms[0])
     score = 0.0
     if row.get("sim") is not None:
         score += float(row["sim"])
     if row.get("cos") is not None:
         # Cosine of short food names clusters around 0.5; only the part above it is signal.
         score += max(0.0, (float(row["cos"]) - 0.5) * 2.0) * 0.9
-    # BLS names carry the preparation state ("Banane roh"); the raw/fresh item is the exact hit.
-    if name == folded_query or (row["source"] == "bls" and _RAW_SUFFIX.sub("", name) == folded_query):
-        score += 0.6
-    elif re.match(rf"^{re.escape(folded_query)}\b", name):
-        score += 0.3
-    elif name.startswith(folded_query):
-        score += 0.15
-    score -= min(0.25, 0.004 * max(len(name) - len(folded_query), 0))
+    score += max(_name_bonus(name, bare, " ".join(variant)) for variant in terms)
+    # The name holds every part of a split compound ("Frischkäse-Brezel" for "frischkäsebrezel").
+    # Typo-tolerant only for the few BLS rows; OFF candidates are many, plain substrings keep it fast.
+    fuzzy = row["source"] == "bls"
+    if any(len(variant) > 1 and all(fuzzy_contains(word, name) if fuzzy else word in name for word in variant) for variant in terms[1:]):
+        score += 0.2
+    score -= min(0.25, 0.004 * max(len(name) - len(typed), 0))
     score += 0.04 * math.log1p(row.get("scans") or 0)
     if row["source"] == "bls":
         # Generic foods are the right answer for generic queries ("banane", "reis"), but only
         # when they actually match well; otherwise "Haferflocken-Nussplätzchen" beats real oats.
         # The query must appear in the German name itself: embeddings and the English alias in
         # search_text would otherwise promote near-synonyms ("whey" -> "Sauermolke").
-        strong = all(word in name for word in folded_query.split())
+        strong = next((variant for variant in terms if variant and all(fuzzy_contains(word, name) for word in variant)), None)
         if strong:
-            score += 0.2 if len(folded_query.split()) <= 2 else 0.08
+            score += 0.2 if len(strong) <= 2 else 0.08
+        elif any(fuzzy_contains(word, name) for variant in terms[1:] for word in variant if len(word) >= 4):
+            # One part of a compound ("brezel" of "Frischkäsebrezel"): a useful building block.
+            score -= 0.1
         else:
             score -= 0.4
     tracked = history.get((row["source"], row["source_id"]), 0)

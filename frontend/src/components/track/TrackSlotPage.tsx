@@ -2,15 +2,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeE
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Undo2, X } from 'lucide-react';
 import {
-  createTrackEntry, deleteTrackEntry, getMealSlots, getTrackEntries, updateTrackEntry,
-  type FoodDetail, type FoodSummary, type MealSlot, type TrackEntry, type TrackMacros,
+  createTrackEntry, deleteTrackEntry, getMealSlots, getTrackDay, getTrackEntries, updateTrackEntry,
+  type FoodDetail, type FoodSummary, type MealSlot, type NutritionGoals, type TrackEntry, type TrackMacros,
 } from '../../api/api';
 import { haptic, useGoBack } from '../navigation';
 import FoodSearchPanel from './FoodSearchPanel';
 import BarcodeScannerSheet from './BarcodeScannerSheet';
 import SmartTrackSheet from './SmartTrackSheet';
 import EntryEditSheet from './EntryEditSheet';
-import { MacroPills, SlotIcon } from './shared';
+import { MealBudgetStrip } from './Budget';
+import { SlotIcon } from './shared';
 import {
   BORDER, DIM, FAINT, SAND, TEXT, berlinToday, clearTrackFlash, fmt, fmtAmount, isValidIsoDate, peekTrackFlash, photoToDataUrl, shortDate,
 } from './trackUtils';
@@ -24,12 +25,23 @@ function sum(entries: TrackEntry[]): TrackMacros {
   }), { ...EMPTY });
 }
 
-async function fetchSlot(date: string, slotId: string | null): Promise<{ slot: MealSlot; entries: TrackEntry[] } | { error: string }> {
+/** The rest of the day (everything but this meal) and the targets; this meal's own entries are added live. */
+interface DayBase { others: TrackMacros; goals: NutritionGoals | null }
+
+function minus(a: TrackMacros, b: TrackMacros): TrackMacros {
+  return { kcal: a.kcal - b.kcal, protein: a.protein - b.protein, carbs: a.carbs - b.carbs, fat: a.fat - b.fat,
+    sugar: a.sugar - b.sugar, fiber: a.fiber - b.fiber, saturated: a.saturated - b.saturated, salt: a.salt - b.salt };
+}
+
+async function fetchSlot(date: string, slotId: string | null): Promise<{ slot: MealSlot; entries: TrackEntry[]; day: DayBase | null } | { error: string }> {
   try {
-    const [slotData, entryData] = await Promise.all([getMealSlots(), getTrackEntries(date, slotId)]);
+    // The budget is a bonus: without the day summary the page still works.
+    const [slotData, entryData, dayData] = await Promise.all([getMealSlots(), getTrackEntries(date, slotId), getTrackDay(date).catch(() => null)]);
     const slot = slotId ? slotData.items.find((item) => item.id === slotId) ?? null : { id: 'unassigned', name: 'Ohne Mahlzeit', position: -1 };
     if (!slot) return { error: 'Diese Mahlzeit gibt es nicht mehr.' };
-    return { slot, entries: entryData.items };
+    const mealAtLoad = dayData ? (slotId ? dayData.slots.find((item) => item.id === slotId)?.totals : dayData.unassigned.totals) : undefined;
+    const day = dayData ? { others: mealAtLoad ? minus(dayData.totals, mealAtLoad) : dayData.totals, goals: dayData.goals } : null;
+    return { slot, entries: entryData.items, day };
   } catch (caught: unknown) {
     return { error: caught instanceof Error ? caught.message : 'Einträge konnten nicht geladen werden.' };
   }
@@ -51,6 +63,7 @@ export default function TrackSlotPage() {
 
   const [slot, setSlot] = useState<MealSlot | null>(null);
   const [entries, setEntries] = useState<TrackEntry[] | null>(null);
+  const [dayBase, setDayBase] = useState<DayBase | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
@@ -71,7 +84,7 @@ export default function TrackSlotPage() {
 
   const applyLoaded = useCallback((result: Awaited<ReturnType<typeof fetchSlot>>) => {
     if ('error' in result) { setError(result.error); setEntries((current) => current ?? []); return; }
-    setError(null); setSlot(result.slot); setEntries(result.entries);
+    setError(null); setSlot(result.slot); setEntries(result.entries); setDayBase(result.day);
   }, []);
 
   const load = useCallback(() => fetchSlot(date, realSlotId).then(applyLoaded), [date, realSlotId, applyLoaded]);
@@ -92,7 +105,7 @@ export default function TrackSlotPage() {
 
   const markFresh = useCallback((id: string) => {
     setFresh((current) => new Set(current).add(id));
-    window.setTimeout(() => setFresh((current) => { const next = new Set(current); next.delete(id); return next; }), 1400);
+    window.setTimeout(() => setFresh((current) => { const next = new Set(current); next.delete(id); return next; }), 800);
   }, []);
 
   const showUndo = useCallback((kind: Undo['kind'], entry: TrackEntry, label: string) => {
@@ -106,7 +119,7 @@ export default function TrackSlotPage() {
     clearTrackFlash();
     haptic('success');
     undoTimer.current = window.setTimeout(() => setUndo(null), 4500);
-    const freshTimer = window.setTimeout(() => setFresh(new Set()), 1400);
+    const freshTimer = window.setTimeout(() => setFresh(new Set()), 800);
     return () => window.clearTimeout(freshTimer);
   }, [addedOnProduct]);
 
@@ -177,6 +190,9 @@ export default function TrackSlotPage() {
   };
 
   const totals = sum(entries ?? []);
+  // The whole day, live: the other meals as loaded plus this meal as it changes.
+  const dayTotals = dayBase ? { kcal: dayBase.others.kcal + totals.kcal, protein: dayBase.others.protein + totals.protein,
+    carbs: dayBase.others.carbs + totals.carbs, fat: dayBase.others.fat + totals.fat } : null;
   const tiles = [
     { key: 'search', icon: <Search size={19} />, label: 'Suche', active: true, disabled: false },
     { key: 'barcode', icon: <ScanBarcode size={19} />, label: 'Barcode', active: false, disabled: false },
@@ -202,7 +218,9 @@ export default function TrackSlotPage() {
 
     {error && <div className="rounded-2xl px-4 py-3 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</div>}
 
-    <section className="forge-anim forge-d1"><MacroPills totals={totals} /></section>
+    <section className="forge-anim forge-d1">
+      <MealBudgetStrip day={dayTotals ?? totals} meal={totals} goals={dayBase?.goals ?? null} mealName={slot?.name ?? 'Diese Mahlzeit'} />
+    </section>
 
     <section className="card-forge forge-anim forge-d1 overflow-hidden">
       <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
@@ -238,6 +256,8 @@ export default function TrackSlotPage() {
 
     <div ref={panelRef}>
       {slot && <FoodSearchPanel
+        context={{ slotId: realSlotId, date }}
+        slotName={slot.name}
         inputRef={searchRef}
         query={query}
         onQueryChange={setQuery}
@@ -255,6 +275,7 @@ export default function TrackSlotPage() {
     </div>}
 
     {scanOpen && <BarcodeScannerSheet
+      slotId={realSlotId}
       onFound={(food: FoodDetail) => { setScanOpen(false); openFood(food.source, food.source_id, { state: { food }, replace: true }); }}
       onOpenSearch={() => { setScanOpen(false); window.setTimeout(() => searchRef.current?.focus(), 320); }}
       onClose={() => setScanOpen(false)}
