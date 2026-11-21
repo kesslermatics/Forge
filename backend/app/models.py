@@ -238,6 +238,19 @@ class NutritionFoodOverride(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class NutritionTrackSettings(Base):
+    """Per-user preferences for free-text tracking (e.g. whether stated weights are raw or cooked).
+
+    Stored as one JSON document so new preferences need no schema migration; the API validates it.
+    """
+
+    __tablename__ = "nutrition_track_settings"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    preferences = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class NutritionGoal(Base):
     """Daily calorie, macro, sugar and salt targets, valid from a date until the next entry.
 

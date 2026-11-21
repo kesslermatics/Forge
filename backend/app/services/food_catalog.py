@@ -37,7 +37,10 @@ DETAIL_COLUMNS = (
     "saturated, salt, nutrients, serving_g, serving_label, package_g, quantity_label, ingredients, allergens, "
     "scans, quality"
 )
-SUMMARY_COLUMNS = "id, source, source_id, name, brand, unit, kcal, protein, carbs, fat, serving_g, serving_label, scans, quality"
+SUMMARY_COLUMNS = (
+    "id, source, source_id, name, brand, unit, kcal, protein, carbs, fat, serving_g, serving_label, package_g, "
+    "quantity_label, scans, quality"
+)
 
 
 class CatalogUnavailable(RuntimeError):
@@ -413,6 +416,8 @@ def summary(row: dict[str, Any], history: dict[tuple[str, str], int] | None = No
         "fat": _round(row.get("fat")),
         "serving_g": _round(row.get("serving_g")),
         "serving_label": row.get("serving_label"),
+        "package_g": _round(row.get("package_g")),
+        "quantity_label": row.get("quantity_label"),
         "tracked_count": (history or {}).get((row["source"], row["source_id"]), 0),
     }
 
@@ -432,6 +437,17 @@ def _round(value: Any, digits: int = 1) -> float | None:
 def get_food(source: str, source_id: str) -> dict[str, Any] | None:
     rows = _rows(f"SELECT {DETAIL_COLUMNS} FROM foods WHERE source = :s AND source_id = :i", {"s": source, "i": source_id})
     return rows[0] if rows else None
+
+
+def get_summaries(keys: list[tuple[str, str]], history: dict[tuple[str, str], int] | None = None) -> list[dict[str, Any]]:
+    """Search-style summaries of several foods at once (unknown keys are skipped)."""
+    if not keys:
+        return []
+    rows = _rows(f"""
+        SELECT {SUMMARY_COLUMNS} FROM foods
+        WHERE (source, source_id) IN (SELECT * FROM unnest(CAST(:sources AS text[]), CAST(:ids AS text[])))
+    """, {"sources": [source for source, _ in keys], "ids": [source_id for _, source_id in keys]})
+    return [summary(row, history) for row in rows]
 
 
 def barcode_candidates(code: str) -> list[str]:

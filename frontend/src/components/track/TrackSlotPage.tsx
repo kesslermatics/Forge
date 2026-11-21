@@ -284,10 +284,12 @@ export default function TrackSlotPage() {
       photo={photo ?? undefined}
       date={date}
       slotId={realSlotId}
-      onTracked={(entry) => { setEntries((current) => [...(current ?? []), entry]); markFresh(entry.id); }}
+      onTracked={(entry) => { setEntries((current) => [...(current ?? []).filter((item) => item.id !== entry.id), entry]); markFresh(entry.id); }}
+      onUpdated={(entry) => { setEntries((current) => (current ?? []).map((item) => item.id === entry.id ? entry : item)); markFresh(entry.id); }}
       onRemoved={(id) => setEntries((current) => (current ?? []).filter((item) => item.id !== id))}
       onSearch={(value) => { setQuery(value); window.setTimeout(() => searchRef.current?.focus(), 320); }}
-      onClose={() => { setTextOpen(false); setPhoto(null); }}
+      // Closing mid-stream may leave an entry the server stored after the last event: resync the meal.
+      onClose={() => { setTextOpen(false); setPhoto(null); void load(); }}
     />}
     {editing && <EntryEditSheet
       entry={editing}

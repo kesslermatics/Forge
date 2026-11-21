@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
-from app.models import NutritionEntry, NutritionFoodOverride, NutritionMealSlot, User
+from app.models import NutritionEntry, NutritionFoodOverride, NutritionMealSlot, NutritionTrackSettings, User
 from app.services import food_catalog, food_smart_track, food_suggestions, nutrition_native, nutrition_overview
 from app.services.food_catalog import CatalogUnavailable
 
@@ -61,7 +61,7 @@ class EntryCreate(BaseModel):
 
 class SmartTrackRequest(BaseModel):
     """Either free text or a meal photo (``data:image/...;base64,`` URL, downscaled by the client)."""
-    text: str | None = Field(default=None, min_length=2)
+    text: str | None = Field(default=None, min_length=2, max_length=1500)
     image: str | None = Field(default=None, pattern=r"^data:image/(jpeg|png|webp);base64,")
     date: date_type
     slot_id: UUID | None = None
@@ -71,6 +71,11 @@ class SmartTrackRequest(BaseModel):
         if not self.text and not self.image:
             raise ValueError("text or image is required")
         return self
+
+
+class SmartTrackSettings(BaseModel):
+    """Preferences for free-text tracking. ``weigh_state``: what a stated weight means for foods that are cooked."""
+    weigh_state: Literal["raw", "cooked"] = "raw"
 
 
 class EntryUpdate(BaseModel):
@@ -151,6 +156,40 @@ def _recency(db: Session, user_id: UUID) -> dict[tuple[str, str], int]:
     ).group_by(NutritionEntry.source, NutritionEntry.source_id).all()
     today = nutrition_native.berlin_today()
     return {(source, source_id): max((today - last).days, 0) for source, source_id, last in rows if last}
+
+
+def _last_amounts(db: Session, user_id: UUID) -> dict[tuple[str, str], float]:
+    """The most recent amount the user tracked of each food."""
+    rows = db.query(NutritionEntry.source, NutritionEntry.source_id, NutritionEntry.amount).filter(
+        NutritionEntry.user_id == user_id,
+    ).order_by(NutritionEntry.logged_at.desc()).limit(3000).all()
+    amounts: dict[tuple[str, str], float] = {}
+    for source, source_id, amount in rows:
+        amounts.setdefault((source, source_id), amount)
+    return amounts
+
+
+def _track_settings(db: Session, user_id: UUID) -> SmartTrackSettings:
+    row = db.get(NutritionTrackSettings, user_id)
+    try:
+        return SmartTrackSettings.model_validate(row.preferences or {}) if row else SmartTrackSettings()
+    except ValueError:
+        return SmartTrackSettings()
+
+
+def _smart_context(db: Session, user_id: UUID) -> food_smart_track.UserContext:
+    history = _history(db, user_id)
+    overrides = _overrides(db, user_id)
+    own = {key: (row.name, row.brand) for key, row in overrides.items()}
+    try:
+        own_foods = [{**row, "name": own[(row["source"], row["source_id"])][0], "brand": own[(row["source"], row["source_id"])][1]}
+                     for row in food_catalog.get_summaries(list(own), history)]
+    except CatalogUnavailable:
+        own_foods = []
+    return food_smart_track.UserContext(
+        history=history, recency=_recency(db, user_id), last_amounts=_last_amounts(db, user_id),
+        overrides=own, own_foods=own_foods, weigh_state=_track_settings(db, user_id).weigh_state,
+    )
 
 
 def _overrides(db: Session, user_id: UUID) -> dict[tuple[str, str], NutritionFoodOverride]:
@@ -353,8 +392,7 @@ async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_
         # The request's session is closed once the response starts, so the stream owns its own.
         session = SessionLocal()
         try:
-            history = _history(session, user_id)
-            recency = _recency(session, user_id)
+            context = _smart_context(session, user_id)
 
             def store(candidate: dict, amount: float) -> dict:
                 try:
@@ -367,7 +405,7 @@ async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_
                     session.rollback()
                     raise
 
-            async for event in food_smart_track.smart_track_events(data.text, data.image, history, recency, store):
+            async for event in food_smart_track.smart_track_events(data.text, data.image, context, store):
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         finally:
             session.close()
@@ -377,6 +415,24 @@ async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/smart-track/settings")
+def get_smart_track_settings(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _track_settings(db, current_user.id).model_dump()
+
+
+@router.put("/smart-track/settings")
+def update_smart_track_settings(data: SmartTrackSettings, current_user: User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    row = db.get(NutritionTrackSettings, current_user.id)
+    if row is None:
+        row = NutritionTrackSettings(user_id=current_user.id, preferences={})
+        db.add(row)
+    # Keep keys this version does not know yet; replace the dict so the JSON column is marked dirty.
+    row.preferences = {**(row.preferences or {}), **data.model_dump()}
+    db.commit()
+    return _track_settings(db, current_user.id).model_dump()
 
 
 @router.patch("/entries/{entry_id}")

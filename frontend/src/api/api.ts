@@ -506,6 +506,8 @@ export interface FoodSummary {
   kcal: number | null; protein: number | null; carbs: number | null; fat: number | null;
   serving_g: number | null;
   serving_label: string | null;
+  package_g?: number | null;
+  quantity_label?: string | null;
   tracked_count: number;
   default_amount: number;
   /** A habit of this meal (or of this time of day); only set by getRecentFoods. */
@@ -520,8 +522,6 @@ export interface FoodDetail extends FoodSummary {
   name_alt: string | null;
   sugar: number | null; fiber: number | null; saturated: number | null; salt: number | null;
   nutrients: FoodNutrient[];
-  package_g: number | null;
-  quantity_label: string | null;
   ingredients: string | null;
   allergens: string[];
   quality: 'ok' | 'incomplete' | 'suspect';
@@ -612,20 +612,45 @@ export interface SmartTrackItem {
   index: number;
   name: string;
   brand: string | null;
-  amount: number;
+  /** The model's amount in g/ml; null when it gave none (the product's data decides then). */
+  amount: number | null;
   unit: FoodUnit;
   /** The amount was guessed by the model ("eine Banane", "bisschen Öl"). */
   estimated: boolean;
+  /** "eine Mozzarella" = 1 package, "2 Riegel" = 2 servings; sized from the product once it is chosen. */
+  portion: 'packung' | 'portion' | null;
+  count: number | null;
 }
 
-/** A catalog product offered as choice; same fields as the search result. */
-export type SmartTrackOption = Pick<FoodSummary, 'source' | 'source_id' | 'name' | 'brand' | 'unit' | 'kcal' | 'protein' | 'carbs' | 'fat'>;
+/** How much of an item would be tracked as a given product. */
+export interface SmartTrackAmount {
+  amount: number;
+  estimated: boolean;
+  /** Where the amount comes from, e.g. "1 Packung", "½ Packung", "2 Portionen", "wie zuletzt". */
+  amount_note: string | null;
+}
+
+/** A catalog product offered as choice, with the amount it would be tracked with. */
+export interface SmartTrackOption extends SmartTrackAmount, Pick<FoodSummary, 'source' | 'source_id' | 'name' | 'brand' | 'unit' | 'kcal' | 'protein' | 'carbs' | 'fat'> {
+  servings: FoodServing[];
+}
 
 export type SmartTrackEvent =
   | { type: 'parsed'; items: SmartTrackItem[] }
-  | { type: 'item'; index: number; status: 'tracked' | 'ambiguous' | 'not_found' | 'error'; entry: TrackEntry | null; alternatives: SmartTrackOption[] }
+  | ({
+    type: 'item'; index: number; status: 'tracked' | 'ambiguous' | 'not_found' | 'error'; entry: TrackEntry | null;
+    /** The first alternative is the model's pick (tracked, or only proposed when it was unsure). */
+    suggested: boolean;
+    alternatives: SmartTrackOption[];
+  } & SmartTrackAmount)
   | { type: 'done' }
   | { type: 'error'; message: string };
+
+/** What a stated weight means for foods that are cooked before eating (rice, pasta, meat, ...). */
+export interface SmartTrackSettings { weigh_state: 'raw' | 'cooked' }
+export const getSmartTrackSettings = () => apiRequest<SmartTrackSettings>('/api/nutrition/smart-track/settings');
+export const updateSmartTrackSettings = (data: SmartTrackSettings) =>
+  apiRequest<SmartTrackSettings>('/api/nutrition/smart-track/settings', { method: 'PUT', body: JSON.stringify(data) });
 
 export const streamSmartTrack = async (
   data: { text?: string; image?: string; date: string; slot_id: string | null },
