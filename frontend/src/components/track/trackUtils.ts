@@ -44,20 +44,42 @@ export const fmt = (value: number | null | undefined, digits = 0) =>
 
 export const fmtAmount = (value: number) => value.toLocaleString('de-DE', { maximumFractionDigits: 1 });
 
-/** Phone photos are several MB; the model needs far less. Returns a JPEG data URL with the long side at most `maxSide`. */
-export async function photoToDataUrl(file: File, maxSide = 1280): Promise<string> {
-  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+/** Decodes a photo with its EXIF rotation applied. `createImageBitmap` fails on some formats (HEIC on Android,
+ * older Safari), the browser's own <img> decoder is the fallback. */
+async function decodePhoto(file: File): Promise<{ source: CanvasImageSource; width: number; height: number; release: () => void }> {
   try {
-    const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
+  } catch {
+    const url = URL.createObjectURL(file);
+    try {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return { source: image, width: image.naturalWidth, height: image.naturalHeight, release: () => URL.revokeObjectURL(url) };
+    } catch {
+      URL.revokeObjectURL(url);
+      throw new Error('Das Foto konnte nicht gelesen werden.');
+    }
+  }
+}
+
+/** Phone photos are 4K and several MB. Vision models scale images down on their side anyway, so a long side
+ * of 2560 px at high JPEG quality keeps every detail they can use while the upload stays around 1 MB. */
+export async function photoToDataUrl(file: File, maxSide = 2560): Promise<string> {
+  const photo = await decodePhoto(file);
+  try {
+    const ratio = Math.min(1, maxSide / Math.max(photo.width, photo.height));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
-    canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+    canvas.width = Math.max(1, Math.round(photo.width * ratio));
+    canvas.height = Math.max(1, Math.round(photo.height * ratio));
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Das Foto konnte nicht verarbeitet werden.');
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.82);
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(photo.source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.9);
   } finally {
-    bitmap.close();
+    photo.release();
   }
 }
 

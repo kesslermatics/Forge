@@ -196,7 +196,7 @@ export default function TrackSlotPage() {
   const tiles = [
     { key: 'search', icon: <Search size={19} />, label: 'Suche', active: true, disabled: false },
     { key: 'barcode', icon: <ScanBarcode size={19} />, label: 'Barcode', active: false, disabled: false },
-    { key: 'camera', icon: <Camera size={19} />, label: 'Kamera', active: false, disabled: false },
+    { key: 'camera', icon: <Camera size={19} />, label: 'Foto', active: false, disabled: false },
     { key: 'voice', icon: <MessageSquareText size={19} />, label: 'Text', active: false, disabled: false },
   ];
 
@@ -252,7 +252,8 @@ export default function TrackSlotPage() {
         {tile.disabled && <span className="absolute right-1.5 top-1.5 rounded-full px-1.5 py-px text-[8px] font-semibold uppercase tracking-wider" style={{ color: SAND, background: 'rgba(232,197,138,0.1)' }}>Bald</span>}
       </button>)}
     </section>
-    <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => void onPhoto(event)} aria-hidden="true" tabIndex={-1} />
+    {/* No `capture`: the system offers camera and gallery, so a photo taken earlier can be tracked too. */}
+    <input ref={cameraRef} type="file" accept="image/*" className="hidden" onChange={(event) => void onPhoto(event)} aria-hidden="true" tabIndex={-1} />
 
     <div ref={panelRef}>
       {slot && <FoodSearchPanel

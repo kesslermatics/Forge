@@ -102,18 +102,28 @@ def parse_prompt(weigh_state: WeighState) -> str:
     return PARSE_PROMPT.replace("__SCHEMA__", ITEM_SCHEMA).replace("__STATE__", STATE_RULES.get(weigh_state, STATE_RULES["raw"]))
 
 
-PHOTO_PROMPT = """Du siehst ein Foto von Essen oder Getränken und erstellst daraus die Einträge für ein Ernährungstagebuch.
+PHOTO_PROMPT = """Du siehst ein Foto einer Mahlzeit (Teller, Schüssel, Snack oder Getränk) und erstellst daraus die Einträge für ein Ernährungstagebuch.
 Antworte ausschließlich mit JSON: __SCHEMA__
 
 Regeln:
-- Jedes erkennbare Lebensmittel ist ein eigener Eintrag (z. B. auf einem Teller Reis, Hähnchen und Brokkoli einzeln). Nur aufnehmen, was zu sehen ist; nichts dazuerfinden.
-- name: gängiger deutscher Produktname ohne Marke und Menge, bei Zubereitungen mit Zustand ("Reis gekocht", "Hähnchenbrust gebraten").
-- brand: nur wenn der Markenname auf einer Verpackung lesbar ist, sonst null.
-- amount: Gewicht in Gramm (unit "g") bzw. Milliliter (unit "ml", nur Getränke und Flüssigkeiten) der sichtbaren Portion. Schätze es aus der Größe im Vergleich zu Teller, Besteck, Hand oder Verpackung.
-- Steht eine Mengenangabe lesbar auf der Verpackung und wird offensichtlich die ganze Packung gegessen, nimm sie mit estimated=false. Alles andere ist geschätzt: estimated=true.
-- Verpackte Produkte als konkretes Produkt benennen (z. B. "Magerquark", "Haferdrink"), nicht nur als "Verpackung".
-- portion und count: "packung" mit der Anzahl, wenn offensichtlich eine ganze Packung (oder ein Teil davon) gegessen wird, sonst null.
-- Ist kein Lebensmittel zu sehen, antworte mit {"items":[]}.""".replace("__SCHEMA__", ITEM_SCHEMA)
+- Jede erkennbare Komponente ist ein eigener Eintrag (z. B. auf einem Teller Reis, Hähnchen und Brokkoli einzeln).
+- name: gängiger deutscher Produktname ohne Marke und Menge, mit Zubereitungszustand ("Reis gekocht", "Hähnchenbrust gebraten", "Kartoffelpüree").
+- brand: nur wenn ein Markenname lesbar ist, sonst null.
+- unit: "ml" nur für Getränke und Flüssigkeiten, sonst "g".
+- amount: Gewicht der sichtbaren Portion in g bzw. ml. Schätze es aus der Größe im Vergleich zu Teller, Besteck, Glas oder Hand. estimated=true.
+- portion und count: "packung" mit der Anzahl nur, wenn offensichtlich eine ganze Packung (oder ein Teil davon) gegessen wird, sonst null.
+- Ist kein Essen und kein Getränk zu sehen und gibt es keine Ergänzungen, antworte mit {"items":[]}.
+
+Ergänzungen des Nutzers (falls vorhanden) haben Vorrang vor dem, was du auf dem Foto erkennst:
+- Genannte Mengen übernimmst du für die passende Komponente (kg und l umrechnen), estimated=false. Mengenangaben wie "eine Packung" oder "2 Scheiben" behandelst du mit portion und count.
+- Was dort als "fehlt", "dazu", "noch" oder als unsichtbare Zutat genannt wird (Öl zum Braten, Butter, Soße, Zucker im Kaffee), nimmst du als eigenen Eintrag auf; ohne Menge schätzt du sie realistisch.
+- Korrekturen gelten: andere Sorte ("Cola Zero", "fettarme Milch"), anderer Zustand, nur ein Teil gegessen ("nur die Hälfte" halbiert die Mengen).
+- Zustand bei Grammangaben aus den Ergänzungen: Wird ein Zustand genannt, steht er im Namen. __STATE__"""
+
+
+def photo_prompt(weigh_state: WeighState) -> str:
+    return PHOTO_PROMPT.replace("__SCHEMA__", ITEM_SCHEMA).replace("__STATE__", STATE_RULES.get(weigh_state, STATE_RULES["raw"]))
+
 
 PICK_PROMPT = """Du wählst für ein Ernährungstagebuch das passende Produkt aus einer Kandidatenliste.
 Antworte ausschließlich mit JSON: {"choice":number|null,"confident":boolean}
@@ -196,13 +206,16 @@ async def parse_text(text: str, weigh_state: WeighState = "raw") -> list[dict[st
     return [item for item in items if item][:MAX_ITEMS]
 
 
-async def parse_image(image: str) -> list[dict[str, Any]]:
-    """``image`` is a ``data:image/...;base64,`` URL."""
+async def parse_image(image: str, context: str | None = None, weigh_state: WeighState = "raw") -> list[dict[str, Any]]:
+    """``image`` is a ``data:image/...;base64,`` URL; ``context`` is the user's note on the photo."""
+    question = "Welche Lebensmittel sind auf dem Foto?"
+    if context and context.strip():
+        question += f"\n\nErgänzungen des Nutzers:\n{context.strip()}"
     user = [
-        {"type": "text", "text": "Welche Lebensmittel sind auf dem Foto?"},
+        {"type": "text", "text": question},
         {"type": "image_url", "image_url": {"url": image}},
     ]
-    data = await _complete(PHOTO_PROMPT, user, max_tokens=1600, model=settings.food_vision_model)
+    data = await _complete(photo_prompt(weigh_state), user, max_tokens=1600, model=settings.food_vision_model)
     items = [_clean_item(raw) for raw in data.get("items") or []]
     return [item for item in items if item][:MAX_ITEMS]
 
@@ -338,12 +351,14 @@ async def smart_track_events(
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield ``parsed``, one ``item`` per food (in text order) and ``done``.
 
+    With an ``image``, ``text`` is the user's optional context for the photo.
+
     ``store(candidate, amount)`` writes the diary entry and returns its serialised form.
     Every ``item`` carries up to five alternatives, each with its own amount; ``suggested`` says
     that the first one is the model's pick (also when it was not sure enough to track it).
     """
     try:
-        items = await (parse_image(image) if image else parse_text(text or "", ctx.weigh_state))
+        items = await (parse_image(image, text, ctx.weigh_state) if image else parse_text(text or "", ctx.weigh_state))
     except Exception:
         logger.exception("Parsing food %s failed", "photo" if image else "text")
         yield {"type": "error", "message": "Das Foto konnte nicht verarbeitet werden." if image else "Der Text konnte nicht verarbeitet werden."}

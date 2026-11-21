@@ -60,9 +60,10 @@ class EntryCreate(BaseModel):
 
 
 class SmartTrackRequest(BaseModel):
-    """Either free text or a meal photo (``data:image/...;base64,`` URL, downscaled by the client)."""
+    """Free text, or a meal photo (``data:image/...;base64,`` URL, resized by the client) with ``text`` as optional context."""
     text: str | None = Field(default=None, min_length=2, max_length=1500)
-    image: str | None = Field(default=None, pattern=r"^data:image/(jpeg|png|webp);base64,")
+    # A 2560 px JPEG is well below 4 MB; the cap only stops runaway uploads.
+    image: str | None = Field(default=None, max_length=12_000_000, pattern=r"^data:image/(jpeg|png|webp);base64,")
     date: date_type
     slot_id: UUID | None = None
 

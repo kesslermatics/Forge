@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, Check, ChevronDown, Loader2, Plus, RotateCcw, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowLeftRight, Check, ChevronDown, ImagePlus, Loader2, Plus, RotateCcw, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import ForgeSheet from '../ForgeSheet';
 import {
     createTrackEntry, deleteTrackEntry, getSmartTrackSettings, streamSmartTrack, updateSmartTrackSettings, updateTrackEntry,
@@ -7,12 +7,12 @@ import {
 } from '../../api/api';
 import { haptic } from '../navigation';
 import AmountInput from './AmountInput';
-import { BORDER, DIM, FAINT, SAND, TEXT, fmt, fmtAmount, parseAmount, toAmountInput } from './trackUtils';
+import { BORDER, DIM, FAINT, SAND, TEXT, fmt, fmtAmount, parseAmount, photoToDataUrl, toAmountInput } from './trackUtils';
 
 interface Props {
     date: string;
     slotId: string | null;
-    /** JPEG data URL of a meal photo; the analysis starts right away instead of asking for text. */
+    /** JPEG data URL of a meal photo: the sheet shows it with a field for extra context before the analysis. */
     photo?: string;
     onTracked: (entry: TrackEntry) => void;
     /** An entry tracked here got a new amount. */
@@ -52,6 +52,7 @@ type Phase = 'input' | 'running' | 'done';
 
 const REVEAL_MS = 520;
 const PLACEHOLDER = 'z. B. eine Mozzarella, 200 g Tomaten, halbe Dose Mais und eine Butterbrezel';
+const PHOTO_PLACEHOLDER = 'Optional: was das Foto nicht zeigt, z. B. „mit 1 EL Öl gebraten, Reis waren 250 g, Cola Zero“';
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 const errorText = (caught: unknown, fallback: string) => caught instanceof Error ? caught.message : fallback;
 const sameFood = (a: { source: string; source_id: string }, b: { source: string; source_id: string }) => a.source === b.source && a.source_id === b.source_id;
@@ -69,7 +70,9 @@ function pendingAmount(item: SmartTrackItem): string {
 
 /** Free-text or photo tracking: the input is split into foods, each one is found and tracked, one after another. */
 export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpdated, onRemoved, onSearch, onClose }: Props) {
-    const [phase, setPhase] = useState<Phase>(photo ? 'running' : 'input');
+    const photoMode = Boolean(photo);
+    const [image, setImage] = useState<string | null>(photo ?? null);
+    const [phase, setPhase] = useState<Phase>('input');
     const [text, setText] = useState('');
     const [cards, setCards] = useState<Card[]>([]);
     const [error, setError] = useState<string | null>(null);
@@ -82,14 +85,14 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
     const closedRef = useRef(false);
     const parsedRef = useRef(false);
     const textRef = useRef<HTMLTextAreaElement>(null);
+    const fileRef = useRef<HTMLInputElement>(null);
     // Parent callbacks change identity on every render; refs keep the running stream intact.
     const onTrackedRef = useRef(onTracked);
     useEffect(() => { onTrackedRef.current = onTracked; }, [onTracked]);
 
-    // A photo starts on open. The cleanup also runs once in StrictMode, so the flag is reset on every mount.
+    // The cleanup also runs once in StrictMode, so the flag is reset on every mount.
     useEffect(() => {
         closedRef.current = false;
-        if (photo) void start();
         return () => {
             closedRef.current = true;
             controllerRef.current?.abort();
@@ -98,15 +101,13 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
                 if (event.type === 'item' && event.entry) onTrackedRef.current(event.entry);
             }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
-        if (photo) return;
         let active = true;
         getSmartTrackSettings().then((value) => { if (active) setSettings(value); }).catch(() => { if (active) setSettings({ weigh_state: 'raw' }); });
         return () => { active = false; };
-    }, [photo]);
+    }, []);
 
     const changeSettings = (next: SmartTrackSettings) => {
         const previous = settings;
@@ -158,7 +159,7 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
 
     const start = async () => {
         const value = text.trim();
-        if (!photo && (value.length < 2 || phase === 'running')) return;
+        if (phase === 'running' || (photoMode ? !image : value.length < 2)) return;
         const controller = new AbortController();
         controllerRef.current = controller;
         queueRef.current = [];
@@ -168,7 +169,10 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
         // A just changed setting must be stored before the server reads it.
         await settingsSave.current?.catch(() => undefined);
         try {
-            await streamSmartTrack(photo ? { image: photo, date, slot_id: slotId } : { text: value, date, slot_id: slotId }, (event) => { queueRef.current.push(event); void pump(); }, controller.signal);
+            const request = photoMode && image
+                ? { image, text: value.length >= 2 ? value : undefined, date, slot_id: slotId }
+                : { text: value, date, slot_id: slotId };
+            await streamSmartTrack(request, (event) => { queueRef.current.push(event); void pump(); }, controller.signal);
         } catch (caught: unknown) {
             if (controller.signal.aborted) return;
             setError(errorText(caught, 'Tracken fehlgeschlagen.'));
@@ -176,6 +180,12 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
             setCards((current) => current.map((card) => card.state === 'pending' ? { ...card, state: 'error' } : card));
             setPhase(parsedRef.current ? 'done' : 'input');
         }
+    };
+
+    const replacePhoto = async (file: File | undefined) => {
+        if (!file) return;
+        try { setImage(await photoToDataUrl(file)); setError(null); haptic('tap'); }
+        catch (caught: unknown) { setError(errorText(caught, 'Das Foto konnte nicht gelesen werden.')); }
     };
 
     const trackMore = () => {
@@ -439,35 +449,44 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
 
     const running = phase === 'running';
     const openCount = cards.filter((card) => card.state === 'ambiguous').length;
-    return <ForgeSheet label={photo ? 'Mit Foto tracken' : 'Mit Text tracken'} onClose={onClose}>
+    const textField = (placeholder: string, rows: number) => <textarea ref={textRef} value={text} onChange={(event) => setText(event.target.value)} rows={rows} autoFocus={!photoMode} maxLength={1500}
+        placeholder={placeholder} aria-label={photoMode ? 'Ergänzungen zum Foto' : 'Was hast du gegessen?'}
+        onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void start(); } }}
+        className="mt-3 w-full resize-none rounded-2xl p-3.5 text-[16px] leading-snug outline-none"
+        style={{ color: TEXT, background: 'rgba(255,247,235,0.05)', border: `1px solid ${text ? `${SAND}66` : BORDER}`, transition: 'border-color 0.2s' }} />;
+    const errorBox = error && <p className="mt-3 rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>;
+    const title = photoMode ? 'Mahlzeit per Foto' : 'Mit Text tracken';
+
+    return <ForgeSheet label={title} onClose={onClose}>
         <div className="p-1">
             <div className="flex items-start justify-between gap-3">
                 <div>
-                    <h2 className="flex items-center gap-2 text-[18px] font-semibold leading-snug" style={{ color: TEXT }}><Sparkles size={17} style={{ color: SAND }} />{photo ? 'Mit Foto tracken' : 'Mit Text tracken'}</h2>
-                    <p className="mt-0.5 text-[12px]" style={{ color: DIM }}>{photo ? 'Mengen schätze ich aus dem Foto, tipp sie danach an, um sie zu ändern.' : 'Schreib, was du gegessen hast. Mengen darfst du schätzen lassen.'}</p>
+                    <h2 className="flex items-center gap-2 text-[18px] font-semibold leading-snug" style={{ color: TEXT }}><Sparkles size={17} style={{ color: SAND }} />{title}</h2>
+                    <p className="mt-0.5 text-[12px]" style={{ color: DIM }}>{photoMode ? 'Ich erkenne die Bestandteile und schätze die Mengen. Was ich nicht sehen kann, schreib dazu.' : 'Schreib, was du gegessen hast. Mengen darfst du schätzen lassen.'}</p>
                 </div>
                 <button type="button" onClick={onClose} aria-label="Schließen" className="tap flex h-10 w-10 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><X size={18} /></button>
             </div>
-            {photo && <img src={photo} alt="Dein Foto" className="mt-4 h-36 w-full rounded-2xl object-cover" style={{ border: `1px solid ${BORDER}` }} />}
-
-            {phase === 'input' && photo && <div className="mt-3">
-                {error && <p className="rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>}
-                <button type="button" onClick={() => void start()} className="btn-forge mt-3 h-12 w-full text-[14px]"><Sparkles size={16} />Nochmal versuchen</button>
+            {image && <div className="relative mt-4">
+                <img src={image} alt="Dein Foto" className={`w-full rounded-2xl object-cover ${phase === 'input' ? 'h-52' : 'h-36'}`} style={{ border: `1px solid ${BORDER}`, transition: 'height 0.3s' }} />
+                {phase === 'input' && <button type="button" onClick={() => fileRef.current?.click()}
+                    className="tap absolute bottom-2 right-2 flex h-9 items-center gap-1.5 rounded-xl px-3 text-[12px] font-semibold"
+                    style={{ color: TEXT, background: 'rgba(22,19,15,0.78)', border: `1px solid ${BORDER}`, backdropFilter: 'blur(6px)' }}><ImagePlus size={14} />Anderes Foto</button>}
             </div>}
+            {photoMode && <input ref={fileRef} type="file" accept="image/*" className="hidden" aria-hidden="true" tabIndex={-1}
+                onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void replacePhoto(file); }} />}
 
-            {phase === 'input' && !photo && <div>
+            {phase === 'input' && <div>
                 {settingsPanel}
-                <textarea ref={textRef} value={text} onChange={(event) => setText(event.target.value)} rows={4} autoFocus maxLength={1500} placeholder={PLACEHOLDER} aria-label="Was hast du gegessen?"
-                    onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void start(); } }}
-                    className="mt-3 w-full resize-none rounded-2xl p-3.5 text-[16px] leading-snug outline-none"
-                    style={{ color: TEXT, background: 'rgba(255,247,235,0.05)', border: `1px solid ${text ? `${SAND}66` : BORDER}`, transition: 'border-color 0.2s' }} />
-                {error && <p className="mt-3 rounded-xl px-3 py-2.5 text-[12px]" style={{ color: '#fca5a5', background: 'rgba(248,113,113,0.1)' }}>{error}</p>}
-                <button type="button" onClick={() => void start()} disabled={text.trim().length < 2} className="btn-forge mt-3 h-12 w-full text-[14px]"><Sparkles size={16} />Tracken</button>
+                {textField(photoMode ? PHOTO_PLACEHOLDER : PLACEHOLDER, photoMode ? 3 : 4)}
+                {errorBox}
+                <button type="button" onClick={() => void start()} disabled={photoMode ? !image : text.trim().length < 2} className="btn-forge mt-3 h-12 w-full text-[14px]">
+                    <Sparkles size={16} />{photoMode ? 'Analysieren' : 'Tracken'}
+                </button>
             </div>}
 
             {phase !== 'input' && <>
                 <div className="mt-4 flex items-baseline justify-between px-1">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: DIM }}>{running && cards.length === 0 ? (photo ? 'Ich schaue mir das Foto an…' : 'Ich lese deinen Text…') : running ? 'Wird getrackt' : 'Fertig'}</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: DIM }}>{running && cards.length === 0 ? (photoMode ? 'Ich schaue mir das Foto an…' : 'Ich lese deinen Text…') : running ? 'Wird getrackt' : 'Fertig'}</p>
                     {trackedCards.length > 0 && <p key={Math.round(totalKcal)} className="track-number text-[20px] font-semibold tabular-nums" style={{ color: TEXT }}>{fmt(totalKcal)}<span className="ml-1 text-[11px] font-normal" style={{ color: DIM }}>kcal</span></p>}
                 </div>
                 {running && cards.length === 0 && <div className="mt-2 space-y-2">{[0, 1, 2].map((item) => <div key={item} className="forge-skeleton h-[62px] rounded-2xl" />)}</div>}
@@ -479,7 +498,7 @@ export default function SmartTrackSheet({ photo, date, slotId, onTracked, onUpda
                     </div>}
                     {openCount > 0 && <p className="mb-2 px-1 text-[11.5px]" style={{ color: SAND }}>{openCount === 1 ? '1 Lebensmittel ist' : `${openCount} Lebensmittel sind`} noch nicht getrackt.</p>}
                     <div className="flex gap-2">
-                        {!photo && <button type="button" onClick={trackMore} className="tap flex h-12 flex-1 items-center justify-center gap-1.5 rounded-xl text-[13.5px] font-semibold" style={{ color: SAND, border: `1px solid ${SAND}55` }}><Plus size={16} />Weiter tracken</button>}
+                        {!photoMode && <button type="button" onClick={trackMore} className="tap flex h-12 flex-1 items-center justify-center gap-1.5 rounded-xl text-[13.5px] font-semibold" style={{ color: SAND, border: `1px solid ${SAND}55` }}><Plus size={16} />Weiter tracken</button>}
                         <button type="button" onClick={onClose} className="btn-forge h-12 flex-1 text-[14px]">Fertig</button>
                     </div>
                 </div>}
