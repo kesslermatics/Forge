@@ -340,6 +340,7 @@ export default function ForgeSessionPage() {
     getForgeExerciseHistory(historyExerciseId, historyProfileId).then((history) => {
       let best = 0;
       for (const past of history.sessions) {
+        if (past.id === sessionId) continue;
         for (const set of past.sets) {
           if (set.set_type === 'working' && set.completed && set.actual_weight_kg && set.actual_weight_kg > 0 && set.actual_reps && set.actual_reps > 0) {
             best = Math.max(best, Math.round(epley(set.actual_weight_kg, set.actual_reps) * 10) / 10);
@@ -348,7 +349,7 @@ export default function ForgeSessionPage() {
       }
       setPriorBest((current) => ({ ...current, [key]: best }));
     }).catch(() => { priorRequested.current.delete(key); });
-  }, [historyExerciseId, historyProfileId]);
+  }, [historyExerciseId, historyProfileId, sessionId]);
   const activeLibraryExercise = useMemo(() => library.find((item) => item.id === activeExercise?.source_exercise_id) ?? null, [library, activeExercise?.source_exercise_id]);
   const expandedSetId = useMemo(() => {
     if (!activeExercise) return null;
@@ -816,7 +817,7 @@ export default function ForgeSessionPage() {
         </div>
 
         {activeExercise.source_exercise_id && <div className="px-3 pb-3">
-          <ExerciseStatsCard exerciseId={activeExercise.source_exercise_id} machineProfileId={activeExercise.machine_profile_id} todaySets={activeExercise.sets} />
+          <ExerciseStatsCard exerciseId={activeExercise.source_exercise_id} machineProfileId={activeExercise.machine_profile_id} todaySets={activeExercise.sets} sessionId={session.id} completedAt={session.status === 'completed' ? session.completed_at : null} />
         </div>}
       </section>
     </> : <div className="card-forge p-6 text-center text-[13px]" style={{ color: DIM }}>Diese Session hat noch keine Übungen.</div>}

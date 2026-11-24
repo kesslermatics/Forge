@@ -53,10 +53,14 @@ const longDate = (iso: string) => new Date(iso).toLocaleDateString('de-DE', { da
 interface Holder { label: string; detail: string; value: string; today: boolean; date: string }
 
 /** History with today's completed sets merged in live: trend, records and best weight. */
-export default function ExerciseStatsCard({ exerciseId, machineProfileId, todaySets }: {
+export default function ExerciseStatsCard({ exerciseId, machineProfileId, todaySets, sessionId, completedAt }: {
   exerciseId: string;
   machineProfileId: string | null;
   todaySets: ForgeSessionSet[];
+  /** The shown session: its server copy in the history is replaced by the live sets. */
+  sessionId: string;
+  /** Set for an already completed session, so its live sets keep their real date and place. */
+  completedAt: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const key = `${exerciseId}:${machineProfileId ?? ''}`;
@@ -77,14 +81,19 @@ export default function ExerciseStatsCard({ exerciseId, machineProfileId, todayS
 
   // Oldest first; today (if any set is done) is the last entry.
   const sessions = useMemo<Facts[]>(() => {
-    const base = [...(history?.sessions ?? [])].reverse().flatMap((session) => {
+    const dated = (history?.sessions ?? []).filter((session) => session.id !== sessionId).flatMap((session) => {
       const summary = summarize(session.sets);
       if (!summary) return [];
       const date = session.completed_at || session.started_at;
-      return [{ key: session.id, today: false, label: shortDate(date), longLabel: longDate(date), ...summary }];
+      return [{ time: new Date(date).getTime(), facts: { key: session.id, today: false, label: shortDate(date), longLabel: longDate(date), ...summary } }];
     });
-    const today = summarize(todaySets);
-    if (today) base.push({ key: 'today', today: true, label: 'Heute', longLabel: 'Heute', ...today });
+    const live = summarize(todaySets);
+    if (live) {
+      dated.push(completedAt
+        ? { time: new Date(completedAt).getTime(), facts: { key: sessionId, today: false, label: shortDate(completedAt), longLabel: longDate(completedAt), ...live } }
+        : { time: Number.POSITIVE_INFINITY, facts: { key: 'today', today: true, label: 'Heute', longLabel: 'Heute', ...live } });
+    }
+    const base = dated.sort((a, b) => a.time - b.time).map((entry) => entry.facts);
     const flagged: Facts[] = [];
     let bestE1rm = 0;
     let bestKg = 0;
@@ -94,7 +103,7 @@ export default function ExerciseStatsCard({ exerciseId, machineProfileId, todayS
       bestKg = Math.max(bestKg, session.bestKg);
     }
     return flagged;
-  }, [history, todaySets]);
+  }, [history, todaySets, sessionId, completedAt]);
 
   const records = useMemo<Holder[]>(() => {
     let e1rm: Facts | null = null;
