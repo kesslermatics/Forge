@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Undo2, X } from 'lucide-react';
+import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Sparkles, Undo2, X } from 'lucide-react';
 import {
   createTrackEntry, deleteTrackEntry, getMealSlots, getTrackDay, getTrackEntries, updateTrackEntry,
   type FoodDetail, type FoodSummary, type MealSlot, type NutritionGoals, type TrackEntry, type TrackMacros,
@@ -9,6 +9,7 @@ import { haptic, useGoBack } from '../navigation';
 import FoodSearchPanel from './FoodSearchPanel';
 import BarcodeScannerSheet from './BarcodeScannerSheet';
 import SmartTrackSheet from './SmartTrackSheet';
+import MealIdeasSheet from './MealIdeasSheet';
 import EntryEditSheet from './EntryEditSheet';
 import { MealBudgetStrip } from './Budget';
 import { SlotIcon } from './shared';
@@ -67,6 +68,7 @@ export default function TrackSlotPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
+  const [ideasOpen, setIdeasOpen] = useState(false);
   const [photo, setPhoto] = useState<string | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState<TrackEntry | null>(null);
@@ -193,6 +195,9 @@ export default function TrackSlotPage() {
   // The whole day, live: the other meals as loaded plus this meal as it changes.
   const dayTotals = dayBase ? { kcal: dayBase.others.kcal + totals.kcal, protein: dayBase.others.protein + totals.protein,
     carbs: dayBase.others.carbs + totals.carbs, fat: dayBase.others.fat + totals.fat } : null;
+  const goals = dayBase?.goals ?? null;
+  const remainingKcal = goals && dayTotals ? goals.kcal - dayTotals.kcal : null;
+  const remainingProtein = goals && dayTotals ? goals.protein - dayTotals.protein : null;
   const tiles = [
     { key: 'search', icon: <Search size={19} />, label: 'Suche', active: true, disabled: false },
     { key: 'barcode', icon: <ScanBarcode size={19} />, label: 'Barcode', active: false, disabled: false },
@@ -221,6 +226,15 @@ export default function TrackSlotPage() {
     <section className="forge-anim forge-d1">
       <MealBudgetStrip day={dayTotals ?? totals} meal={totals} goals={dayBase?.goals ?? null} mealName={slot?.name ?? 'Diese Mahlzeit'} />
     </section>
+
+    {goals && slot && <button type="button" onClick={() => { haptic('tap'); setIdeasOpen(true); }}
+      className="tap forge-anim forge-d1 flex h-12 w-full items-center gap-3 rounded-2xl px-4 text-left"
+      style={{ background: 'linear-gradient(120deg, rgba(232,197,138,0.13), rgba(232,197,138,0.04))', border: `1px solid ${SAND}40` }}>
+      <Sparkles size={17} style={{ color: SAND }} />
+      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold" style={{ color: TEXT }}>Was passt noch?</span>
+      {remainingKcal != null && <span className="shrink-0 text-[12px] tabular-nums" style={{ color: remainingKcal < 0 ? '#fca5a5' : SAND }}>{remainingKcal < 0 ? `${fmt(-remainingKcal)} kcal drüber` : `${fmt(remainingKcal)} kcal offen`}</span>}
+      <ChevronRight size={15} className="shrink-0" style={{ color: FAINT }} />
+    </button>}
 
     <section className="card-forge forge-anim forge-d1 overflow-hidden">
       <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
@@ -291,6 +305,15 @@ export default function TrackSlotPage() {
       onSearch={(value) => { setQuery(value); window.setTimeout(() => searchRef.current?.focus(), 320); }}
       // Closing mid-stream may leave an entry the server stored after the last event: resync the meal.
       onClose={() => { setTextOpen(false); setPhoto(null); void load(); }}
+    />}
+    {ideasOpen && slot && <MealIdeasSheet
+      date={date}
+      slotId={realSlotId}
+      slotName={slot.name}
+      remainingKcal={remainingKcal}
+      remainingProtein={remainingProtein}
+      onTracked={(entry) => { holdPanel(); setEntries((current) => [...(current ?? []), entry]); markFresh(entry.id); }}
+      onClose={() => setIdeasOpen(false)}
     />}
     {editing && <EntryEditSheet
       entry={editing}
