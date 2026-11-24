@@ -2665,11 +2665,30 @@ async def generate_session_exercise_addition_coaching(session_id: UUID, session_
     return _serialize_session(session)
 
 
+def _ensure_sets_editable(session: ForgeWorkoutSession) -> None:
+    """Sets and notes stay editable after completion so the history can be corrected."""
+    if session.status not in ("active", "completed"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This session cannot be changed.")
+
+
+def _refresh_after_history_edit(db: Session, user_id: UUID, session: ForgeWorkoutSession) -> None:
+    """A corrected completed session changes progression history, so coach targets follow it."""
+    if session.status != "completed":
+        return
+    db.flush()
+    for plan in db.query(ForgeTrainingPlan).filter(
+        ForgeTrainingPlan.user_id == user_id,
+        ForgeTrainingPlan.plan_type == "workout",
+    ).all():
+        _refresh_native_coach_targets(db, user_id, plan)
+
+
 @router.patch("/sessions/{session_id}/exercises/{session_exercise_id}", response_model=ForgeSessionResponse)
 async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, data: ForgeSessionExerciseUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
-    if session.status != "active":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
+    _ensure_sets_editable(session)
+    if session.status == "completed" and set(data.model_dump(exclude_unset=True)) - {"session_note"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions only allow set and note edits.")
     exercise = next((item for item in session.exercises if item.id == session_exercise_id), None)
     if exercise is None:
         raise _not_found("Session exercise not found")
@@ -2686,6 +2705,7 @@ async def update_session_exercise(session_id: UUID, session_exercise_id: UUID, d
         updates["session_note"] = (updates["session_note"] or "").strip() or None
     for key, value in updates.items():
         setattr(exercise, key, value)
+    _refresh_after_history_edit(db, current_user.id, session)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -2782,8 +2802,7 @@ def _validate_session_completion(session: ForgeWorkoutSession) -> None:
 @router.patch("/sessions/{session_id}/sets/{set_id}", response_model=ForgeSessionResponse)
 async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionSetUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
-    if session.status != "active":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
+    _ensure_sets_editable(session)
     set_data = db.query(ForgeSessionSet).join(ForgeSessionExercise).filter(
         ForgeSessionSet.id == set_id,
         ForgeSessionExercise.session_id == session.id,
@@ -2812,6 +2831,7 @@ async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionS
         db.flush()
         for position, item in enumerate(reordered):
             item.position = position
+    _refresh_after_history_edit(db, current_user.id, session)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -2820,14 +2840,14 @@ async def update_session_set(session_id: UUID, set_id: UUID, data: ForgeSessionS
 @router.post("/sessions/{session_id}/exercises/{session_exercise_id}/sets", response_model=ForgeSessionResponse)
 async def add_session_set(session_id: UUID, session_exercise_id: UUID, data: ForgeSessionSetInput, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
-    if session.status != "active":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
+    _ensure_sets_editable(session)
     exercise = next((item for item in session.exercises if item.id == session_exercise_id), None)
     if exercise is None:
         raise _not_found("Session exercise not found")
     created_set = ForgeSessionSet(position=len(exercise.sets), **data.model_dump())
     _validate_completed_working_set(exercise, created_set)
     exercise.sets.append(created_set)
+    _refresh_after_history_edit(db, current_user.id, session)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)
@@ -2845,8 +2865,7 @@ def _renumber_positions(db: Session, rows: list) -> None:
 @router.delete("/sessions/{session_id}/sets/{set_id}", response_model=ForgeSessionResponse)
 async def delete_session_set(session_id: UUID, set_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     session = _owned_session(db, current_user.id, session_id)
-    if session.status != "active":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Completed sessions cannot be changed.")
+    _ensure_sets_editable(session)
     set_data = db.query(ForgeSessionSet).join(ForgeSessionExercise).filter(
         ForgeSessionSet.id == set_id,
         ForgeSessionExercise.session_id == session.id,
@@ -2860,6 +2879,7 @@ async def delete_session_set(session_id: UUID, set_id: UUID, current_user: User 
         ForgeSessionSet.session_exercise_id == exercise_id,
     ).order_by(ForgeSessionSet.position).all()
     _renumber_positions(db, remaining_sets)
+    _refresh_after_history_edit(db, current_user.id, session)
     db.commit()
     db.refresh(session)
     return _serialize_session(session)

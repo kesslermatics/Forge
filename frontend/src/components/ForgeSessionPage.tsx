@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight, CirclePlus, ListOrdered,
-  Loader2, MoreHorizontal, Plus, RefreshCw, Replace, Sparkles, Trash2, Undo2, X,
+  Check, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Replace, Sparkles, Trash2, Undo2, X,
 } from 'lucide-react';
 import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction, completeForgeSession,
@@ -77,6 +77,9 @@ export default function ForgeSessionPage() {
   const [chatSending, setChatSending] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [briefOpen, setBriefOpen] = useState(false);
+  // Completed sessions open read-only; edit mode lets sets and notes be corrected afterwards.
+  const [editing, setEditing] = useState(false);
+  const editingRef = useRef(false);
 
   const sessionRef = useRef<ForgeSession | null>(null);
   const mutationQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -161,7 +164,7 @@ export default function ForgeSessionPage() {
     if (setTimers.current[setId]) { clearTimeout(setTimers.current[setId]); delete setTimers.current[setId]; }
     const current = sessionRef.current;
     const live = findSet(setId);
-    if (!current || !live || isTempId(setId) || current.status !== 'active') return Promise.resolve();
+    if (!current || !live || isTempId(setId) || (current.status !== 'active' && !editingRef.current)) return Promise.resolve();
     return enqueue(() => {
       const latest = findSet(setId) ?? live;
       return updateForgeSessionSet(current.id, setId, toUpdateInput(latest));
@@ -177,7 +180,7 @@ export default function ForgeSessionPage() {
   const flushNote = useCallback((exerciseId: string) => {
     if (noteTimers.current[exerciseId]) { clearTimeout(noteTimers.current[exerciseId]); delete noteTimers.current[exerciseId]; }
     const current = sessionRef.current;
-    if (!current || current.status !== 'active') return Promise.resolve();
+    if (!current || (current.status !== 'active' && !editingRef.current)) return Promise.resolve();
     return enqueue(() => {
       const note = sessionRef.current?.exercises.find((exercise) => exercise.id === exerciseId)?.session_note ?? null;
       return updateForgeSessionExercise(current.id, exerciseId, { session_note: note });
@@ -660,11 +663,24 @@ export default function ForgeSessionPage() {
     navigate('/dashboard');
   };
 
+  const toggleEditing = async () => {
+    if (!editingRef.current) {
+      editingRef.current = true;
+      setEditing(true);
+      return;
+    }
+    await flushAll();
+    editingRef.current = false;
+    setEditing(false);
+    setActiveSetId(null);
+  };
+
   // ── render ─────────────────────────────────────────────────────
   if (loading) return <ForgeSessionLoader preparing={preparing} progress={coachingProgress} />;
   if (!session) return <div className="card-forge p-6 text-center text-[13px]" style={{ color: '#fca5a5' }}>{toast || 'Session nicht gefunden.'}</div>;
 
   const active = session.status === 'active';
+  const editable = active || editing;
   const allSets = session.exercises.flatMap((exercise) => exercise.sets);
   const completedSets = allSets.filter((set) => set.completed).length;
   const progress = allSets.length ? completedSets / allSets.length : 0;
@@ -685,7 +701,7 @@ export default function ForgeSessionPage() {
       <div className="flex items-center gap-3">
         <button type="button" onClick={() => void leave()} aria-label="Zurück zum Dashboard" className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: DIM, background: 'rgba(255,247,235,0.05)' }}><ArrowLeft size={19} /></button>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{active ? 'Live Session' : 'Abgeschlossen'}</p>
+          <p className="text-[10px] uppercase tracking-[0.16em]" style={{ color: SAND }}>{active ? 'Live Session' : editing ? 'Abgeschlossen · Bearbeiten' : 'Abgeschlossen'}</p>
           <h1 className="truncate text-[20px] font-semibold tracking-tight" style={{ color: TEXT }}>{session.name}</h1>
           {session.description && <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug" style={{ color: DIM }}>{session.description}</p>}
         </div>
@@ -701,9 +717,13 @@ export default function ForgeSessionPage() {
         <button type="button" onClick={() => setConfirm('discard')} className="tap h-11 rounded-xl px-4 text-[13px]" style={{ color: DIM, border: `1px solid ${BORDER}` }}>Verwerfen</button>
         <button type="button" onClick={() => void startCompletion()} disabled={checkingCompletion || completing} className="tap flex h-11 flex-1 items-center justify-center gap-2 rounded-xl text-[13px] font-semibold disabled:opacity-60" style={{ color: '#16130f', background: SAND }}>{(checkingCompletion || completing) && <Loader2 size={15} className="animate-spin" />}Training beenden</button>
       </div>}
+      {!active && <div className="mt-3">
+        <button type="button" onClick={() => void toggleEditing()} className="tap flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[13px] font-semibold" style={editing ? { color: '#16130f', background: SAND } : { color: SAND, border: `1px solid ${SAND}55` }}>{editing ? <><Check size={15} />Fertig</> : <><Pencil size={15} />Gewichte & Wiederholungen bearbeiten</>}</button>
+        {editing && <p className="mt-1.5 text-center text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Änderungen werden automatisch gespeichert · Coach-Ziele passen sich an</p>}
+      </div>}
     </header>
 
-    {!active && <CompletionSummary session={session} onDone={() => navigate('/dashboard')} />}
+    {!active && !editing && <CompletionSummary session={session} onDone={() => navigate('/dashboard')} />}
 
     {active && startCoachingError && !session.start_coaching && <div className="forge-msg-in flex items-center gap-3 rounded-2xl px-4 py-3" style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)' }}>
       <p className="flex-1 text-[12px]" style={{ color: '#fca5a5' }}>{startCoachingError}</p>
@@ -752,7 +772,7 @@ export default function ForgeSessionPage() {
               label={setLabels[index]}
               exercise={activeExercise}
               active={expandedSetId === set.id}
-              readOnly={!active || exerciseBusy}
+              readOnly={!editable || exerciseBusy}
               pending={isTempId(set.id)}
               justChecked={justCheckedId === set.id}
               celebrate={prSetId === set.id}
@@ -769,7 +789,7 @@ export default function ForgeSessionPage() {
           })}
         </div>
 
-        {active && <div className="px-3 pt-2">
+        {editable && <div className="px-3 pt-2">
           <button type="button" onClick={addSet} disabled={exerciseBusy} className="tap flex h-11 w-full items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium disabled:opacity-50" style={{ color: SAND, border: `1px dashed ${SAND}55` }}><Plus size={16} />Satz hinzufügen</button>
           <p className="mt-1.5 text-center text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Graue Werte sind das Coach-Ziel · nach links wischen zum Löschen · W/Nummer tippen zum Umschalten</p>
         </div>}
@@ -783,7 +803,7 @@ export default function ForgeSessionPage() {
             <span className="mb-1.5 block text-[11px] font-medium" style={{ color: DIM }}>Notiz zur Übung</span>
             <textarea
               value={activeExercise.session_note ?? ''}
-              disabled={!active}
+              disabled={!editable}
               rows={2}
               maxLength={2000}
               onChange={(event) => onNoteChange(activeExercise.id, event.target.value)}
