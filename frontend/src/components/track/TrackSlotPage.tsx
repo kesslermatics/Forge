@@ -313,6 +313,7 @@ export default function TrackSlotPage() {
       remainingKcal={remainingKcal}
       remainingProtein={remainingProtein}
       onTracked={(entry) => { holdPanel(); setEntries((current) => [...(current ?? []), entry]); markFresh(entry.id); }}
+      onRemoved={(entry) => { holdPanel(); setEntries((current) => (current ?? []).filter((item) => item.id !== entry.id)); }}
       onClose={() => setIdeasOpen(false)}
     />}
     {editing && <EntryEditSheet

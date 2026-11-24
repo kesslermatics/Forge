@@ -589,9 +589,9 @@ export const getTrackDayEntries = (date: string) =>
 export const createTrackEntry = (data: { date: string; slot_id: string | null; source: FoodSource; source_id: string; amount: number }) =>
   apiRequest<TrackEntry>('/api/nutrition/entries', { method: 'POST', body: JSON.stringify(data) });
 type IdeaMacros = Pick<TrackMacros, 'kcal' | 'protein' | 'carbs' | 'fat'>;
-export interface MealIdeaItem extends IdeaMacros { source: FoodSource; source_id: string; name: string; brand: string | null; unit: FoodUnit; amount: number }
+export interface MealIdeaItem extends IdeaMacros { source: FoodSource; source_id: string; name: string; brand: string | null; unit: FoodUnit; amount: number; per_100: IdeaMacros }
 export interface MealIdea { title: string; reason: string; items: MealIdeaItem[]; totals: IdeaMacros }
-/** Three meals whose amounts roughly fit what is left of the day; ``wish`` is optional free text. */
+/** One meal whose amounts roughly fit what is left of the day; ``wish`` is optional free text. */
 export const getMealIdeas = (data: { date: string; slot_id: string | null; wish?: string }) =>
   apiRequest<{ remaining: IdeaMacros; ideas: MealIdea[] }>('/api/nutrition/meal-ideas', { method: 'POST', body: JSON.stringify(data) });
 export const updateTrackEntry = (id: string, amount: number) =>

@@ -461,6 +461,16 @@ def _idea_context(db: Session, user: User, day: date_type, slot_id: UUID | None,
         ))
     ids = {(food.source, food.source_id): food.id for food in pool}
 
+    # Every food the user ever tracked (as far as the usage window reaches): a wish is matched against these first.
+    tracked: list[dict] = []
+    for key, item in usage.items():
+        per_100 = food_meal_ideas._complete_per_100(item.latest.per_100)
+        if per_100 is None:
+            continue
+        named = _with_override({"source": key[0], "source_id": key[1], "name": item.latest.name, "brand": item.latest.brand}, overrides)
+        tracked.append({**named, "unit": item.latest.unit or "g", **per_100, "tracked_count": history.get(key, 0) or 1,
+                        "typical_amount": item.default_amount})
+
     # Meals as eaten in this slot: the combinations the user actually likes.
     since = day - timedelta(days=IDEA_HISTORY_DAYS)
     slot_filter = NutritionEntry.slot_id == slot_id if slot_id is not None else NutritionEntry.slot_id.is_(None)
@@ -489,18 +499,18 @@ def _idea_context(db: Session, user: User, day: date_type, slot_id: UUID | None,
 
     return food_meal_ideas.IdeaContext(
         day=day, slot_name=slot_name, remaining=remaining, goals=goal_macros, eaten_today=eaten,
-        pool=pool, past_meals=past_meals, recent_days=recent_days,
+        pool=pool, past_meals=past_meals, recent_days=recent_days, tracked=tracked,
     )
 
 
 @router.post("/meal-ideas")
 async def meal_ideas(data: MealIdeasRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Three meal ideas with amounts that roughly fit the rest of the day's budget."""
+    """One meal idea with amounts that roughly fit the rest of the day's budget."""
     slot_name = _owned_slot(db, current_user, data.slot_id).name if data.slot_id is not None else "Ohne Mahlzeit"
     context = _idea_context(db, current_user, data.date, data.slot_id, slot_name)
     wish = " ".join((data.wish or "").split()) or None
     if wish:
-        rows = await food_meal_ideas.resolve_wish(wish, _smart_context(db, current_user.id))
+        rows = await food_meal_ideas.resolve_wish(wish, _smart_context(db, current_user.id), context.tracked)
         known = {(food.source, food.source_id): food for food in context.pool}
         for row in rows:
             key = (row["source"], row["source_id"])
@@ -513,7 +523,7 @@ async def meal_ideas(data: MealIdeasRequest, current_user: User = Depends(get_cu
             food = food_meal_ideas.PoolFood(
                 id=f"F{len(context.pool) + 1}", source=row["source"], source_id=row["source_id"], name=row["name"],
                 brand=row.get("brand"), unit=row.get("unit") or "g", per_100=per_100, tracked_count=row.get("tracked_count") or 0,
-                wished=True, serving_g=row.get("serving_g"),
+                typical_amount=row.get("typical_amount"), wished=True, serving_g=row.get("serving_g"),
             )
             context.pool.append(food)
             known[key] = food
