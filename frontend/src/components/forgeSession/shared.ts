@@ -51,10 +51,12 @@ export const availableWeights = (exercise: ForgeSessionExercise) =>
 export const SET_ROW_COLUMNS = '36px minmax(0,1fr) minmax(0,1fr) 44px';
 
 const FREE_WEIGHT_STEP = 2.5;
+const DUMBBELL_STEP = 2;
 
 /**
- * Next weight up or down: the neighbouring stack weight of the machine profile, or ±2.5 kg
- * without a weight list. Returns null when there is no further step in that direction.
+ * Next weight up or down: the neighbouring stack weight of the machine profile, the next
+ * 2 kg mark for dumbbells, or ±2.5 kg otherwise. Returns null when there is no further step
+ * in that direction.
  */
 export const stepWeight = (exercise: ForgeSessionExercise, current: number | null, direction: 1 | -1): number | null => {
   const stack = availableWeights(exercise);
@@ -66,6 +68,13 @@ export const stepWeight = (exercise: ForgeSessionExercise, current: number | nul
     return next ?? null;
   }
   const base = current ?? 0;
+  if (exercise.equipment === 'dumbbell') {
+    // Snap to the 2 kg grid so an odd weight (e.g. 23 kg) steps to 24 / 22, not 25 / 21.
+    const next = direction > 0
+      ? Math.floor(base / DUMBBELL_STEP + 1e-6) * DUMBBELL_STEP + DUMBBELL_STEP
+      : Math.ceil(base / DUMBBELL_STEP - 1e-6) * DUMBBELL_STEP - DUMBBELL_STEP;
+    return next >= 0 ? next : null;
+  }
   const next = Math.round((base + direction * FREE_WEIGHT_STEP) * 100) / 100;
   return next >= 0 ? next : null;
 };
