@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Sparkles, Undo2, X } from 'lucide-react';
+import { ArrowLeft, Camera, ChevronRight, MessageSquareText, ScanBarcode, Search, Undo2, X } from 'lucide-react';
 import {
   createTrackEntry, deleteTrackEntry, getMealSlots, getTrackDay, getTrackEntries, updateTrackEntry,
   type FoodDetail, type FoodSummary, type MealSlot, type NutritionGoals, type TrackEntry, type TrackMacros,
@@ -9,8 +9,9 @@ import { haptic, useGoBack } from '../navigation';
 import FoodSearchPanel from './FoodSearchPanel';
 import BarcodeScannerSheet from './BarcodeScannerSheet';
 import SmartTrackSheet from './SmartTrackSheet';
-import MealIdeasSheet from './MealIdeasSheet';
 import EntryEditSheet from './EntryEditSheet';
+import { MealBasketBar, MealBasketSheet } from './MealBasket';
+import { flyToBasket, useMealBasket } from './basketStore';
 import { MealBudgetStrip } from './Budget';
 import { SlotIcon } from './shared';
 import {
@@ -48,7 +49,7 @@ async function fetchSlot(date: string, slotId: string | null): Promise<{ slot: M
   }
 }
 
-type Undo = { kind: 'added' | 'deleted'; entry: TrackEntry; label: string };
+type Undo = { kind: 'added' | 'deleted'; entries: TrackEntry[]; label: string };
 const addedLabel = (entry: TrackEntry) => `${entry.name} · ${fmtAmount(entry.amount)} ${entry.unit} hinzugefügt`;
 
 export default function TrackSlotPage() {
@@ -68,14 +69,19 @@ export default function TrackSlotPage() {
   const [error, setError] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
-  const [ideasOpen, setIdeasOpen] = useState(false);
   const [photo, setPhoto] = useState<string | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState<TrackEntry | null>(null);
+  // Temporary list built by swiping foods in the search; tracked in one go.
+  const basket = useMealBasket(`${slotId}|${date}`);
+  const [basketOpen, setBasketOpen] = useState(false);
+  const [basketBusy, setBasketBusy] = useState(false);
+  const [basketError, setBasketError] = useState<string | null>(null);
+  const [basketBump, setBasketBump] = useState(0);
   // An entry added on the product page arrives via the flash store for instant feedback.
   const [addedOnProduct] = useState(peekTrackFlash);
   const [fresh, setFresh] = useState<Set<string>>(() => new Set(addedOnProduct ? [addedOnProduct.id] : []));
-  const [undo, setUndo] = useState<Undo | null>(() => addedOnProduct ? { kind: 'added', entry: addedOnProduct, label: addedLabel(addedOnProduct) } : null);
+  const [undo, setUndo] = useState<Undo | null>(() => addedOnProduct ? { kind: 'added', entries: [addedOnProduct], label: addedLabel(addedOnProduct) } : null);
   const undoTimer = useRef<number>(0);
   const searchRef = useRef<HTMLInputElement>(null);
   // The tracked list sits above the search panel: when it grows or shrinks, scroll by the same amount
@@ -110,9 +116,9 @@ export default function TrackSlotPage() {
     window.setTimeout(() => setFresh((current) => { const next = new Set(current); next.delete(id); return next; }), 800);
   }, []);
 
-  const showUndo = useCallback((kind: Undo['kind'], entry: TrackEntry, label: string) => {
+  const showUndo = useCallback((kind: Undo['kind'], entries: TrackEntry[], label: string) => {
     window.clearTimeout(undoTimer.current);
-    setUndo({ kind, entry, label });
+    setUndo({ kind, entries, label });
     undoTimer.current = window.setTimeout(() => setUndo(null), 4500);
   }, []);
 
@@ -143,7 +149,7 @@ export default function TrackSlotPage() {
 
   const quickAdd = async (item: FoodSummary) => {
     const entry = await addEntry(item.source, item.source_id, item.default_amount);
-    showUndo('added', entry, addedLabel(entry));
+    showUndo('added', [entry], addedLabel(entry));
   };
 
   const removeEntry = async (entry: TrackEntry, offerUndo: boolean) => {
@@ -153,7 +159,7 @@ export default function TrackSlotPage() {
     try {
       await deleteTrackEntry(entry.id);
       haptic('tap');
-      if (offerUndo) showUndo('deleted', entry, `${entry.name} entfernt`);
+      if (offerUndo) showUndo('deleted', [entry], `${entry.name} entfernt`);
       else setUndo(null);
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : 'Löschen fehlgeschlagen.');
@@ -163,12 +169,47 @@ export default function TrackSlotPage() {
 
   const undoLast = async () => {
     if (!undo) return;
-    const { kind, entry } = undo;
+    const { kind, entries: affected } = undo;
     setUndo(null);
     haptic('tap');
-    if (kind === 'added') { await removeEntry(entry, false); return; }
-    try { await addEntry(entry.source, entry.source_id, entry.amount); }
+    if (kind === 'added') { for (const entry of affected) await removeEntry(entry, false); return; }
+    try { for (const entry of affected) await addEntry(entry.source, entry.source_id, entry.amount); }
     catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Wiederherstellen fehlgeschlagen.'); }
+  };
+
+  const swipeAdd = (item: FoodSummary, from: DOMRect) => {
+    haptic('success');
+    basket.add(item);
+    // Two frames: the bar has to be rendered (first item) before the chip can aim at it.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      void flyToBasket(from, item.name).then(() => setBasketBump((count) => count + 1));
+    }));
+  };
+
+  const trackBasket = async () => {
+    if (basketBusy || !basket.items.length) return;
+    setBasketBusy(true); setBasketError(null);
+    const tracked: TrackEntry[] = [];
+    try {
+      for (const item of basket.items) {
+        const entry = await createTrackEntry({ date, slot_id: realSlotId, source: item.source, source_id: item.source_id, amount: item.amount });
+        tracked.push(entry);
+        basket.remove(item.key);
+        holdPanel();
+        setEntries((current) => [...(current ?? []), entry]);
+        markFresh(entry.id);
+      }
+      haptic('success');
+      setBasketOpen(false);
+    } catch (caught: unknown) {
+      haptic('warning');
+      const message = caught instanceof Error ? caught.message : 'Tracken fehlgeschlagen.';
+      setBasketError(tracked.length ? `${message} ${tracked.length} von ${basket.items.length} sind schon getrackt, der Rest bleibt in der Liste.` : message);
+      setBasketOpen(true);
+    } finally {
+      setBasketBusy(false);
+      if (tracked.length) showUndo('added', tracked, tracked.length === 1 ? addedLabel(tracked[0]) : `${tracked.length} Produkte · ${fmt(tracked.reduce((sum, entry) => sum + entry.kcal, 0))} kcal hinzugefügt`);
+    }
   };
 
   /** `replace` when leaving from an overlay, so its history entry is overwritten by the product. */
@@ -195,9 +236,6 @@ export default function TrackSlotPage() {
   // The whole day, live: the other meals as loaded plus this meal as it changes.
   const dayTotals = dayBase ? { kcal: dayBase.others.kcal + totals.kcal, protein: dayBase.others.protein + totals.protein,
     carbs: dayBase.others.carbs + totals.carbs, fat: dayBase.others.fat + totals.fat } : null;
-  const goals = dayBase?.goals ?? null;
-  const remainingKcal = goals && dayTotals ? goals.kcal - dayTotals.kcal : null;
-  const remainingProtein = goals && dayTotals ? goals.protein - dayTotals.protein : null;
   const tiles = [
     { key: 'search', icon: <Search size={19} />, label: 'Suche', active: true, disabled: false },
     { key: 'barcode', icon: <ScanBarcode size={19} />, label: 'Barcode', active: false, disabled: false },
@@ -206,7 +244,8 @@ export default function TrackSlotPage() {
   ];
 
   // Native scroll anchoring is off here; the layout effect above does it consistently (incl. iOS Safari).
-  return <div className="space-y-4 pb-10" style={{ overflowAnchor: 'none' }}>
+  const basketShown = basket.items.length > 0;
+  return <div className={`space-y-4 ${basketShown ? 'pb-24' : 'pb-10'}`} style={{ overflowAnchor: 'none' }}>
     <header className="forge-anim flex items-center gap-3">
       <button type="button" onClick={goBack} aria-label="Zurück zur Tagesübersicht" className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full" style={{ color: SAND, background: 'rgba(232,197,138,0.08)' }}><ArrowLeft size={19} /></button>
       <div className="min-w-0 flex-1">
@@ -226,15 +265,6 @@ export default function TrackSlotPage() {
     <section className="forge-anim forge-d1">
       <MealBudgetStrip day={dayTotals ?? totals} meal={totals} goals={dayBase?.goals ?? null} mealName={slot?.name ?? 'Diese Mahlzeit'} />
     </section>
-
-    {goals && slot && <button type="button" onClick={() => { haptic('tap'); setIdeasOpen(true); }}
-      className="tap forge-anim forge-d1 flex h-12 w-full items-center gap-3 rounded-2xl px-4 text-left"
-      style={{ background: 'linear-gradient(120deg, rgba(232,197,138,0.13), rgba(232,197,138,0.04))', border: `1px solid ${SAND}40` }}>
-      <Sparkles size={17} style={{ color: SAND }} />
-      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold" style={{ color: TEXT }}>Was passt noch?</span>
-      {remainingKcal != null && <span className="shrink-0 text-[12px] tabular-nums" style={{ color: remainingKcal < 0 ? '#fca5a5' : SAND }}>{remainingKcal < 0 ? `${fmt(-remainingKcal)} kcal drüber` : `${fmt(remainingKcal)} kcal offen`}</span>}
-      <ChevronRight size={15} className="shrink-0" style={{ color: FAINT }} />
-    </button>}
 
     <section className="card-forge forge-anim forge-d1 overflow-hidden">
       <div className="flex items-center justify-between px-4 pb-1 pt-3.5">
@@ -278,10 +308,15 @@ export default function TrackSlotPage() {
         onQueryChange={setQuery}
         onQuickAdd={quickAdd}
         onOpenFood={(item) => openFood(item.source, item.source_id)}
+        onSwipeAdd={swipeAdd}
+        swipeHint={!basketShown}
       />}
     </div>
 
-    {undo && <div className="pointer-events-none fixed inset-x-0 z-[60] flex justify-center px-4" style={{ bottom: 'calc(var(--forge-nav-h, 64px) + 20px)', transition: 'bottom 0.2s' }}>
+    {basketShown && <MealBasketBar items={basket.items} bump={basketBump} busy={basketBusy}
+      onOpen={() => { setBasketError(null); setBasketOpen(true); }} onTrack={() => void trackBasket()} />}
+
+    {undo && <div className="pointer-events-none fixed inset-x-0 z-[60] flex justify-center px-4" style={{ bottom: `calc(var(--forge-nav-h, 64px) + ${basketShown ? 96 : 20}px)`, transition: 'bottom 0.2s' }}>
       <div role="status" className="forge-toast pointer-events-auto flex max-w-md items-center gap-2 rounded-2xl py-2 pl-4 pr-2 text-[13px] shadow-2xl" style={{ color: TEXT, background: '#2a2318', border: `1px solid ${SAND}44` }}>
         <span className="min-w-0 flex-1 truncate">{undo.label}</span>
         <button type="button" onClick={() => void undoLast()} className="tap flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-3 font-semibold" style={{ color: SAND }}><Undo2 size={15} />Rückgängig</button>
@@ -306,15 +341,17 @@ export default function TrackSlotPage() {
       // Closing mid-stream may leave an entry the server stored after the last event: resync the meal.
       onClose={() => { setTextOpen(false); setPhoto(null); void load(); }}
     />}
-    {ideasOpen && slot && <MealIdeasSheet
-      date={date}
-      slotId={realSlotId}
-      slotName={slot.name}
-      remainingKcal={remainingKcal}
-      remainingProtein={remainingProtein}
-      onTracked={(entry) => { holdPanel(); setEntries((current) => [...(current ?? []), entry]); markFresh(entry.id); }}
-      onRemoved={(entry) => { holdPanel(); setEntries((current) => (current ?? []).filter((item) => item.id !== entry.id)); }}
-      onClose={() => setIdeasOpen(false)}
+    {basketOpen && basketShown && <MealBasketSheet
+      items={basket.items}
+      slotName={slot?.name ?? 'Diese Mahlzeit'}
+      remainingKcal={dayBase?.goals && dayTotals ? dayBase.goals.kcal - dayTotals.kcal : null}
+      busy={basketBusy}
+      error={basketError}
+      onAmount={basket.setAmount}
+      onRemove={basket.remove}
+      onClear={() => { basket.clear(); setBasketOpen(false); }}
+      onTrack={() => void trackBasket()}
+      onClose={() => setBasketOpen(false)}
     />}
     {editing && <EntryEditSheet
       entry={editing}

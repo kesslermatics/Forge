@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import date as date_type
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal, get_db
 from app.dependencies import get_current_user
 from app.models import NutritionEntry, NutritionFoodOverride, NutritionMealSlot, NutritionTrackSettings, User
-from app.services import food_catalog, food_meal_ideas, food_smart_track, food_suggestions, nutrition_native, nutrition_overview
+from app.services import food_catalog, food_smart_track, food_suggestions, nutrition_native, nutrition_overview
 from app.services.food_catalog import CatalogUnavailable
 
 router = APIRouter(prefix="/api/nutrition", tags=["Nutrition tracking"])
@@ -72,13 +72,6 @@ class SmartTrackRequest(BaseModel):
         if not self.text and not self.image:
             raise ValueError("text or image is required")
         return self
-
-
-class MealIdeasRequest(BaseModel):
-    """``wish``: optional free text such as "Müsli mit dem griechischen Joghurt"."""
-    date: date_type
-    slot_id: UUID | None = None
-    wish: str | None = Field(default=None, max_length=300)
 
 
 class SmartTrackSettings(BaseModel):
@@ -423,123 +416,6 @@ async def smart_track(data: SmartTrackRequest, current_user: User = Depends(get_
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
-
-
-# ── meal ideas ───────────────────────────────────────────────────────────────────
-
-IDEA_POOL_REST = 30
-IDEA_PAST_MEALS = 10
-IDEA_HISTORY_DAYS = 45
-IDEA_RECENT_DAYS = 3
-
-
-def _idea_context(db: Session, user: User, day: date_type, slot_id: UUID | None, slot_name: str) -> food_meal_ideas.IdeaContext:
-    goals = nutrition_native.goals_native(nutrition_native.goal_for_day(nutrition_native.load_goals(db, user.id), day))
-    if not goals:
-        raise HTTPException(status_code=422, detail="Lege zuerst deine Ernährungsziele fest, dann kann ich Vorschläge machen.")
-    today_entries = db.query(NutritionEntry).filter(NutritionEntry.user_id == user.id, NutritionEntry.date == day).all()
-    eaten = _totals(today_entries)
-    goal_macros = {key: float(goals[key]) for key in food_meal_ideas.MACROS}
-    remaining = {key: goal_macros[key] - eaten[key] for key in food_meal_ideas.MACROS}
-
-    usage = _usage(db, user.id, slot_id, day)
-    history = _history(db, user.id)
-    overrides = _overrides(db, user.id)
-    suggested, rest = food_suggestions.suggestion_order(usage)
-    habit = set(suggested)
-    pool: list[food_meal_ideas.PoolFood] = []
-    for key in suggested + rest[:IDEA_POOL_REST]:
-        latest = usage[key].latest
-        per_100 = food_meal_ideas._complete_per_100(latest.per_100)
-        if per_100 is None:
-            continue
-        named = _with_override({"source": latest.source, "source_id": latest.source_id, "name": latest.name, "brand": latest.brand}, overrides)
-        pool.append(food_meal_ideas.PoolFood(
-            id=f"F{len(pool) + 1}", source=latest.source, source_id=latest.source_id, name=named["name"], brand=named["brand"],
-            unit=latest.unit or "g", per_100=per_100, typical_amount=usage[key].default_amount,
-            tracked_count=history.get(key, 0), habit=key in habit,
-        ))
-    ids = {(food.source, food.source_id): food.id for food in pool}
-
-    # Every food the user ever tracked (as far as the usage window reaches): a wish is matched against these first.
-    tracked: list[dict] = []
-    for key, item in usage.items():
-        per_100 = food_meal_ideas._complete_per_100(item.latest.per_100)
-        if per_100 is None:
-            continue
-        named = _with_override({"source": key[0], "source_id": key[1], "name": item.latest.name, "brand": item.latest.brand}, overrides)
-        tracked.append({**named, "unit": item.latest.unit or "g", **per_100, "tracked_count": history.get(key, 0) or 1,
-                        "typical_amount": item.default_amount})
-
-    # Meals as eaten in this slot: the combinations the user actually likes.
-    since = day - timedelta(days=IDEA_HISTORY_DAYS)
-    slot_filter = NutritionEntry.slot_id == slot_id if slot_id is not None else NutritionEntry.slot_id.is_(None)
-    past = db.query(NutritionEntry).filter(
-        NutritionEntry.user_id == user.id, slot_filter, NutritionEntry.date >= since, NutritionEntry.date < day,
-    ).order_by(NutritionEntry.date.desc(), NutritionEntry.logged_at).all()
-    meals: dict[date_type, list[dict]] = {}
-    for entry in past:
-        food_id = ids.get((entry.source, entry.source_id))
-        if food_id is None:
-            continue
-        if food_id not in {item["id"] for item in meals.get(entry.date, [])}:
-            meals.setdefault(entry.date, []).append({"id": food_id, "menge": round(entry.amount)})
-    past_meals = [items for _, items in list(meals.items())[:IDEA_PAST_MEALS]]
-
-    recent = db.query(NutritionEntry).filter(
-        NutritionEntry.user_id == user.id, NutritionEntry.date >= day - timedelta(days=IDEA_RECENT_DAYS), NutritionEntry.date <= day,
-    ).order_by(NutritionEntry.date.desc(), NutritionEntry.logged_at).all()
-    by_day: dict[date_type, list[str]] = {}
-    for entry in recent:
-        names = by_day.setdefault(entry.date, [])
-        name = _with_override({"source": entry.source, "source_id": entry.source_id, "name": entry.name, "brand": entry.brand}, overrides)["name"]
-        if name not in names:
-            names.append(name)
-    recent_days = [{"datum": value.isoformat(), "lebensmittel": names} for value, names in by_day.items()]
-
-    return food_meal_ideas.IdeaContext(
-        day=day, slot_name=slot_name, remaining=remaining, goals=goal_macros, eaten_today=eaten,
-        pool=pool, past_meals=past_meals, recent_days=recent_days, tracked=tracked,
-    )
-
-
-@router.post("/meal-ideas")
-async def meal_ideas(data: MealIdeasRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """One meal idea with amounts that roughly fit the rest of the day's budget."""
-    slot_name = _owned_slot(db, current_user, data.slot_id).name if data.slot_id is not None else "Ohne Mahlzeit"
-    context = _idea_context(db, current_user, data.date, data.slot_id, slot_name)
-    wish = " ".join((data.wish or "").split()) or None
-    if wish:
-        rows = await food_meal_ideas.resolve_wish(wish, _smart_context(db, current_user.id), context.tracked)
-        known = {(food.source, food.source_id): food for food in context.pool}
-        for row in rows:
-            key = (row["source"], row["source_id"])
-            if key in known:
-                known[key].wished = True
-                continue
-            per_100 = food_meal_ideas._complete_per_100(row)
-            if per_100 is None:
-                continue
-            food = food_meal_ideas.PoolFood(
-                id=f"F{len(context.pool) + 1}", source=row["source"], source_id=row["source_id"], name=row["name"],
-                brand=row.get("brand"), unit=row.get("unit") or "g", per_100=per_100, tracked_count=row.get("tracked_count") or 0,
-                typical_amount=row.get("typical_amount"), wished=True, serving_g=row.get("serving_g"),
-            )
-            context.pool.append(food)
-            known[key] = food
-    if not context.pool:
-        raise HTTPException(status_code=422, detail="Tracke erst ein paar Mahlzeiten oder nenne im Textfeld, was du essen möchtest.")
-    try:
-        ideas = await food_meal_ideas.generate(context, wish)
-    except Exception as exc:
-        food_meal_ideas.logger.exception("Meal ideas failed")
-        raise HTTPException(status_code=502, detail="Die Vorschläge konnten gerade nicht erstellt werden.") from exc
-    if not ideas:
-        raise HTTPException(status_code=502, detail="Die Vorschläge konnten gerade nicht erstellt werden.")
-    return {
-        "remaining": {key: round(value, 1) for key, value in context.remaining.items()},
-        "ideas": ideas,
-    }
 
 
 @router.get("/smart-track/settings")
