@@ -846,7 +846,6 @@ export default function ForgeSessionPage() {
 
         {editable && <div className="px-3 pt-2">
           <button type="button" onClick={addSet} disabled={exerciseBusy} className="tap flex h-11 w-full items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium disabled:opacity-50" style={{ color: SAND, border: `1px dashed ${SAND}55` }}><Plus size={16} />Satz hinzufügen</button>
-          <p className="mt-1.5 text-center text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Graue Werte sind das Coach-Ziel · nach links wischen zum Löschen · W/Nummer tippen zum Umschalten</p>
         </div>}
 
         {active && exerciseDone(activeExercise) && <div className="forge-msg-in px-3 pt-3">
