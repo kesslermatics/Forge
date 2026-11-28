@@ -528,6 +528,10 @@ class ForgeWorkoutSession(Base):
     user_request = Column(Text, nullable=True)
     # Short description: copied from the routine, or written by the AI for composed sessions.
     description = Column(Text, nullable=True)
+    # Written on the closing page of a session: context for the whole workout (e.g. why it took longer).
+    training_note = Column(Text, nullable=True)
+    cardio_done = Column(Boolean, nullable=False, server_default="false")
+    cardio_minutes = Column(Integer, nullable=True)
 
     user = relationship("User", back_populates="forge_sessions")
     program = relationship("ForgeTrainingProgram", back_populates="sessions")

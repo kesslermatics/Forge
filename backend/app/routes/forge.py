@@ -58,6 +58,7 @@ from app.schemas import (
     ForgeSessionExerciseOrderRequest,
     ForgeSessionExerciseReplaceRequest,
     ForgeSessionExerciseUpdate,
+    ForgeSessionUpdate,
     ForgeSessionResponse,
     ForgeSessionSummaryResponse,
     ForgeSessionSetInput,
@@ -1143,6 +1144,9 @@ def _serialize_session(session: ForgeWorkoutSession) -> dict:
         "start_coaching": session.start_coaching,
         "user_request": session.user_request,
         "description": session.description,
+        "training_note": session.training_note,
+        "cardio_done": bool(session.cardio_done),
+        "cardio_minutes": session.cardio_minutes,
         "exercises": [
             {
                 "id": exercise.id,
@@ -2681,6 +2685,26 @@ def _refresh_after_history_edit(db: Session, user_id: UUID, session: ForgeWorkou
         ForgeTrainingPlan.plan_type == "workout",
     ).all():
         _refresh_native_coach_targets(db, user_id, plan)
+
+
+@router.patch("/sessions/{session_id}", response_model=ForgeSessionResponse)
+async def update_session(session_id: UUID, data: ForgeSessionUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Save the closing page: a note for the whole workout and whether cardio was part of it."""
+    session = _owned_session(db, current_user.id, session_id)
+    _ensure_sets_editable(session)
+    updates = data.model_dump(exclude_unset=True)
+    if "training_note" in updates:
+        session.training_note = (updates["training_note"] or "").strip() or None
+    if "cardio_done" in updates:
+        session.cardio_done = bool(updates["cardio_done"])
+    if "cardio_minutes" in updates:
+        session.cardio_minutes = updates["cardio_minutes"]
+    # Minutes only describe cardio that happened.
+    if not session.cardio_done:
+        session.cardio_minutes = None
+    db.commit()
+    db.refresh(session)
+    return _serialize_session(session)
 
 
 @router.patch("/sessions/{session_id}/exercises/{session_exercise_id}", response_model=ForgeSessionResponse)

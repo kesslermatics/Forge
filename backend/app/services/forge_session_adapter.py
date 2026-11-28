@@ -190,6 +190,11 @@ def _serialize_completed_session(
         "local_date": session.started_at.astimezone(LOCAL_TZ).date().isoformat() if session.started_at else "",
         "local_hour": session.started_at.astimezone(LOCAL_TZ).hour if session.started_at else None,
         "duration_min": duration_min,
+        # The user's closing note for the whole workout and whether cardio was part of it
+        # (cardio often explains a longer duration).
+        "training_note": session.training_note or "",
+        "cardio_done": bool(session.cardio_done),
+        "cardio_minutes": session.cardio_minutes,
         "exercises": [
             {
                 "title": exercise.name,

@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowRight, BrainCircuit, ChevronDown, ChevronLeft, ChevronRight, CirclePlus, ListOrdered,
-  Check, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Replace, Sparkles, Trash2, Undo2, X,
+  Check, Flag, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Replace, Sparkles, Trash2, Undo2, X,
 } from 'lucide-react';
 import {
   addForgeSessionExercise, addForgeSessionSet, applyForgeSessionAction, completeForgeSession,
   deleteForgeSession, deleteForgeSessionExercise, deleteForgeSessionSet, dismissForgeSessionAction,
   generateForgeSessionExerciseAdditionCoaching, generateForgeSessionStartCoaching,
   getForgeExercises, getForgeExerciseHistory, getForgeMachineProfiles, getForgeSession, getForgeSessionPlanChanges, reorderForgeSessionExercises,
-  replaceForgeSessionExercise, sendForgeSessionChat, streamForgeSessionStartCoaching, updateForgeSessionExercise, updateForgeSessionSet,
+  replaceForgeSessionExercise, sendForgeSessionChat, streamForgeSessionStartCoaching, updateForgeSession, updateForgeSessionExercise, updateForgeSessionSet,
 } from '../api/api';
 import { applyCoachingEvent, initialCoachingProgress } from './forgeSession/coachingProgress';
 import type { CoachingProgress } from './forgeSession/coachingProgress';
@@ -24,6 +24,7 @@ import ExerciseStatsCard from './forgeSession/ExerciseStatsCard';
 import SessionCoachSheet from './forgeSession/SessionCoachSheet';
 import ExerciseOverviewSheet from './forgeSession/ExerciseOverviewSheet';
 import CompletionSummary from './forgeSession/CompletionSummary';
+import SessionWrapUp from './forgeSession/SessionWrapUp';
 import {
   BORDER, DIM, SAND, SET_ROW_COLUMNS, TEXT, coachDecisionFor, epley, errorMessage, exerciseDone, formatClock, haptic, isTempId,
   needsCoaching, parseWeightInput, toUpdateInput,
@@ -86,6 +87,7 @@ export default function ForgeSessionPage() {
   const pendingMutations = useRef(0);
   const setTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const trainingNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDeletes = useRef<Record<string, PendingDelete>>({});
   const coachingInFlight = useRef<Set<string>>(new Set());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -94,7 +96,8 @@ export default function ForgeSessionPage() {
   const commitSession = useCallback((next: ForgeSession) => {
     sessionRef.current = next;
     setSession(next);
-    setActiveIndex((current) => Math.min(current, Math.max(0, next.exercises.length - 1)));
+    // One past the last exercise is the closing page.
+    setActiveIndex((current) => Math.min(current, next.exercises.length));
   }, []);
 
   const updateLocal = useCallback((updater: (current: ForgeSession) => ForgeSession) => {
@@ -110,6 +113,7 @@ export default function ForgeSessionPage() {
 
   const hasLocalWork = useCallback(() => Object.keys(setTimers.current).length > 0
     || Object.keys(noteTimers.current).length > 0
+    || trainingNoteTimer.current !== null
     || Object.keys(pendingDeletes.current).length > 0, []);
 
   /**
@@ -187,6 +191,21 @@ export default function ForgeSessionPage() {
     }, 'Notiz konnte nicht gespeichert werden.').then(() => undefined, () => undefined);
   }, [enqueue]);
 
+  // ── closing page (training note & cardio) autosave ─────────────
+  const flushSessionMeta = useCallback(() => {
+    if (trainingNoteTimer.current) { clearTimeout(trainingNoteTimer.current); trainingNoteTimer.current = null; }
+    const current = sessionRef.current;
+    if (!current || (current.status !== 'active' && !editingRef.current)) return Promise.resolve();
+    return enqueue(() => {
+      const latest = sessionRef.current ?? current;
+      return updateForgeSession(current.id, {
+        training_note: latest.training_note ?? null,
+        cardio_done: Boolean(latest.cardio_done),
+        cardio_minutes: latest.cardio_done ? latest.cardio_minutes ?? null : null,
+      });
+    }, 'Trainingsnotiz konnte nicht gespeichert werden.').then(() => undefined, () => undefined);
+  }, [enqueue]);
+
   // ── deferred set deletion with undo ────────────────────────────
   const commitDelete = useCallback((setId: string) => {
     const pending = pendingDeletes.current[setId];
@@ -203,17 +222,19 @@ export default function ForgeSessionPage() {
   const flushLocal = useCallback(() => {
     Object.keys(setTimers.current).forEach((setId) => { void flushSet(setId); });
     Object.keys(noteTimers.current).forEach((exerciseId) => { void flushNote(exerciseId); });
+    if (trainingNoteTimer.current) void flushSessionMeta();
     Object.keys(pendingDeletes.current).forEach((setId) => { void commitDelete(setId); });
-  }, [commitDelete, flushNote, flushSet]);
+  }, [commitDelete, flushNote, flushSessionMeta, flushSet]);
 
   const flushAll = useCallback(async () => {
     await Promise.all([
       ...Object.keys(setTimers.current).map((setId) => flushSet(setId)),
       ...Object.keys(noteTimers.current).map((exerciseId) => flushNote(exerciseId)),
+      ...(trainingNoteTimer.current ? [flushSessionMeta()] : []),
       ...Object.keys(pendingDeletes.current).map((setId) => commitDelete(setId)),
     ]);
     await mutationQueue.current;
-  }, [commitDelete, flushNote, flushSet]);
+  }, [commitDelete, flushNote, flushSessionMeta, flushSet]);
 
   useEffect(() => {
     const onHide = () => { if (document.visibilityState === 'hidden') void flushAll(); };
@@ -363,7 +384,7 @@ export default function ForgeSessionPage() {
 
   // ── navigation ─────────────────────────────────────────────────
   const goTo = (index: number) => {
-    if (!session || index < 0 || index >= session.exercises.length || index === activeIndex) return;
+    if (!session || index < 0 || index > session.exercises.length || index === activeIndex) return;
     setSlide(index > activeIndex ? 'left' : 'right');
     setActiveIndex(index);
     setActiveSetId(null);
@@ -510,6 +531,17 @@ export default function ForgeSessionPage() {
     noteTimers.current[exerciseId] = setTimeout(() => { void flushNote(exerciseId); }, NOTE_SAVE_DELAY);
   };
 
+  const onTrainingNoteChange = (value: string) => {
+    updateLocal((current) => ({ ...current, training_note: value }));
+    if (trainingNoteTimer.current) clearTimeout(trainingNoteTimer.current);
+    trainingNoteTimer.current = setTimeout(() => { void flushSessionMeta(); }, NOTE_SAVE_DELAY);
+  };
+
+  const onCardio = (done: boolean, minutes: number | null) => {
+    updateLocal((current) => ({ ...current, cardio_done: done, cardio_minutes: done ? minutes : null }));
+    void flushSessionMeta();
+  };
+
   const addExercise = (exercise: ForgeExercise) => {
     const current = sessionRef.current;
     if (!current) return;
@@ -545,6 +577,8 @@ export default function ForgeSessionPage() {
     const exerciseId = activeExercise.id;
     setConfirm(null);
     updateLocal((local) => ({ ...local, exercises: local.exercises.filter((item) => item.id !== exerciseId).map((item, position) => ({ ...item, position })) }));
+    // Removing the last exercise shows the one before it, not the closing page.
+    setActiveIndex((index) => Math.min(index, Math.max(0, current.exercises.length - 2)));
     haptic(15);
     enqueue(() => deleteForgeSessionExercise(current.id, exerciseId), 'Übung konnte nicht entfernt werden.').catch(() => undefined);
   };
@@ -557,7 +591,7 @@ export default function ForgeSessionPage() {
     ordered.splice(to, 0, moved);
     const activeId = current.exercises[activeIndex]?.id;
     commitSession({ ...current, exercises: ordered.map((item, position) => ({ ...item, position })) });
-    setActiveIndex(Math.max(0, ordered.findIndex((item) => item.id === activeId)));
+    if (activeId) setActiveIndex(Math.max(0, ordered.findIndex((item) => item.id === activeId)));
     haptic(6);
     enqueue(() => reorderForgeSessionExercises(current.id, ordered.map((item) => item.id)), 'Reihenfolge konnte nicht gespeichert werden.').catch(() => undefined);
   };
@@ -648,6 +682,7 @@ export default function ForgeSessionPage() {
     setConfirm(null);
     Object.values(setTimers.current).forEach(clearTimeout); setTimers.current = {};
     Object.values(noteTimers.current).forEach(clearTimeout); noteTimers.current = {};
+    if (trainingNoteTimer.current) { clearTimeout(trainingNoteTimer.current); trainingNoteTimer.current = null; }
     Object.values(pendingDeletes.current).forEach((pending) => clearTimeout(pending.timer)); pendingDeletes.current = {};
     try {
       await mutationQueue.current;
@@ -691,6 +726,8 @@ export default function ForgeSessionPage() {
   const coachingError = activeExercise ? coachingErrors[activeExercise.id] : undefined;
   const canPickProfile = Boolean(activeExercise?.source_exercise_id && (activeExercise.equipment === 'machine' || activeExercise.equipment === 'cable'));
   const nextExercise = session.exercises[activeIndex + 1];
+  const onWrapUp = session.exercises.length > 0 && activeIndex >= session.exercises.length;
+  const isLastExercise = activeIndex === session.exercises.length - 1;
   const replaceTarget = session.exercises.find((exercise) => exercise.id === replaceForId) ?? null;
   const setLabels = activeExercise
     ? activeExercise.sets.map((_set, index) => String(activeExercise.sets.slice(0, index + 1).filter((item) => item.set_type === 'working').length || ''))
@@ -732,17 +769,34 @@ export default function ForgeSessionPage() {
     </div>}
 
     {/* ── exercise navigation ── */}
-    {activeExercise ? <>
+    {activeExercise || onWrapUp ? <>
       <nav className="flex items-center gap-2" aria-label="Übungen">
         <button type="button" onClick={() => goTo(activeIndex - 1)} disabled={activeIndex === 0} aria-label="Vorherige Übung" className="tap flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-25" style={{ color: SAND, background: 'rgba(255,247,235,0.05)' }}><ChevronLeft size={22} /></button>
         <button type="button" onClick={() => setOverviewOpen(true)} className="tap flex h-11 flex-1 items-center justify-center gap-2 rounded-full text-[13px]" style={{ color: TEXT, background: 'rgba(255,247,235,0.04)', border: `1px solid ${BORDER}` }}>
-          <ListOrdered size={15} style={{ color: SAND }} />Übung {activeIndex + 1} von {session.exercises.length}
-          <span className="ml-1 flex gap-1" aria-hidden="true">{session.exercises.map((exercise, index) => <span key={exercise.id} className="h-1.5 rounded-full" style={{ width: index === activeIndex ? 14 : 6, background: exerciseDone(exercise) ? SAND : index === activeIndex ? 'rgba(232,197,138,0.7)' : 'rgba(255,247,235,0.15)', transition: 'all 0.25s' }} />)}</span>
+          {onWrapUp ? <><Flag size={15} style={{ color: SAND }} />Abschluss</> : <><ListOrdered size={15} style={{ color: SAND }} />Übung {activeIndex + 1} von {session.exercises.length}</>}
+          <span className="ml-1 flex items-center gap-1" aria-hidden="true">
+            {session.exercises.map((exercise, index) => <span key={exercise.id} className="h-1.5 rounded-full" style={{ width: index === activeIndex ? 14 : 6, background: exerciseDone(exercise) ? SAND : index === activeIndex ? 'rgba(232,197,138,0.7)' : 'rgba(255,247,235,0.15)', transition: 'all 0.25s' }} />)}
+            <span className="h-1.5 rounded-sm" style={{ width: onWrapUp ? 14 : 6, background: onWrapUp ? 'rgba(232,197,138,0.7)' : session.training_note || session.cardio_done ? SAND : 'transparent', border: `1px solid ${onWrapUp || session.training_note || session.cardio_done ? 'transparent' : 'rgba(255,247,235,0.25)'}`, transition: 'all 0.25s' }} />
+          </span>
         </button>
-        <button type="button" onClick={() => goTo(activeIndex + 1)} disabled={activeIndex >= session.exercises.length - 1} aria-label="Nächste Übung" className="tap flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-25" style={{ color: SAND, background: 'rgba(255,247,235,0.05)' }}><ChevronRight size={22} /></button>
+        <button type="button" onClick={() => goTo(activeIndex + 1)} disabled={activeIndex >= session.exercises.length} aria-label={isLastExercise ? 'Zum Abschluss' : 'Nächste Übung'} className="tap flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-25" style={{ color: SAND, background: 'rgba(255,247,235,0.05)' }}><ChevronRight size={22} /></button>
       </nav>
 
-      <section key={activeExercise.id} className={`card-forge overflow-hidden ${slide === 'left' ? 'forge-slide-left' : slide === 'right' ? 'forge-slide-right' : 'forge-anim'}`} style={{ borderColor: `${SAND}26` }}>
+      {onWrapUp && <div key="wrap-up" className={slide === 'left' ? 'forge-slide-left' : 'forge-anim'}>
+        <SessionWrapUp
+          session={session}
+          now={now}
+          editable={editable}
+          canComplete={active}
+          completing={checkingCompletion || completing}
+          onNoteChange={onTrainingNoteChange}
+          onNoteBlur={() => { if (trainingNoteTimer.current) void flushSessionMeta(); }}
+          onCardio={onCardio}
+          onComplete={() => void startCompletion()}
+        />
+      </div>}
+
+      {activeExercise && <section key={activeExercise.id} className={`card-forge overflow-hidden ${slide === 'left' ? 'forge-slide-left' : slide === 'right' ? 'forge-slide-right' : 'forge-anim'}`} style={{ borderColor: `${SAND}26` }}>
         <div className="flex items-start gap-3 p-4 pb-3">
           <div className="min-w-0 flex-1">
             <h2 className="text-[21px] font-semibold leading-tight" style={{ color: TEXT }}>{activeExercise.name}</h2>
@@ -795,11 +849,15 @@ export default function ForgeSessionPage() {
           <p className="mt-1.5 text-center text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Graue Werte sind das Coach-Ziel · nach links wischen zum Löschen · W/Nummer tippen zum Umschalten</p>
         </div>}
 
-        {active && exerciseDone(activeExercise) && nextExercise && <div className="forge-msg-in px-3 pt-3">
-          <button type="button" onClick={() => goTo(activeIndex + 1)} className="tap flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[14px] font-semibold" style={{ color: '#16130f', background: SAND }}>Weiter: {nextExercise.name}<ArrowRight size={17} /></button>
+        {active && exerciseDone(activeExercise) && <div className="forge-msg-in px-3 pt-3">
+          <button type="button" onClick={() => goTo(activeIndex + 1)} className="tap flex h-12 w-full items-center justify-center gap-2 rounded-xl text-[14px] font-semibold" style={{ color: '#16130f', background: SAND }}>{nextExercise ? `Weiter: ${nextExercise.name}` : 'Weiter: Abschluss & Notiz'}<ArrowRight size={17} /></button>
         </div>}
 
-        <div className="p-3 pt-4">
+        {activeExercise.source_exercise_id && <div className="px-3 pb-3">
+          <ExerciseStatsCard exerciseId={activeExercise.source_exercise_id} machineProfileId={activeExercise.machine_profile_id} todaySets={activeExercise.sets} sessionId={session.id} completedAt={session.status === 'completed' ? session.completed_at : null} />
+        </div>}
+
+        <div className="p-3 pt-2">
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-medium" style={{ color: DIM }}>Notiz zur Übung</span>
             <textarea
@@ -815,11 +873,7 @@ export default function ForgeSessionPage() {
           </label>
           <p className="mt-1 text-[10.5px]" style={{ color: 'rgba(242,236,226,0.32)' }}>Der Coach sieht diese Notiz bei künftigen Vorschlägen.</p>
         </div>
-
-        {activeExercise.source_exercise_id && <div className="px-3 pb-3">
-          <ExerciseStatsCard exerciseId={activeExercise.source_exercise_id} machineProfileId={activeExercise.machine_profile_id} todaySets={activeExercise.sets} sessionId={session.id} completedAt={session.status === 'completed' ? session.completed_at : null} />
-        </div>}
-      </section>
+      </section>}
     </> : <div className="card-forge p-6 text-center text-[13px]" style={{ color: DIM }}>Diese Session hat noch keine Übungen.</div>}
 
     {active && <button type="button" onClick={() => setAddOpen(true)} className="card-forge tap flex h-12 w-full items-center justify-center gap-2 text-[13px] font-medium" style={{ color: SAND }}><CirclePlus size={16} />Übung hinzufügen</button>}

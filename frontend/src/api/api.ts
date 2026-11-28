@@ -1047,6 +1047,10 @@ export interface ForgeSession {
   user_request?: string | null;
   /** Routine description, or the AI's description for composed sessions. */
   description?: string | null;
+  /** Closing-page note for the whole workout. */
+  training_note?: string | null;
+  cardio_done?: boolean;
+  cardio_minutes?: number | null;
   exercises: ForgeSessionExercise[];
   messages: ForgeSessionMessage[];
 }
@@ -1172,6 +1176,9 @@ export const applyForgeSessionAction = (sessionId: string, message_id: string) =
 export const dismissForgeSessionAction = (sessionId: string, message_id: string) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/actions/dismiss`, { method: 'POST', body: JSON.stringify({ message_id }) });
 
+export interface ForgeSessionUpdateInput { training_note?: string | null; cardio_done?: boolean; cardio_minutes?: number | null }
+export const updateForgeSession = (sessionId: string, data: ForgeSessionUpdateInput) =>
+  apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const updateForgeSessionExercise = (sessionId: string, sessionExerciseId: string, data: { machine_profile_id?: string | null; notes?: string | null; session_note?: string | null }) =>
   apiRequest<ForgeSession>(`/api/forge/sessions/${sessionId}/exercises/${sessionExerciseId}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const replaceForgeSessionExercise = (sessionId: string, sessionExerciseId: string, exercise_id: string) =>

@@ -115,7 +115,7 @@ async def get_training_plan() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_latest_workout() -> dict[str, Any]:
-    """Read the most recently completed workout with notes, in-workout exercise notes (session_note) and completed sets."""
+    """Read the most recently completed workout with notes, in-workout exercise notes (session_note), the closing training_note, cardio_done/cardio_minutes and completed sets."""
     return await _call("get_latest_workout")
 
 
@@ -164,6 +164,8 @@ async def get_workouts(
 
     The response reports total_matching, has_more and next_offset so you can page through
     long ranges. Prefer detail='summary' for ranges longer than a few weeks.
+    Each workout may carry the user's training_note and cardio_done/cardio_minutes:
+    cardio done in the same session, which explains a longer duration.
     """
     return await _call("get_workouts", _range_args(
         start_date=start_date, end_date=end_date, days=days, limit=limit, offset=offset, detail=detail,

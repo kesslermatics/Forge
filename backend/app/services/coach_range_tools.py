@@ -68,13 +68,21 @@ def _workout_digest(workout: dict) -> dict:
         if note:
             entry["session_note"] = note[:200]
         exercises.append(entry)
-    return {
+    digest: dict[str, Any] = {
         "id": workout.get("id"),
         "date": workout.get("local_date") or str(workout.get("start_time", ""))[:10],
         "title": workout.get("title"),
         "duration_min": workout.get("duration_min"),
         "exercises": exercises,
     }
+    training_note = (workout.get("training_note") or "").strip()
+    if training_note:
+        digest["training_note"] = training_note[:300]
+    if workout.get("cardio_done"):
+        digest["cardio_done"] = True
+        if workout.get("cardio_minutes"):
+            digest["cardio_minutes"] = workout["cardio_minutes"]
+    return digest
 
 
 def _iso_date(value: object) -> date | None:

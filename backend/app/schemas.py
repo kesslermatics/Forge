@@ -514,6 +514,9 @@ class ForgeSessionResponse(BaseModel):
     start_coaching: Optional[ForgeSessionStartCoachingResponse] = None
     user_request: Optional[str] = None
     description: Optional[str] = None
+    training_note: Optional[str] = None
+    cardio_done: bool = False
+    cardio_minutes: Optional[int] = None
     exercises: list[ForgeSessionExerciseResponse]
     messages: list[ForgeSessionMessageResponse] = Field(default_factory=list)
 
@@ -585,6 +588,13 @@ class ForgeSessionExerciseUpdate(BaseModel):
     machine_profile_id: Optional[UUID] = None
     notes: Optional[str] = Field(None, max_length=500)
     session_note: Optional[str] = Field(None, max_length=2000)
+
+
+class ForgeSessionUpdate(BaseModel):
+    """Session-wide context from the closing page; editable while active and after completion."""
+    training_note: Optional[str] = Field(None, max_length=2000)
+    cardio_done: Optional[bool] = None
+    cardio_minutes: Optional[int] = Field(None, ge=1, le=600)
 
 
 class ForgeSessionExerciseReplaceRequest(BaseModel):

@@ -89,7 +89,7 @@ TOOL_DECLARATIONS = [
         "type": "function",
         "function": {
             "name": "get_latest_workout",
-            "description": "Read the most recently completed Forge workout, its plan description, notes, the user's in-workout exercise notes (session_note: pain, form, machine occupied, ...), and actual completed sets.",
+            "description": "Read the most recently completed Forge workout, its plan description, notes, the user's in-workout exercise notes (session_note: pain, form, machine occupied, ...), the closing training_note for the whole workout, whether cardio was done (cardio_done, cardio_minutes; explains a longer duration), and actual completed sets.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -101,7 +101,8 @@ TOOL_DECLARATIONS = [
                 "Read completed Forge workouts in a date range (start_date/end_date or the last `days`, max 730 days). "
                 "detail 'summary' gives one compact line per exercise (sets, top set, volume) and suits long ranges; "
                 "'full' returns every set with notes (max 15 workouts per call). Default 'auto' picks full for up to 10 workouts. "
-                "Results are paged: use offset/next_offset to continue."
+                "Results are paged: use offset/next_offset to continue. Each workout may carry the user's training_note "
+                "and cardio_done/cardio_minutes (cardio done in the same session, which explains a longer duration)."
             ),
             "parameters": {
                 "type": "object",
@@ -252,6 +253,9 @@ def _workout_summary(workout: dict) -> dict:
         "start_time": workout.get("start_time"),
         "duration_min": workout.get("duration_min"),
         "description": (workout.get("plan_description") or "")[:500],
+        "training_note": (workout.get("training_note") or "")[:2000],
+        "cardio_done": bool(workout.get("cardio_done")),
+        "cardio_minutes": workout.get("cardio_minutes"),
         "exercises": [
             {
                 "title": exercise.get("title"),
